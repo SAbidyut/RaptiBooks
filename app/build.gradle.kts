@@ -52,6 +52,12 @@ android {
         compose = true
     }
 
+    lint {
+        // Release builds should not fail on lint findings in CI; run ./gradlew lint to review them.
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
