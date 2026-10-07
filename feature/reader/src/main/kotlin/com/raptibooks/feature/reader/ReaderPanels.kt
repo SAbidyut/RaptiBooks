@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -392,6 +393,7 @@ internal fun ImageViewer(
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
         var tool by remember { mutableStateOf(MarkTool.NONE) }
+        var penOpen by remember { mutableStateOf(false) }
         val state = rememberTransformableState { zoom, pan, _ ->
             scale = (scale * zoom).coerceIn(1f, 6f)
             offset = if (scale == 1f) Offset.Zero else offset + pan
@@ -419,6 +421,8 @@ internal fun ImageViewer(
                     Box(
                         Modifier
                             .size(with(density) { picture.width.toDp() }, with(density) { picture.height.toDp() })
+                            // Figures with a transparent background must not vanish on the black viewer.
+                            .then(if (equation) Modifier else Modifier.background(Color.White))
                             .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
                     ) {
                         Image(
@@ -458,11 +462,28 @@ internal fun ImageViewer(
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.5f)).padding(16.dp),
                 )
             }
+            // The pen stays out of the way until asked for: a small button opens the colour menu.
             if (!equation && img != null) {
-                MarkPalette(
-                    tool = tool, colors = colors, onSelect = { tool = it },
-                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
-                )
+                if (penOpen) {
+                    MarkPalette(
+                        tool = tool, colors = colors, onSelect = { tool = it },
+                        onClose = { penOpen = false; tool = MarkTool.NONE },
+                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
+                    )
+                } else {
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 10.dp)
+                            .size(44.dp)
+                            .background(Color.White.copy(alpha = 0.22f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape)
+                            .clickable { penOpen = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Default.Edit, stringResource(R.string.reader_marker), tint = Color.White)
+                    }
+                }
             }
         }
     }
