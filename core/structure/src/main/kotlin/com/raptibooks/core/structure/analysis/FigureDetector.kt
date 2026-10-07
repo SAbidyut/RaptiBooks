@@ -81,11 +81,13 @@ class FigureDetector {
 
         val figures = mutableListOf<FigureRegion>()
         val absorbed = HashSet<TextLine>()
-        val bodySize = typicalSize(lines)
+        val bodySize = typicalSize(lines, page.width)
         for (c in clusters) {
             var bounds = boundsOf(c)
             val hasRaster = c.any { it.raster }
             val complexCount = c.count { it.complex }
+            // Tiny shapes (an emoji/icon in a callout title, arrowheads) don't make a drawing.
+            val drawnShapes = c.count { it.complex && it.bounds.area > 500f }
             val rectCount = c.count { it.rect }
             if (bounds.width < 36f || bounds.height < 24f) continue
             if (!hasRaster && bounds.area < pageArea * 0.012f) continue
@@ -94,6 +96,10 @@ class FigureDetector {
             if (!hasRaster) {
                 // Frames, shaded boxes, highlight bars: mostly rectangles around running text.
                 if (complexCount == 0 && rectCount <= 3 && (inside.size >= 3 || textArea > bounds.area * 0.25f)) continue
+                // A callout box: frame, maybe an icon, and lines of running text.
+                if (drawnShapes == 0 && rectCount <= 3 && inside.size >= 2 && textArea > bounds.area * 0.12f &&
+                    inside.any { it.wordCount >= 6 }
+                ) continue
                 if (complexCount == 0 && rectCount <= 1 && c.size <= 2) continue
                 if (complexCount + rectCount < 2 && c.size < 3) continue
                 // A big drawing that is mostly text paragraphs (e.g. a page border with content).
@@ -141,18 +147,42 @@ class FigureDetector {
             }
         }
 
-        // Captions.
-        val withCaptions = merged.map { f ->
-            val caption = findCaption(f.bounds, lines.filter { it !in absorbed })
-            if (caption != null) {
+        // Captions: below the figure first (with any notes between them), else directly above.
+        val captionLines = HashSet<TextLine>()
+        val withCaptions = merged.sortedBy { it.bounds.top }.map { f ->
+            val free = lines.filter { it !in absorbed }
+            val below = findCaptionBelow(f.bounds, free, bodySize)
+            if (below != null) {
+                val (notes, caption) = below
+                absorbed += notes
                 absorbed += caption
-                FigureRegion(f.bounds, f.kind, caption.joinToString(" ") { it.text }, textSize = f.textSize)
+                captionLines += caption
+                var b = f.bounds
+                for (n in notes) {
+                    b = b.union(n.bounds)
+                    // The box a note is printed in belongs to the figure too.
+                    page.paths.filter { p -> p.bounds.width <= f.bounds.width * 1.3f && p.bounds.contains(n.bounds, 2f) }
+                        .forEach { p -> b = b.union(p.bounds) }
+                }
+                FigureRegion(b, f.kind, caption.joinToString(" ") { it.text }, textSize = f.textSize)
             } else {
-                f
+                val above = findCaptionAbove(f.bounds, free)
+                if (above != null) {
+                    absorbed += above
+                    captionLines += above
+                    FigureRegion(f.bounds, f.kind, above.text, textSize = f.textSize)
+                } else {
+                    f
+                }
             }
         }
+        // Text that ended up inside the final picture (a title printed on the figure's panel)
+        // is part of it; otherwise it would appear twice.
+        for (f in withCaptions) {
+            lines.filter { it !in absorbed && it.bounds.coveredBy(f.bounds) >= 0.8f }.forEach { absorbed += it }
+        }
         // Breathing room around the crop, without cutting into the text next to it.
-        val others = lines.filter { it !in absorbed }
+        val others = lines.filter { it !in absorbed || it in captionLines }
         val result = withCaptions.map { f ->
             FigureRegion(pad(f.bounds, others, PAD).clamp(page.width, page.height), f.kind, f.caption, textSize = f.textSize)
         }
@@ -182,7 +212,10 @@ class FigureDetector {
     private fun isLabel(l: TextLine, fig: Rect, bodySize: Float, pageWidth: Float): Boolean {
         if (l.bounds.coveredBy(fig.outset(2f)) >= 0.6f) return true
         if (Patterns.caption.containsMatchIn(l.text)) return false
-        if (l.wordCount > 10 || l.bounds.width > pageWidth * 0.45f) return false
+        // A row of separate short labels (one under each photo) is printed as one line with gaps.
+        val pieces = if (l.chunks.size >= 2) l.chunks.map { it.right - it.left } else listOf(l.bounds.width)
+        val words = l.wordCount.toFloat() / pieces.size
+        if (words > 10f || pieces.any { it > pageWidth * 0.45f }) return false
         val em = l.fontSize
         val small = em <= bodySize * 0.92f
         val boldShort = l.isBold && em <= bodySize * 1.02f && l.wordCount <= 6
@@ -195,10 +228,14 @@ class FigureDetector {
         return within && vGap <= reach
     }
 
-    /** Body text size of the page: the font size carrying the most characters. */
-    private fun typicalSize(lines: List<TextLine>): Float {
+    /**
+     * Body text size of the page: the font size carrying the most characters in wide lines
+     * (paragraph text), so that many small diagram labels don't count as the body.
+     */
+    private fun typicalSize(lines: List<TextLine>, pageWidth: Float): Float {
         if (lines.isEmpty()) return 10f
-        val bySize = lines.groupBy { (it.fontSize * 2f).toInt() }
+        val wide = lines.filter { it.bounds.width > pageWidth * 0.4f }
+        val bySize = (wide.ifEmpty { lines }).groupBy { (it.fontSize * 2f).toInt() }
             .maxByOrNull { (_, ls) -> ls.sumOf { it.text.length } }!!
         return bySize.value.map { it.fontSize }.average().toFloat()
     }
@@ -227,25 +264,50 @@ class FigureDetector {
         }
     }
 
-    private fun findCaption(bounds: Rect, lines: List<TextLine>): List<TextLine>? {
-        val near = lines.filter { l ->
-            l.bounds.horizontalOverlap(bounds) > 0f &&
-                (l.bounds.top >= bounds.bottom - 2f && l.bounds.top - bounds.bottom < l.fontSize * 3.5f ||
-                    l.bounds.bottom <= bounds.top + 2f && bounds.top - l.bounds.bottom < l.fontSize * 2.5f)
+    /**
+     * Caption below the figure, possibly after a few notes that belong to the drawing (a formula
+     * box, a remark in small print) centred under it. Returns (notes, caption lines).
+     */
+    private fun findCaptionBelow(bounds: Rect, lines: List<TextLine>, bodySize: Float): Pair<List<TextLine>, List<TextLine>>? {
+        val below = lines.filter { l ->
+            l.bounds.top >= bounds.bottom - 2f && l.bounds.horizontalOverlap(bounds) > 0f &&
+                l.bounds.top - bounds.bottom < bodySize * 12f
         }.sortedBy { it.bounds.top }
-        val first = near.firstOrNull { Patterns.caption.containsMatchIn(it.text) } ?: return null
-        val out = mutableListOf(first)
-        // Continuation lines of a multi-line caption below the figure.
-        if (first.bounds.top >= bounds.bottom - 2f) {
-            var last = first
-            for (l in lines.sortedBy { it.bounds.top }) {
-                if (l === first || l.bounds.top <= last.bounds.top) continue
-                if (l.bounds.top - last.bounds.bottom > last.fontSize * 0.9f) break
-                if (kotlin.math.abs(l.fontSize - first.fontSize) > 0.6f || l.bounds.horizontalOverlap(first.bounds) <= 0f) break
-                out += l
-                last = l
-                if (out.size >= 4) break
+        val notes = mutableListOf<TextLine>()
+        var lastBottom = bounds.bottom
+        for (l in below) {
+            if (l.bounds.top - lastBottom > max(l.fontSize * 3.5f, bodySize * 2.5f)) return null
+            if (Patterns.caption.containsMatchIn(l.text)) {
+                return notes to captionLines(l, lines)
             }
+            val centred = kotlin.math.abs(l.bounds.centerX - bounds.centerX) <= bounds.width * 0.15f
+            val inside = l.bounds.horizontalOverlap(bounds) >= l.bounds.width * 0.8f
+            if (!centred || !inside || l.fontSize > bodySize * 1.1f || notes.size >= 5 ||
+                Patterns.listMarker.containsMatchIn(l.text)
+            ) return null
+            notes += l
+            lastBottom = l.bounds.bottom
+        }
+        return null
+    }
+
+    private fun findCaptionAbove(bounds: Rect, lines: List<TextLine>): TextLine? =
+        lines.filter { l ->
+            l.bounds.horizontalOverlap(bounds) > 0f && l.bounds.bottom <= bounds.top + 2f &&
+                bounds.top - l.bounds.bottom < l.fontSize * 2.5f && Patterns.caption.containsMatchIn(l.text)
+        }.maxByOrNull { it.bounds.bottom }
+
+    /** The caption line and its continuation lines (a multi-line caption). */
+    private fun captionLines(first: TextLine, lines: List<TextLine>): List<TextLine> {
+        val out = mutableListOf(first)
+        var last = first
+        for (l in lines.sortedBy { it.bounds.top }) {
+            if (l === first || l.bounds.top <= last.bounds.top) continue
+            if (l.bounds.top - last.bounds.bottom > last.fontSize * 0.9f) break
+            if (kotlin.math.abs(l.fontSize - first.fontSize) > 0.6f || l.bounds.horizontalOverlap(first.bounds) <= 0f) break
+            out += l
+            last = l
+            if (out.size >= 4) break
         }
         return out
     }

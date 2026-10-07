@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.raptibooks.core.data.conversion.ConversionPipeline
 import com.raptibooks.core.data.conversion.ConversionScheduler
 import com.raptibooks.core.database.BookDao
 import com.raptibooks.core.database.ContentDao
@@ -110,15 +111,27 @@ class LibraryRepository(
         files.deleteBook(bookId)
     }
 
-    /** Converts again from scratch, e.g. with OCR forced on. */
+    /**
+     * Converts again from scratch, e.g. with OCR forced on. Reading continues on the same page
+     * afterwards and bookmarks are kept (they follow their pages).
+     */
     suspend fun reconvert(bookId: Long, ocrMode: OcrMode) = withContext(Dispatchers.IO) {
+        val book = books.get(bookId) ?: return@withContext
+        val page = if (book.isReadable && book.position.blockIndex > 0) content.pageOfBlock(bookId, book.position.blockIndex) ?: -1 else -1
         scheduler.cancel(bookId)
         content.deleteContent(bookId)
-        content.deleteBookmarks(bookId)
         files.clearConversionCache(bookId)
         files.clearFigures(bookId)
-        books.prepareReconversion(bookId, ocrMode)
+        books.prepareReconversion(bookId, ocrMode, page)
         scheduler.enqueue(bookId, replace = true)
+    }
+
+    /** Re-converts books made by an older version of the converter, so they get the improvements. */
+    suspend fun upgradeOutdated() = withContext(Dispatchers.IO) {
+        for (id in books.outdated(ConversionPipeline.LAYOUT_VERSION)) {
+            val book = books.get(id) ?: continue
+            reconvert(id, book.ocrMode)
+        }
     }
 
     suspend fun cancel(bookId: Long) = withContext(Dispatchers.IO) {

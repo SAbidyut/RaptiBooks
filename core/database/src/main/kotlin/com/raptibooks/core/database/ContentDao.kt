@@ -181,6 +181,16 @@ class ContentDao(private val db: RaptiDatabase) {
         db.notifyChanged(RaptiDatabase.BOOKMARKS)
     }
 
+    /** After a re-conversion, points bookmarks at the first block of the page they were on. */
+    fun remapBookmarks(bookId: Long) {
+        db.writableDatabase.execSQL(
+            "UPDATE bookmarks SET block_idx = COALESCE((SELECT MIN(idx) FROM blocks b WHERE b.book_id = bookmarks.book_id " +
+                "AND b.page >= bookmarks.page), 0) WHERE book_id = ?",
+            arrayOf<Any>(bookId),
+        )
+        db.notifyChanged(RaptiDatabase.BOOKMARKS)
+    }
+
     fun deleteBookmarks(bookId: Long) {
         db.writableDatabase.delete("bookmarks", "book_id = ?", arrayOf(bookId.toString()))
         db.notifyChanged(RaptiDatabase.BOOKMARKS)

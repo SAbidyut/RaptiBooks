@@ -8,6 +8,7 @@ import com.raptibooks.core.model.ImageKind
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
 import com.raptibooks.core.model.ParagraphBlock
+import com.raptibooks.core.model.OcrMode
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SeparatorBlock
 import com.raptibooks.core.model.TableBlock
@@ -65,6 +66,17 @@ class DatabaseTest {
 
         content.addBookmark(id, 4, 2, "a | b")
         runBlocking { assertEquals(1, content.observeBookmarks(id).first().size) }
+
+        // Books from an older converter are found for upgrading; bookmarks follow their page.
+        assertEquals(listOf(id), books.outdated(2))
+        books.finishConversion(id, 7, "en", false, layoutVersion = 2)
+        assertEquals(emptyList<Long>(), books.outdated(2))
+        books.prepareReconversion(id, OcrMode.AUTO, restorePage = 1)
+        assertEquals(1, books.restorePage(id))
+        books.restorePosition(id, content.firstBlockAtOrAfterPage(id, 1)!!)
+        assertEquals(-1, books.restorePage(id))
+        content.remapBookmarks(id)
+        runBlocking { assertEquals(4, content.observeBookmarks(id).first().single().blockIndex) }
 
         books.delete(id)
         assertNull(books.get(id))

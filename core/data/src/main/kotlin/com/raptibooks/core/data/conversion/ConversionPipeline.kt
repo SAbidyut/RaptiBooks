@@ -149,7 +149,13 @@ class ConversionPipeline(
                 val outline = extractor.outline().map { OutlineItem(it.title, it.pageIndex, it.level) }
                 content.saveToc(bookId, TocBuilder.build(outline, headings, engine.pageStarts(), engine.blockCount))
                 content.notifyContentChanged()
-                books.finishConversion(bookId, engine.blockCount, profile.language, usedOcr)
+                books.finishConversion(bookId, engine.blockCount, profile.language, usedOcr, LAYOUT_VERSION)
+                // Converted again: continue reading on the same page, bookmarks follow their pages.
+                val restore = books.restorePage(bookId)
+                if (restore >= 0) {
+                    books.restorePosition(bookId, content.firstBlockAtOrAfterPage(bookId, restore) ?: 0)
+                    content.remapBookmarks(bookId)
+                }
                 files.clearConversionCache(bookId)
             } finally {
                 renderer?.close()
@@ -315,6 +321,12 @@ class ConversionPipeline(
     }
 
     companion object {
+        /**
+         * Version of the analysis/reflow. Raise it when conversion results improve, so books
+         * converted by an older version are converted again automatically.
+         */
+        const val LAYOUT_VERSION = 2
+
         /** One conversion at a time keeps memory use predictable on low-end phones. */
         private val lock = Mutex()
     }

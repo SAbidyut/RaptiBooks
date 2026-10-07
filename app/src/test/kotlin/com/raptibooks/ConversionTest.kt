@@ -1,14 +1,17 @@
 package com.raptibooks
 
 import com.raptibooks.core.database.ContentDao
+import com.raptibooks.core.data.conversion.ConversionPipeline
 import com.raptibooks.core.database.NewBook
 import com.raptibooks.core.model.BookStatus
+import com.raptibooks.core.model.OcrMode
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ListItemBlock
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.TableBlock
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -51,6 +54,18 @@ class ConversionTest {
         assertEquals(listOf("Device", "Screen", "Words per line"), table.rows.first())
         val toc = content.toc(id).map { it.title }
         assertTrue(toc.toString(), toc.containsAll(listOf("Chapter 1: Why Reflow Matters", "Chapter 2: Building the Reader")))
+
+        // Converting again (e.g. after an app update) continues on the same page, bookmarks too.
+        val app = TestSupport.app
+        val pageThree = content.firstBlockAtOrAfterPage(id, 3)!!
+        content.addBookmark(id, pageThree + 1, 3, "bookmark")
+        app.container.bookDao.prepareReconversion(id, OcrMode.AUTO, restorePage = 3)
+        runBlocking { app.container.pipeline.convert(id) { } }
+        val again = app.container.bookDao.get(id)!!
+        assertEquals(BookStatus.READY, again.status)
+        assertEquals(content.firstBlockAtOrAfterPage(id, 3), again.position.blockIndex)
+        assertEquals(content.firstBlockAtOrAfterPage(id, 3), runBlocking { content.observeBookmarks(id).first().single().blockIndex })
+        assertTrue(app.container.bookDao.outdated(ConversionPipeline.LAYOUT_VERSION).isEmpty())
     }
 
     @Test
@@ -85,13 +100,28 @@ class ConversionTest {
         assertTrue(dump, captions.any { it.startsWith("চিত্র ১.১০") } && captions.any { it.startsWith("চিত্র ১.১১") })
         blocks.filterIsInstance<ImageBlock>().forEach { assertTrue(it.textSize > 0f && it.sourceWidth > 200f) }
 
-        // Only the real table; headings, the summary box and the MCQs stay text.
-        val table = blocks.filterIsInstance<TableBlock>().single()
-        assertEquals(listOf("সরঞ্জাম", "মেঝে থেকে উচ্চতা", "সূত্র"), table.rows.first())
-        assertEquals(3, table.rows.size)
+        // Only the real tables; headings, the summary box and the MCQs stay text.
+        val tables = blocks.filterIsInstance<TableBlock>()
+        assertEquals(dump, 2, tables.size)
+        assertEquals(listOf("সরঞ্জাম", "মেঝে থেকে উচ্চতা", "সূত্র"), tables[0].rows.first())
+        assertEquals(3, tables[0].rows.size)
+        // A table running over three pages is one table, without the repeated header rows.
+        assertEquals(listOf("ক্রম", "টুলের নাম", "সংখ্যা"), tables[1].rows.first())
+        assertEquals(49, tables[1].rows.size)
+        assertEquals(listOf("48", "টুল নম্বর 48", "১"), tables[1].rows.last())
+
+        // The running footer ("publisher  page  phone") never reaches the text or a table.
+        assertTrue(dump, blocks.none { it.plainText.contains("Resonance") || it.plainText.contains("01617") })
+        // A callout box with an icon stays text; the note box under a diagram stays in the picture.
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("যেসব টুল হাতের শক্তির") })
+        assertTrue(dump, blocks.none { it !is ImageBlock && it.plainText.contains("ব্লেডের দৈর্ঘ্য") })
+        assertTrue(dump, blocks.any { it is ImageBlock && it.caption?.startsWith("চিত্র ১৫.১") == true })
         assertTrue(dump, blocks.filterIsInstance<HeadingBlock>().any { it.text == "অনুশীলনী — বহুনির্বাচনী প্রশ্ন" })
-        val options = blocks.filterIsInstance<ListItemBlock>().filter { it.level == 1 && it.marker.startsWith("(") }.map { it.marker + " " + it.text }
-        assertEquals(dump, listOf("(ক) তিন", "(খ) চার", "(গ) পাঁচ", "(ঘ) দুই"), options.take(4))
+        // Answer options printed in two columns are read row by row and kept together.
+        val options = blocks.filterIsInstance<ParagraphBlock>().filter { it.kind == ParagraphKind.OPTIONS }
+        assertEquals(dump, 6, options.size)
+        assertEquals("(ক)\tতিন\n(খ)\tচার\n(গ)\tপাঁচ\n(ঘ)\tদুই", options[0].text)
+        assertEquals("(ক)\tহার্জ\n(খ)\tফ্যারাড\n(গ)\tওহম\n(ঘ)\tহেনরি", options[2].text)
         assertTrue(dump, blocks.filterIsInstance<ListItemBlock>().any { it.text.startsWith("কনসিল্ড পাইপে") })
     }
 

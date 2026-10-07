@@ -19,6 +19,7 @@ class RaptiBooksApp : Application(), AppContainerProvider {
         // Conversions interrupted by the process being killed continue where they stopped.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching { container.library.resumeInterrupted() }
+            runCatching { container.library.upgradeOutdated() }
         }
     }
 }

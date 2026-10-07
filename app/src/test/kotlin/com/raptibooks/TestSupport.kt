@@ -1,6 +1,7 @@
 package com.raptibooks
 
 import android.os.Looper
+import com.raptibooks.core.data.conversion.ConversionPipeline
 import com.raptibooks.core.database.NewBook
 import com.raptibooks.core.model.BookStatus
 import com.raptibooks.core.model.ContentBlock
@@ -64,6 +65,8 @@ object TestSupport {
             ParagraphBlock(0, 0, "অধ্যায় ১: ভূমিকা\t5", listOf(InlineStyle(0, 16, InlineStyle.BOLD)), ParagraphKind.TOC),
             ParagraphBlock(0, 0, "1.1 Lists and tables\t9", kind = ParagraphKind.TOC),
             ImageBlock(0, 0, image.absolutePath, 48, 24, "চিত্র ১: wide flow chart", ImageKind.DIAGRAM, sourceWidth = 470f, textSize = 6f),
+            ListItemBlock(0, 0, "১.", "কোনটি পরিবাহী?"),
+            ParagraphBlock(0, 0, "(ক)\tতামা\n(খ)\tরাবার\n(গ)\tসিলিকন\n(ঘ)\tকাচ", kind = ParagraphKind.OPTIONS),
             ParagraphBlock(1, 0, "বাংলা ভাষায় লেখা বই মোবাইলে পড়ার সময় অনেক সমস্যা হয়। Mixed English text with bold words.", listOf(InlineStyle(66, 70, InlineStyle.BOLD))),
             ParagraphBlock(2, 0, "আমার সোনার বাংলা,\nআমি তোমায় ভালোবাসি।", kind = ParagraphKind.CENTERED),
             HeadingBlock(3, 1, 2, "1.1 Lists and tables"),
@@ -78,8 +81,8 @@ object TestSupport {
         )
             .mapIndexed { i, b -> reindex(b, i) }
         content.insertBlocks(id, blocks)
-        content.saveToc(id, listOf(TocEntry("অধ্যায় ১: ভূমিকা", 1, 0, 0), TocEntry("1.1 Lists and tables", 2, 6, 1)))
-        books.finishConversion(id, blocks.size, "bn+en", false)
+        content.saveToc(id, listOf(TocEntry("অধ্যায় ১: ভূমিকা", 1, 0, 0), TocEntry("1.1 Lists and tables", 2, 8, 1)))
+        books.finishConversion(id, blocks.size, "bn+en", false, ConversionPipeline.LAYOUT_VERSION)
         val converting = books.insert(NewBook("Converting book", null, "c.pdf", "", null, 10, 1))
         books.updateProgress(converting, 0.4f, "Analyzing page 4 of 10")
         val failed = books.insert(NewBook("Locked book", null, "l.pdf", "", null, 0, 1))

@@ -106,10 +106,11 @@ class TableDetector(private val lineBuilder: LineBuilder) {
     fun detectAligned(lines: List<TextLine>, page: RawPage): Pair<List<TableRegion>, Set<TextLine>> {
         if (lines.size < 6) return emptyList<TableRegion>() to emptySet()
         data class Piece(val left: Float, val right: Float, val text: String, val bold: Boolean)
-        data class Row(val lines: List<TextLine>, val pieces: List<Piece>) {
-            val top get() = lines.minOf { it.bounds.top }
-            val bottom get() = lines.maxOf { it.bounds.bottom }
-            val size get() = lines.maxOf { it.fontSize }
+        // Note: not called "lines", which would resolve to the function parameter inside the class.
+        data class Row(val members: List<TextLine>, val pieces: List<Piece>) {
+            val top get() = members.minOf { it.bounds.top }
+            val bottom get() = members.maxOf { it.bounds.bottom }
+            val size get() = members.maxOf { it.fontSize }
         }
 
         val rows = mutableListOf<Row>()
@@ -130,18 +131,21 @@ class TableDetector(private val lineBuilder: LineBuilder) {
 
         val tables = mutableListOf<TableRegion>()
         val consumed = HashSet<TextLine>()
+        // Running headers/footers ("Publisher   34   phone") sit in the top and bottom margins.
+        fun inMargin(top: Float, bottom: Float) = bottom < page.height * 0.07f || top > page.height * 0.92f
         var i = 0
         while (i < rows.size) {
-            if (rows[i].pieces.size < 2) {
+            if (rows[i].pieces.size < 2 || inMargin(rows[i].top, rows[i].bottom)) {
                 i++
                 continue
             }
             var j = i + 1
-            while (j < rows.size && rows[j].pieces.size >= 2 &&
-                rows[j].top - rows[j - 1].bottom < rows[j - 1].size * 2.2f
+            while (j < rows.size && rows[j].pieces.size >= 2 && !inMargin(rows[j].top, rows[j].bottom) &&
+                rows[j].top - rows[j - 1].bottom < rows[j - 1].size * 2.2f &&
+                !ruleBetween(page, rows[j - 1].bottom, rows[j].top)
             ) j++
             val run = rows.subList(i, j)
-            if (run.size >= 3 && !onDrawing(page, Rect.bounding(run.flatMap { r -> r.lines.map { it.bounds } })!!)) {
+            if (run.size >= 3 && !onDrawing(page, Rect.bounding(run.flatMap { r -> r.members.map { it.bounds } })!!)) {
                 val lefts = cluster(run.flatMap { r -> r.pieces.map { it.left } }, 6f)
                 val support = lefts.associateWith { x -> run.count { r -> r.pieces.any { abs(it.left - x) <= 6f } } }
                 val columns = support.filter { it.value * 2 >= run.size }.keys.sorted()
@@ -171,7 +175,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                 if (columns.size >= 2 && justifiedColumns < columns.size && !firstColumnMarkers && !crossing &&
                     (shortCells || (columns.size >= 3 && avgWords <= 6))
                 ) {
-                    val bounds = Rect.bounding(run.flatMap { r -> r.lines.map { it.bounds } })!!
+                    val bounds = Rect.bounding(run.flatMap { r -> r.members.map { it.bounds } })!!
                     val grid = run.map { r ->
                         val cells = MutableList(columns.size) { "" }
                         for (p in r.pieces) {
@@ -182,7 +186,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     }
                     val header = if (run.first().pieces.all { it.bold } && run.drop(1).any { r -> r.pieces.any { !it.bold } }) 1 else 0
                     tables += TableRegion(bounds, grid, header, ruled = false)
-                    run.forEach { consumed += it.lines }
+                    run.forEach { consumed += it.members }
                     i = j
                     continue
                 }
@@ -193,6 +197,12 @@ class TableDetector(private val lineBuilder: LineBuilder) {
     }
 
     // ------------------------------------------------------------------------------------
+
+    /** A long horizontal rule between y positions [top] and [bottom] (e.g. above a page footer). */
+    private fun ruleBetween(page: RawPage, top: Float, bottom: Float): Boolean = page.paths.any { p ->
+        p.shape == PathShape.HORIZONTAL_LINE && p.bounds.width > page.width * 0.3f &&
+            p.bounds.centerY > top && p.bounds.centerY < bottom
+    }
 
     /** Real (non-thin) curved or diagonal shapes overlapping [r]: circles, arrowheads, rounded boxes. */
     private fun drawingShapes(page: RawPage, r: Rect): Int = page.paths.count { p ->

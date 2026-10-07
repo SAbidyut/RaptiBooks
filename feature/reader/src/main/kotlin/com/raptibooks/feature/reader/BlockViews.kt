@@ -113,10 +113,10 @@ fun BlockView(
 ) {
     when (block) {
         is HeadingBlock -> HeadingView(block, style, highlight)
-        is ParagraphBlock -> if (block.kind == ParagraphKind.TOC) {
-            ContentsEntryView(block, style, highlight, onContentsClick)
-        } else {
-            ParagraphView(block, style, highlight)
+        is ParagraphBlock -> when (block.kind) {
+            ParagraphKind.TOC -> ContentsEntryView(block, style, highlight, onContentsClick)
+            ParagraphKind.OPTIONS -> OptionsView(block, style, highlight)
+            else -> ParagraphView(block, style, highlight)
         }
         is ListItemBlock -> ListItemView(block, style, highlight)
         is ImageBlock -> ImageView(block, style, onImageClick)
@@ -188,10 +188,43 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
             text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing),
         )
-        ParagraphKind.NOTE, ParagraphKind.TOC -> Text(
+        ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> Text(
             text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2),
         )
+    }
+}
+
+/** Answer options of a multiple-choice question: short ones two per row (as printed), long ones one per row. */
+@Composable
+private fun OptionsView(block: ParagraphBlock, style: ReaderStyle, highlight: String?) {
+    val options = remember(block.text) {
+        block.text.split('\n').map { line ->
+            val tab = line.indexOf('\t')
+            if (tab >= 0) line.substring(0, tab) to line.substring(tab + 1) else "" to line
+        }
+    }
+    val size = (style.fontSize.value * 0.95f).sp
+    val twoColumns = options.size % 2 == 0 && options.all { it.second.length <= 16 }
+    Column(Modifier.fillMaxWidth().padding(start = 20.dp, bottom = (style.fontSize.value * 0.7f).dp)) {
+        for (row in options.chunked(if (twoColumns) 2 else 1)) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                for ((marker, text) in row) {
+                    Row(Modifier.weight(1f)) {
+                        Text(
+                            marker,
+                            style = style.body.copy(fontSize = size, color = style.colors.accent, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Start),
+                            modifier = Modifier.padding(end = 6.dp),
+                        )
+                        Text(
+                            remember(text, highlight, style.colors) { styled(text, emptyList(), highlight, style.colors) },
+                            style = style.body.copy(fontSize = size, textAlign = TextAlign.Start),
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

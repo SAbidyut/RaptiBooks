@@ -53,7 +53,9 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
                 block_count INTEGER NOT NULL DEFAULT 0,
                 language TEXT,
                 used_ocr INTEGER NOT NULL DEFAULT 0,
-                ocr_mode TEXT NOT NULL DEFAULT 'AUTO'
+                ocr_mode TEXT NOT NULL DEFAULT 'AUTO',
+                layout_version INTEGER NOT NULL DEFAULT 0,
+                restore_page INTEGER NOT NULL DEFAULT -1
             )
             """.trimIndent(),
         )
@@ -102,7 +104,12 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Version 1 is the first schema; future migrations go here.
+        if (oldVersion < 2) {
+            // Which converter produced a book (to improve old books after an update), and the
+            // page to return to once a re-conversion finishes.
+            db.execSQL("ALTER TABLE books ADD COLUMN layout_version INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE books ADD COLUMN restore_page INTEGER NOT NULL DEFAULT -1")
+        }
     }
 
     internal fun notifyChanged(vararg tables: String) {
@@ -134,7 +141,7 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
 
     companion object {
         private const val NAME = "raptibooks.db"
-        private const val VERSION = 1
+        private const val VERSION = 2
 
         const val BOOKS = "books"
         const val BLOCKS = "blocks"

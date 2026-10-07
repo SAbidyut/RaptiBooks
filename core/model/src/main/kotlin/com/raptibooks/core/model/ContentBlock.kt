@@ -28,6 +28,9 @@ enum class ParagraphKind {
 
     /** A line of a printed table of contents; text is "title\tpage" (new values go last: stored by ordinal). */
     TOC,
+
+    /** Answer options of a multiple-choice question; one "marker\ttext" per line. */
+    OPTIONS,
 }
 
 data class ParagraphBlock(

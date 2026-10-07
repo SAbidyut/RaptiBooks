@@ -44,10 +44,10 @@ class UiSmokeTest {
         val vm = ReaderViewModel(bookId, c.reader, c.settings)
         TestSupport.pumpUntil { vm.load is ReaderViewModel.Load.Ready }
         val ready = vm.load as ReaderViewModel.Load.Ready
-        assertEquals(15, ready.source.count)
+        assertEquals(17, ready.source.count)
         assertEquals(2, ready.toc.size)
         // A printed contents line leads to its chapter.
-        assertEquals(6, runBlocking { vm.contentsTarget("1.1 Lists and tables", 2, ready.toc) })
+        assertEquals(8, runBlocking { vm.contentsTarget("1.1 Lists and tables", 2, ready.toc) })
 
         vm.search("বাংলা")
         TestSupport.pumpUntil { vm.results != null }

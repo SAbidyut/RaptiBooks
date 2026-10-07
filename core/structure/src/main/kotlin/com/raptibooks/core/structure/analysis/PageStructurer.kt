@@ -167,7 +167,7 @@ class PageStructurer(private val profile: DocumentProfile) {
             }
         }
         flush()
-        return out
+        return groupOptions(out)
     }
 
     // ---------------------------------------------------------------- contents and options
@@ -180,6 +180,49 @@ class PageStructurer(private val profile: DocumentProfile) {
         val main = line.src.isBold || line.size > profile.bodySize * 1.05f
         val styles = if (main) listOf(InlineStyle(0, title.length, InlineStyle.BOLD)) else emptyList()
         return StructuredElement.Paragraph(0, title + "\t" + m.groupValues[2], styles, ParagraphKind.TOC, false, line.size)
+    }
+
+    /** Runs of list items lettered (ক), (খ), (গ)… or (a), (b)… become one block of answer options. */
+    private fun groupOptions(elements: List<StructuredElement>): List<StructuredElement> {
+        val out = mutableListOf<StructuredElement>()
+        var i = 0
+        while (i < elements.size) {
+            val first = elements[i] as? StructuredElement.ListItem
+            val family = first?.let { optionLetter(it.marker) }
+            if (first != null && family != null && family.second == 0) {
+                var j = i + 1
+                while (j < elements.size) {
+                    val next = (elements[j] as? StructuredElement.ListItem)?.let { optionLetter(it.marker) } ?: break
+                    if (next.first != family.first || next.second != j - i) break
+                    j++
+                }
+                if (j - i >= 2) {
+                    val items = elements.subList(i, j).map { it as StructuredElement.ListItem }
+                    val text = items.joinToString("\n") { it.marker + "\t" + it.text.replace('\n', ' ') }
+                    out += StructuredElement.Paragraph(first.pageIndex, text, emptyList(), ParagraphKind.OPTIONS, false, 0f)
+                    i = j
+                    continue
+                }
+            }
+            out += elements[i]
+            i++
+        }
+        return out
+    }
+
+    /** (alphabet, position) of an option marker such as "(খ)", "b)" or "(C)". */
+    private fun optionLetter(marker: String): Pair<String, Int>? {
+        val core = marker.trim().removePrefix("(").removeSuffix(")").removeSuffix(".")
+        if (core.length != 1) return null
+        for (alphabet in OPTION_ALPHABETS) {
+            val k = alphabet.indexOf(core[0])
+            if (k >= 0) return alphabet to k
+        }
+        return null
+    }
+
+    private companion object {
+        val OPTION_ALPHABETS = listOf("কখগঘঙচ", "abcdef", "ABCDEF")
     }
 
     /** "(ক) তিন     (খ) চার" printed side by side: one list item per option. */

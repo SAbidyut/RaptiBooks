@@ -30,6 +30,9 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
 
     private var nextIndex = 0
     private var held: StructuredElement.Paragraph? = null
+
+    /** The last table, kept back in case it continues on the next page. */
+    private var pendingTable: TableBlock? = null
     private val deferred = mutableListOf<StructuredElement>()
     private val headings = mutableListOf<TocEntry>()
     private val firstBlockOfPage = sortedMapOf<Int, Int>()
@@ -81,6 +84,7 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     /** Flushes everything; returns the headings found (for the table of contents). */
     fun finish(): List<TocEntry> {
         flushHeld()
+        flushTable()
         return headings.toList()
     }
 
@@ -149,9 +153,17 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                     caption = next.text
                     consumed = 2
                 }
-                emit {
-                    TableBlock(it, el.pageIndex, t.rows, t.headerRows, t.imagePath, t.imageWidth, t.imageHeight, caption)
+                val prev = pendingTable
+                if (prev != null && caption == null && continuesTable(prev, el)) {
+                    // Same columns, next page, nothing in between: one table split by the page break.
+                    val repeatedHeader = t.headerRows > 0 && prev.headerRows > 0 &&
+                        t.rows.take(t.headerRows) == prev.rows.take(prev.headerRows)
+                    val rows = prev.rows + if (repeatedHeader) t.rows.drop(t.headerRows) else t.rows
+                    pendingTable = prev.copy(rows = rows, imagePath = null, imageWidth = 0, imageHeight = 0)
+                    return consumed
                 }
+                flushTable()
+                pendingTable = TableBlock(-1, el.pageIndex, t.rows, t.headerRows, t.imagePath, t.imageWidth, t.imageHeight, caption)
                 return consumed
             }
         }
@@ -164,7 +176,21 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         emit { ParagraphBlock(it, p.pageIndex, text, p.styles, p.kind) }
     }
 
+    private fun continuesTable(prev: TableBlock, next: StructuredElement.Table): Boolean {
+        val t = next.region
+        val columns = prev.rows.maxOfOrNull { it.size } ?: 0
+        return next.pageIndex == prev.pageIndex + 1 && t.columnCount == columns &&
+            (t.headerRows == 0 || prev.headerRows == 0 || t.rows.take(t.headerRows) == prev.rows.take(prev.headerRows))
+    }
+
+    private fun flushTable() {
+        val t = pendingTable ?: return
+        pendingTable = null
+        emit { t.copy(index = it) }
+    }
+
     private inline fun emit(make: (Int) -> ContentBlock): Int {
+        if (pendingTable != null) flushTable()
         val idx = nextIndex++
         val block = make(idx)
         firstBlockOfPage.putIfAbsent(block.pageIndex, idx)

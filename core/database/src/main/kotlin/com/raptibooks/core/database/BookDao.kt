@@ -87,7 +87,8 @@ class BookDao(private val db: RaptiDatabase) {
         put("progress_message", message)
     }
 
-    fun finishConversion(id: Long, blockCount: Int, language: String?, usedOcr: Boolean) = update(id) {
+    fun finishConversion(id: Long, blockCount: Int, language: String?, usedOcr: Boolean, layoutVersion: Int = 0) = update(id) {
+        put("layout_version", layoutVersion)
         put("status", BookStatus.READY.name)
         put("progress", 1f)
         putNull("progress_message")
@@ -97,7 +98,9 @@ class BookDao(private val db: RaptiDatabase) {
         put("used_ocr", if (usedOcr) 1 else 0)
     }
 
-    fun prepareReconversion(id: Long, ocrMode: OcrMode) = update(id) {
+    /** Resets a book for converting again; [restorePage] is where reading continues afterwards (-1: start). */
+    fun prepareReconversion(id: Long, ocrMode: OcrMode, restorePage: Int = -1) = update(id) {
+        put("restore_page", restorePage)
         put("status", BookStatus.QUEUED.name)
         put("ocr_mode", ocrMode.name)
         put("progress", 0f)
@@ -120,6 +123,24 @@ class BookDao(private val db: RaptiDatabase) {
     fun delete(id: Long) {
         db.writableDatabase.delete("books", "id = ?", arrayOf(id.toString()))
         db.notifyChanged(RaptiDatabase.BOOKS, RaptiDatabase.BLOCKS, RaptiDatabase.TOC, RaptiDatabase.BOOKMARKS)
+    }
+
+    /** Ready books converted by an older converter than [layoutVersion]. */
+    fun outdated(layoutVersion: Int): List<Long> =
+        db.readableDatabase.rawQuery(
+            "SELECT id FROM books WHERE status = ? AND layout_version < ?",
+            arrayOf(BookStatus.READY.name, layoutVersion.toString()),
+        ).use { c -> List(c.count) { c.moveToNext(); c.getLong(0) } }
+
+    /** Page to continue reading at after a re-conversion, or -1. */
+    fun restorePage(id: Long): Int =
+        db.readableDatabase.rawQuery("SELECT restore_page FROM books WHERE id = ?", arrayOf(id.toString()))
+            .use { if (it.moveToFirst()) it.getInt(0) else -1 }
+
+    fun restorePosition(id: Long, blockIndex: Int) = update(id) {
+        put("reading_block", blockIndex)
+        put("reading_offset", 0)
+        put("restore_page", -1)
     }
 
     /** Books left in a working state by a killed process. */

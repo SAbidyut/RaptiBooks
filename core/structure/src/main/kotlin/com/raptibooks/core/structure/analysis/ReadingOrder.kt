@@ -56,6 +56,8 @@ object ReadingOrder {
         return result
     }
 
+    private fun medianWidth(rects: List<Rect>): Float = rects.map { it.width }.sorted()[rects.size / 2]
+
     private fun <T> sortTopDown(items: List<T>, boundsOf: (T) -> Rect): List<T> =
         items.sortedWith { a, b ->
             val ra = boundsOf(a)
@@ -106,7 +108,10 @@ object ReadingOrder {
             val lh = left.sumOf { it.height.toDouble() }
             val rh = right.sumOf { it.height.toDouble() }
             left.size >= 3 && right.size >= 3 && lh >= area.height * 0.2 && rh >= area.height * 0.2 &&
-                abs(left.maxOf { it.bottom } - right.maxOf { it.bottom }) < area.height // sanity
+                abs(left.maxOf { it.bottom } - right.maxOf { it.bottom }) < area.height && // sanity
+                // Columns of text are filled with long lines; side-by-side short items (answer
+                // options, label lists) are rows to read left to right instead.
+                medianWidth(left) >= (gl - area.left) * 0.5f && medianWidth(right) >= (area.right - gr) * 0.5f
         }
     }
 }
