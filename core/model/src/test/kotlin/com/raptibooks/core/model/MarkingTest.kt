@@ -38,4 +38,21 @@ class MarkingTest {
         val result = Marking.apply(emptyList(), listOf(0..3, 10..12), blue)
         assertEquals(listOf(MarkSpan(0, 4, blue), MarkSpan(10, 13, blue)), result)
     }
+
+    @Test
+    fun inkSurvivesStorage() {
+        val points = floatArrayOf(0f, 0.25f, 0.5f, 1f, 0.1234f, 0.9f)
+        val back = InkCodec.decode(InkCodec.encode(points))
+        assertEquals(points.size, back.size)
+        for (i in points.indices) assertEquals(points[i], back[i], 0.0001f)
+        assertEquals(0, InkCodec.decode("").size)
+    }
+
+    @Test
+    fun markKeysRoundTrip() {
+        val key = MarkKey.of(12345, MarkKey.cell(7, 3))
+        assertEquals(12345, MarkKey.block(key))
+        assertEquals(MarkKey.cell(7, 3), MarkKey.part(key))
+        assertEquals(0, MarkKey.part(MarkKey.of(9)))
+    }
 }

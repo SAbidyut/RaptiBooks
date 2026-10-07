@@ -68,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
@@ -88,6 +89,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
+import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReaderFont
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.model.ReaderTheme
@@ -369,35 +372,80 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
-/** Full-screen image viewer with pinch-zoom, pan and double-tap zoom. */
+/**
+ * Full-screen image viewer with pinch-zoom, pan and double-tap zoom. For pictures of the book
+ * (not equations) the colour menu is there too: pick a colour and draw anywhere on the picture;
+ * the lines stay where they were drawn. With no colour chosen, one finger pans and zooms.
+ */
 @Composable
-internal fun ImageViewer(path: String, caption: String?, ink: Boolean, onClose: () -> Unit) {
+internal fun ImageViewer(
+    path: String,
+    caption: String?,
+    equation: Boolean,
+    strokes: List<InkStroke>,
+    colors: ReaderColors,
+    onDraw: (MarkColor, FloatArray) -> Unit,
+    onErase: (List<Long>) -> Unit,
+    onClose: () -> Unit,
+) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
+        var tool by remember { mutableStateOf(MarkTool.NONE) }
         val state = rememberTransformableState { zoom, pan, _ ->
             scale = (scale * zoom).coerceIn(1f, 6f)
             offset = if (scale == 1f) Offset.Zero else offset + pan
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-            val widthPx = with(LocalDensity.current) { (maxWidth.toPx() * 2).roundToInt() }
+            val density = LocalDensity.current
+            val widthPx = with(density) { (maxWidth.toPx() * 2).roundToInt() }
             val image by rememberLocalImage(path, widthPx)
             val img = image
             if (img != null) {
-                Image(
-                    img, caption, contentScale = ContentScale.Fit,
-                    // Equations are ink masks: white on the black viewer.
-                    colorFilter = if (ink) ColorFilter.tint(Color.White) else null,
-                    modifier = Modifier
+                val aspect = img.width.toFloat() / maxOf(1, img.height)
+                val fitWidth = minOf(constraints.maxWidth.toFloat(), constraints.maxHeight * aspect)
+                val picture = Size(fitWidth, fitWidth / aspect)
+                Box(
+                    Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
                             detectTapGestures(onDoubleTap = {
                                 if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2.5f
                             })
                         }
-                        .transformable(state)
-                        .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
-                )
+                        .transformable(state),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier
+                            .size(with(density) { picture.width.toDp() }, with(density) { picture.height.toDp() })
+                            .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
+                    ) {
+                        Image(
+                            img, caption, contentScale = ContentScale.Fit,
+                            // Equations are ink masks: white on the black viewer.
+                            colorFilter = if (equation) ColorFilter.tint(Color.White) else null,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (!equation) {
+                            InkCanvas(strokes, Modifier.fillMaxSize())
+                            if (tool != MarkTool.NONE) {
+                                MarkOverlay(
+                                    tool = tool,
+                                    onStroke = { points, _ ->
+                                        val color = tool.color
+                                        if (color != null) {
+                                            val line = normalizedInk(points, picture, 2.5f * density.density)
+                                            if (line.size >= 2) onDraw(color, line)
+                                        } else {
+                                            onErase(inkHitIds(strokes, points, picture, 14f * density.density))
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             } else {
                 CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             }
@@ -408,6 +456,12 @@ internal fun ImageViewer(path: String, caption: String?, ink: Boolean, onClose: 
                 Text(
                     caption, color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.5f)).padding(16.dp),
+                )
+            }
+            if (!equation && img != null) {
+                MarkPalette(
+                    tool = tool, colors = colors, onSelect = { tool = it },
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
                 )
             }
         }

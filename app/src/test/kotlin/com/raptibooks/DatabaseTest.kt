@@ -8,6 +8,7 @@ import com.raptibooks.core.model.ImageKind
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
 import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.MarkKey
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.OcrMode
 import com.raptibooks.core.model.ReadingPosition
@@ -97,15 +98,27 @@ class DatabaseTest {
         val books = TestSupport.app.container.bookDao
         val content = TestSupport.app.container.contentDao
         val id = books.insert(NewBook("Marks", null, "m.pdf", "/m.pdf", null, 1, 10))
-        content.markRanges(id, mapOf(3 to listOf(0..4, 10..12)), MarkColor.RED)
-        content.markRanges(id, mapOf(3 to listOf(2..3), 5 to listOf(1..1)), MarkColor.BLUE)
-        content.markRanges(id, mapOf(3 to listOf(10..12)), null)
+        content.markRanges(id, mapOf(MarkKey.of(3) to listOf(0..4, 10..12)), MarkColor.RED)
+        content.markRanges(id, mapOf(MarkKey.of(3) to listOf(2..3), MarkKey.of(5, MarkKey.cell(1, 2)) to listOf(1..1)), MarkColor.BLUE)
+        content.markRanges(id, mapOf(MarkKey.of(3) to listOf(10..12)), null)
         val marks = runBlocking { content.observeHighlights(id).first() }
         assertEquals(
             listOf(Triple(3, 0, 2) to MarkColor.RED, Triple(3, 2, 4) to MarkColor.BLUE, Triple(3, 4, 5) to MarkColor.RED, Triple(5, 1, 2) to MarkColor.BLUE),
             marks.map { Triple(it.blockIndex, it.start, it.end) to it.color },
         )
+        assertEquals(MarkKey.cell(1, 2), marks.last().part)
+
+        content.addInk(id, 4, MarkColor.GREEN, floatArrayOf(0.1f, 0.2f, 0.3f, 0.4f))
+        content.addInk(id, 4, MarkColor.RED, floatArrayOf(0.5f, 0.5f))
+        val ink = runBlocking { content.observeInk(id).first() }
+        assertEquals(2, ink.size)
+        assertEquals(MarkColor.GREEN, ink[0].color)
+        assertEquals(0.3f, ink[0].points[2], 0.0001f)
+        content.deleteInk(listOf(ink[0].id))
+        assertEquals(1, runBlocking { content.observeInk(id).first() }.size)
+
         books.delete(id)
         assertTrue(runBlocking { content.observeHighlights(id).first() }.isEmpty())
+        assertTrue(runBlocking { content.observeInk(id).first() }.isEmpty())
     }
 }

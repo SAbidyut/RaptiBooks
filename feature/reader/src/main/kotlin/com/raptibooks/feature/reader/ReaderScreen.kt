@@ -12,6 +12,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -60,6 +63,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -71,7 +76,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -118,6 +122,9 @@ fun ReaderRoute(
 
 private enum class Panel { NONE, CONTENTS, SETTINGS, SEARCH, INFO }
 
+/** A picture opened full screen; [block] is where the user's drawing on it is kept. */
+private class ViewerState(val path: String, val caption: String?, val equation: Boolean, val block: Int)
+
 @OptIn(FlowPreview::class)
 @Composable
 private fun Reader(
@@ -138,15 +145,16 @@ private fun Reader(
     var panel by rememberSaveable { mutableStateOf(Panel.NONE) }
     var penMenu by rememberSaveable { mutableStateOf(false) }
     var tool by rememberSaveable { mutableStateOf(MarkTool.NONE) }
-    var viewer by remember { mutableStateOf<Triple<String, String?, Boolean>?>(null) }
+    var viewer by remember { mutableStateOf<ViewerState?>(null) }
     val style = remember(colors, settings) { readerStyle(colors, settings) }
     val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
     val highlights by vm.highlights.collectAsStateWithLifecycle()
     val registry = remember { MarkRegistry() }
-    val marks = remember(highlights, registry) { ReaderMarks(highlights, registry) }
+    val ink by vm.ink.collectAsStateWithLifecycle()
+    val marks = remember(highlights, ink, registry) { ReaderMarks(highlights, ink, registry) }
     val density = LocalDensity.current.density
 
-    SystemBars(dark = colors.isDark, visible = chrome || panel != Panel.NONE)
+    SystemBars(dark = colors.isDark)
     KeepScreenOn(settings.keepScreenOn)
 
     LaunchedEffect(listState) {
@@ -221,10 +229,31 @@ private fun Reader(
                         onContentsClick = { title ->
                             scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
                         },
-                    ) { path, caption, ink -> viewer = Triple(path, caption, ink) }
+                    ) { path, caption, equation, blockIndex -> viewer = ViewerState(path, caption, equation, blockIndex) }
                 }
             }
         }
+
+        // The status and navigation bars stay on screen. Text scrolls away under a soft cover,
+        // and touches in the strip along the bottom edge are not given to the page, so a swipe
+        // up to go home never scrolls the book.
+        Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(topInset).background(colors.background.copy(alpha = 0.96f)))
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(bottomInset + 14.dp)
+                .background(Brush.verticalGradient(listOf(Color.Transparent, colors.background.copy(alpha = 0.96f))))
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false).consume()
+                        do {
+                            val event = awaitPointerEvent()
+                            event.changes.forEach { it.consume() }
+                        } while (event.changes.any { it.pressed })
+                    }
+                },
+        )
 
         // Minimal progress line while reading without chrome.
         AnimatedVisibility(!chrome, Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
@@ -273,9 +302,24 @@ private fun Reader(
         if (tool != MarkTool.NONE) {
             MarkOverlay(
                 tool = tool,
-                onStroke = { points ->
-                    val edits = strokeToRanges(points, registry, density)
-                    if (edits.isNotEmpty()) vm.mark(edits, tool.color)
+                onStroke = { points, origin ->
+                    val root = points.map { it + origin }
+                    val picture = imageAt(root.first(), registry)
+                    if (picture != null) {
+                        // Started on a picture: freehand line (or erase lines) on it.
+                        val (block, pictureOrigin, size) = picture
+                        val local = root.map { it - pictureOrigin }
+                        val color = tool.color
+                        if (color != null) {
+                            val line = normalizedInk(local, size, 2.5f * density)
+                            if (line.size >= 2) vm.addInk(block, color, line)
+                        } else {
+                            vm.eraseInk(inkHitIds(ink[block].orEmpty(), local, size, 14f * density))
+                        }
+                    } else {
+                        val edits = strokeToRanges(root, registry, density)
+                        if (edits.isNotEmpty()) vm.mark(edits, tool.color)
+                    }
                 },
             )
         }
@@ -318,7 +362,16 @@ private fun Reader(
         Panel.INFO -> BookInfoDialog(book, onDismiss = { panel = Panel.NONE })
         Panel.NONE -> Unit
     }
-    viewer?.let { (path, caption, ink) -> ImageViewer(path, caption, ink, onClose = { viewer = null }) }
+    viewer?.let { v ->
+        ImageViewer(
+            path = v.path, caption = v.caption, equation = v.equation,
+            strokes = if (v.equation) emptyList() else ink[v.block].orEmpty(),
+            colors = colors,
+            onDraw = { color, line -> vm.addInk(v.block, color, line) },
+            onErase = vm::eraseInk,
+            onClose = { viewer = null },
+        )
+    }
 }
 
 @Composable
@@ -390,17 +443,17 @@ private fun BottomBar(colors: ReaderColors, chapter: String?, page: Int, pageCou
     }
 }
 
+/** Keeps the status and navigation bars visible (readable on the reading theme) while reading. */
 @Composable
-private fun SystemBars(dark: Boolean, visible: Boolean) {
+private fun SystemBars(dark: Boolean) {
     val view = LocalView.current
     val activity = view.context.findActivity() ?: return
-    DisposableEffect(dark, visible) {
+    DisposableEffect(dark) {
         val controller = WindowCompat.getInsetsController(activity.window, view)
         controller.isAppearanceLightStatusBars = !dark
         controller.isAppearanceLightNavigationBars = !dark
-        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (visible) controller.show(WindowInsetsCompat.Type.systemBars()) else controller.hide(WindowInsetsCompat.Type.systemBars())
-        onDispose { controller.show(WindowInsetsCompat.Type.systemBars()) }
+        controller.show(WindowInsetsCompat.Type.systemBars())
+        onDispose { }
     }
 }
 

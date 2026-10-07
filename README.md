@@ -52,7 +52,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
   Siliguri (sans) fonts that cover Bangla and Latin, plus system fonts; text size, line
   spacing, margins, justification; contents, bookmarks,
   in-book search with highlights; zoomable figures; **marking pen** (tap the right edge: red / blue / yellow / green and an eraser; draw along
-  words or loop around a passage to underline it in that colour, saved with the book); horizontally scrollable tables; resume
+  words or loop around a passage — in text, tables and answer options — to underline it in that colour; on pictures a
+  finger draws freehand lines that stay where they were drawn; the menu can be dragged; all saved with the book);
+  status and navigation bars always stay visible, so swiping home never scrolls the page; horizontally scrollable tables; resume
   position; keep-screen-on; **original PDF page view** with pinch zoom and a jump back to the
   reflowed text at the same page.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page

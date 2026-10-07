@@ -82,7 +82,10 @@ enum class MarkColor(val id: Int, val argb: Long) {
     }
 }
 
-/** An underlined range [start, end) of the text of block [blockIndex]. */
+/**
+ * An underlined range [start, end) of a text of block [blockIndex]. [part] tells which text of
+ * the block: 0 for its body text, else a table cell or answer option (see [MarkKey]).
+ */
 data class Highlight(
     val id: Long,
     val bookId: Long,
@@ -90,6 +93,7 @@ data class Highlight(
     val start: Int,
     val end: Int,
     val color: MarkColor,
+    val part: Int = 0,
 )
 
 /** A range of a block's text with its colour; what is stored per block. */

@@ -10,6 +10,8 @@ import com.raptibooks.core.data.SettingsRepository
 import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
 import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.MarkKey
 import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.model.ReadingPosition
@@ -51,14 +53,27 @@ class ReaderViewModel(
     val bookmarks: StateFlow<List<Bookmark>> =
         repo.bookmarks(bookId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** The user's underlined passages, by block. */
-    val highlights: StateFlow<Map<Int, List<Highlight>>> =
-        repo.highlights(bookId).map { all -> all.groupBy { it.blockIndex } }
+    /** The user's underlined passages, by text (see [MarkKey]). */
+    val highlights: StateFlow<Map<Long, List<Highlight>>> =
+        repo.highlights(bookId).map { all -> all.groupBy { MarkKey.of(it.blockIndex, it.part) } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-    /** Underlines [edits] (character ranges per block) in [color]; a null colour erases them. */
-    fun mark(edits: Map<Int, List<IntRange>>, color: MarkColor?) {
+    /** Underlines [edits] (character ranges per text) in [color]; a null colour erases them. */
+    fun mark(edits: Map<Long, List<IntRange>>, color: MarkColor?) {
         viewModelScope.launch { repo.mark(bookId, edits, color) }
+    }
+
+    /** The user's freehand lines on pictures, by block. */
+    val ink: StateFlow<Map<Int, List<InkStroke>>> =
+        repo.ink(bookId).map { all -> all.groupBy { it.blockIndex } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun addInk(block: Int, color: MarkColor, points: FloatArray) {
+        viewModelScope.launch { repo.addInk(bookId, block, color, points) }
+    }
+
+    fun eraseInk(ids: List<Long>) {
+        viewModelScope.launch { repo.eraseInk(ids) }
     }
 
     /** Search term highlighted in the text after jumping to a search result. */

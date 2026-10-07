@@ -7,6 +7,7 @@ import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.InkStroke
 import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SearchHit
@@ -43,9 +44,16 @@ class ReaderRepository(
 
     fun highlights(id: Long): Flow<List<Highlight>> = content.observeHighlights(id)
 
-    /** Underlines [edits] (character ranges per block) in [color]; a null colour erases them. */
-    suspend fun mark(id: Long, edits: Map<Int, List<IntRange>>, color: MarkColor?) =
+    /** Underlines [edits] (character ranges per text, see MarkKey) in [color]; a null colour erases them. */
+    suspend fun mark(id: Long, edits: Map<Long, List<IntRange>>, color: MarkColor?) =
         withContext(Dispatchers.IO) { content.markRanges(id, edits, color) }
+
+    fun ink(id: Long): Flow<List<InkStroke>> = content.observeInk(id)
+
+    suspend fun addInk(id: Long, blockIndex: Int, color: MarkColor, points: FloatArray) =
+        withContext(Dispatchers.IO) { content.addInk(id, blockIndex, color, points) }
+
+    suspend fun eraseInk(ids: List<Long>) = withContext(Dispatchers.IO) { content.deleteInk(ids) }
 
     suspend fun savePosition(id: Long, position: ReadingPosition, progress: Float) =
         withContext(Dispatchers.IO) { books.updatePosition(id, position, progress) }

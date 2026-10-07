@@ -6,12 +6,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -28,6 +30,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,16 +60,20 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Text
 import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.InkStroke
 import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.MarkKey
 import com.raptibooks.core.ui.ReaderColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** What the marking pen is doing: nothing (the page scrolls), drawing in a colour, or erasing. */
 internal enum class MarkTool(val color: MarkColor?) {
@@ -79,25 +86,37 @@ internal class TextTarget {
     var layout: TextLayoutResult? = null
 }
 
+/** A picture on screen that can be drawn on. */
+internal class ImageTarget {
+    var coords: LayoutCoordinates? = null
+}
+
 internal class MarkRegistry {
-    val targets = HashMap<Int, TextTarget>()
+    /** Texts on screen by [MarkKey]. */
+    val targets = HashMap<Long, TextTarget>()
+    val images = HashMap<Int, ImageTarget>()
 }
 
 @Immutable
-internal class ReaderMarks(val byBlock: Map<Int, List<Highlight>>, val registry: MarkRegistry)
+internal class ReaderMarks(
+    val byKey: Map<Long, List<Highlight>>,
+    val ink: Map<Int, List<InkStroke>>,
+    val registry: MarkRegistry,
+)
 
-internal val LocalMarks = compositionLocalOf { ReaderMarks(emptyMap(), MarkRegistry()) }
+internal val LocalMarks = compositionLocalOf { ReaderMarks(emptyMap(), emptyMap(), MarkRegistry()) }
 
 /** Body text of a block, with the passages marked by the user underlined in their colour. */
 @Composable
-internal fun MarkableText(blockIndex: Int, text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier) {
+internal fun MarkableText(blockIndex: Int, text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier, part: Int = 0) {
     val marks = LocalMarks.current
-    val spans = marks.byBlock[blockIndex]
-    val target = remember(blockIndex) { TextTarget() }
+    val key = MarkKey.of(blockIndex, part)
+    val spans = marks.byKey[key]
+    val target = remember(key) { TextTarget() }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    DisposableEffect(blockIndex, marks.registry) {
-        marks.registry.targets[blockIndex] = target
-        onDispose { if (marks.registry.targets[blockIndex] === target) marks.registry.targets.remove(blockIndex) }
+    DisposableEffect(key, marks.registry) {
+        marks.registry.targets[key] = target
+        onDispose { if (marks.registry.targets[key] === target) marks.registry.targets.remove(key) }
     }
     val thickness = with(LocalDensity.current) { 2.5.dp.toPx() }
     val drop = with(LocalDensity.current) { 3.dp.toPx() }
@@ -138,7 +157,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawUnderline(
 
 // ---------------------------------------------------------------------- from a stroke to characters
 
-private class Placed(val index: Int, val origin: Offset, val layout: TextLayoutResult) {
+private class Placed(val index: Long, val origin: Offset, val layout: TextLayoutResult) {
     val text: String get() = layout.layoutInput.text.text
     val rect: Rect get() = Rect(origin, Size(layout.size.width.toFloat(), layout.size.height.toFloat()))
 }
@@ -147,7 +166,7 @@ private class Placed(val index: Int, val origin: Offset, val layout: TextLayoutR
  * The characters a pen stroke (in root coordinates) points at, per block. A loop drawn around
  * text takes everything inside it; any other stroke takes the words it runs along or through.
  */
-internal fun strokeToRanges(points: List<Offset>, registry: MarkRegistry, density: Float): Map<Int, List<IntRange>> {
+internal fun strokeToRanges(points: List<Offset>, registry: MarkRegistry, density: Float): Map<Long, List<IntRange>> {
     if (points.isEmpty()) return emptyMap()
     val targets = registry.targets.mapNotNull { (index, t) ->
         val c = t.coords
@@ -189,9 +208,9 @@ private fun inPolygon(p: Offset, poly: List<Offset>): Boolean {
     return inside
 }
 
-private fun enclosed(poly: List<Offset>, targets: List<Placed>): Map<Int, List<IntRange>> {
+private fun enclosed(poly: List<Offset>, targets: List<Placed>): Map<Long, List<IntRange>> {
     val bounds = Rect(poly.minOf { it.x }, poly.minOf { it.y }, poly.maxOf { it.x }, poly.maxOf { it.y })
-    val out = HashMap<Int, MutableList<IntRange>>()
+    val out = HashMap<Long, MutableList<IntRange>>()
     for (t in targets) {
         if (!t.rect.overlaps(bounds)) continue
         val l = t.layout
@@ -220,8 +239,8 @@ private class Hit(val target: Placed, val line: Int) {
     var max = Int.MIN_VALUE
 }
 
-private fun traced(points: List<Offset>, targets: List<Placed>, tolerance: Float): Map<Int, List<IntRange>> {
-    val hits = LinkedHashMap<Pair<Int, Int>, Hit>()
+private fun traced(points: List<Offset>, targets: List<Placed>, tolerance: Float): Map<Long, List<IntRange>> {
+    val hits = LinkedHashMap<Pair<Long, Int>, Hit>()
     for (p in points) {
         var best: Hit? = null
         var bestDistance = tolerance + 1f
@@ -230,6 +249,11 @@ private fun traced(points: List<Offset>, targets: List<Placed>, tolerance: Float
             val local = p - t.origin
             if (local.x < -tolerance || local.x > l.size.width + tolerance) continue
             if (local.y < -tolerance || local.y > l.size.height + tolerance) continue
+            val dx = when {
+                local.x < 0f -> -local.x
+                local.x > l.size.width -> local.x - l.size.width
+                else -> 0f
+            }
             val line = l.getLineForVerticalPosition(local.y.coerceIn(0f, max(0f, l.size.height - 1f)))
             val top = l.getLineTop(line)
             val bottom = l.getLineBottom(line)
@@ -238,8 +262,9 @@ private fun traced(points: List<Offset>, targets: List<Placed>, tolerance: Float
                 local.y > bottom -> local.y - bottom
                 else -> 0f
             }
-            if (dy < bestDistance) {
-                bestDistance = dy
+            val distance = hypot(dx, dy)
+            if (distance < bestDistance) {
+                bestDistance = distance
                 best = hits.getOrPut(t.index to line) { Hit(t, line) }
             }
         }
@@ -251,7 +276,7 @@ private fun traced(points: List<Offset>, targets: List<Placed>, tolerance: Float
         hit.min = min(hit.min, offset)
         hit.max = max(hit.max, offset)
     }
-    val out = HashMap<Int, MutableList<IntRange>>()
+    val out = HashMap<Long, MutableList<IntRange>>()
     for (hit in hits.values) {
         if (hit.min > hit.max) continue
         val l = hit.target.layout
@@ -275,9 +300,10 @@ private fun traced(points: List<Offset>, targets: List<Placed>, tolerance: Float
 
 /** Covers the page while a pen is selected: one finger draws instead of scrolling. */
 @Composable
-internal fun MarkOverlay(tool: MarkTool, onStroke: (List<Offset>) -> Unit, modifier: Modifier = Modifier) {
+internal fun MarkOverlay(tool: MarkTool, onStroke: (points: List<Offset>, origin: Offset) -> Unit, modifier: Modifier = Modifier) {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
+    val strokeDone by rememberUpdatedState(onStroke)
     val live = remember { mutableStateListOf<Offset>() }
     var generation by remember { mutableLongStateOf(0L) }
     var origin by remember { mutableStateOf(Offset.Zero) }
@@ -298,7 +324,7 @@ internal fun MarkOverlay(tool: MarkTool, onStroke: (List<Offset>) -> Unit, modif
                         change.consume()
                         live.add(change.position)
                     }
-                    onStroke(live.map { it + origin })
+                    strokeDone(live.toList(), origin)
                     scope.launch {
                         delay(320)
                         if (generation == gen) live.clear()
@@ -318,13 +344,24 @@ internal fun MarkOverlay(tool: MarkTool, onStroke: (List<Offset>) -> Unit, modif
     }
 }
 
-/** Frosted-glass colour menu on the right edge: red, blue, yellow, green, eraser. */
+/**
+ * Frosted-glass colour menu: red, blue, yellow, green, eraser. It can be dragged anywhere by
+ * its top grip or its background. Without [onClose] there is no close button.
+ */
 @Composable
-internal fun MarkPalette(tool: MarkTool, colors: ReaderColors, onSelect: (MarkTool) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
+internal fun MarkPalette(
+    tool: MarkTool,
+    colors: ReaderColors,
+    onSelect: (MarkTool) -> Unit,
+    modifier: Modifier = Modifier,
+    onClose: (() -> Unit)? = null,
+) {
     val shape = RoundedCornerShape(30.dp)
     val glass = if (colors.isDark) Color(0xFF3A3A40) else Color.White
+    var drag by remember { mutableStateOf(Offset.Zero) }
     Column(
         modifier
+            .offset { IntOffset(drag.x.roundToInt(), drag.y.roundToInt()) }
             .shadow(14.dp, shape, ambientColor = Color.Black.copy(alpha = 0.25f), spotColor = Color.Black.copy(alpha = 0.35f))
             .background(Brush.verticalGradient(listOf(glass.copy(alpha = 0.80f), glass.copy(alpha = 0.55f))), shape)
             .border(
@@ -332,10 +369,17 @@ internal fun MarkPalette(tool: MarkTool, colors: ReaderColors, onSelect: (MarkTo
                 Brush.verticalGradient(listOf(Color.White.copy(alpha = if (colors.isDark) 0.35f else 0.9f), Color.White.copy(alpha = 0.12f))),
                 shape,
             )
-            .padding(horizontal = 9.dp, vertical = 12.dp),
+            .pointerInput(Unit) {
+                detectDragGestures { change, amount ->
+                    change.consume()
+                    drag += amount
+                }
+            }
+            .padding(horizontal = 9.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Box(Modifier.size(width = 26.dp, height = 4.dp).background(colors.secondary.copy(alpha = 0.45f), RoundedCornerShape(2.dp)))
         for (t in MarkTool.entries) {
             if (t == MarkTool.NONE) continue
             val name = stringResource(
@@ -367,11 +411,13 @@ internal fun MarkPalette(tool: MarkTool, colors: ReaderColors, onSelect: (MarkTo
                 }
             }
         }
-        Icon(
-            Icons.Default.Close, stringResource(R.string.mark_close),
-            tint = colors.secondary,
-            modifier = Modifier.size(32.dp).clickable(onClick = onClose).padding(5.dp),
-        )
+        if (onClose != null) {
+            Icon(
+                Icons.Default.Close, stringResource(R.string.mark_close),
+                tint = colors.secondary,
+                modifier = Modifier.size(32.dp).clickable(onClick = onClose).padding(5.dp),
+            )
+        }
     }
 }
 
@@ -386,4 +432,103 @@ private fun EraserGlyph(color: Color) {
             drawRoundRect(color, Offset(topLeft.x + w * 0.45f, topLeft.y), Size(w * 0.55f, h), androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()))
         }
     }
+}
+
+// ---------------------------------------------------------------------- freehand ink on pictures
+
+/** The picture under [p] (root coordinates), with the point relative to it in 0..1. */
+internal fun imageAt(p: Offset, registry: MarkRegistry): Triple<Int, Offset, Size>? {
+    for ((block, t) in registry.images) {
+        val c = t.coords ?: continue
+        if (!c.isAttached) continue
+        val origin = c.positionInRoot()
+        val size = Size(c.size.width.toFloat(), c.size.height.toFloat())
+        if (size.width > 0f && Rect(origin, size).contains(p)) return Triple(block, origin, size)
+    }
+    return null
+}
+
+/** Points in [picture] pixels as 0..1 coordinates; consecutive points closer than [minStep] are dropped. */
+internal fun normalizedInk(points: List<Offset>, picture: Size, minStep: Float): FloatArray {
+    val out = ArrayList<Float>(points.size * 2)
+    var last: Offset? = null
+    for ((i, p) in points.withIndex()) {
+        val prev = last
+        val isLast = i == points.lastIndex
+        if (prev != null && !isLast && hypot(p.x - prev.x, p.y - prev.y) < minStep) continue
+        last = p
+        out += (p.x / picture.width).coerceIn(0f, 1f)
+        out += (p.y / picture.height).coerceIn(0f, 1f)
+    }
+    return out.toFloatArray()
+}
+
+/** Ids of the lines on a picture of size [picture] (px) that the eraser [path] (picture px) touches. */
+internal fun inkHitIds(strokes: List<InkStroke>, path: List<Offset>, picture: Size, tolerance: Float): List<Long> {
+    val hit = ArrayList<Long>()
+    for (s in strokes) {
+        var touched = false
+        var i = 0
+        while (!touched && i + 1 < s.points.size) {
+            val a = Offset(s.points[i] * picture.width, s.points[i + 1] * picture.height)
+            val b = if (i + 3 < s.points.size) Offset(s.points[i + 2] * picture.width, s.points[i + 3] * picture.height) else a
+            for (p in path) {
+                if (distanceToSegment(p, a, b) <= tolerance) {
+                    touched = true
+                    break
+                }
+            }
+            i += 2
+        }
+        if (touched) hit += s.id
+    }
+    return hit
+}
+
+private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
+    val dx = b.x - a.x
+    val dy = b.y - a.y
+    val len2 = dx * dx + dy * dy
+    val t = if (len2 == 0f) 0f else (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).coerceIn(0f, 1f)
+    return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+}
+
+/** Draws freehand [strokes] over a picture, scaled to the size of the canvas. */
+@Composable
+internal fun InkCanvas(strokes: List<InkStroke>, modifier: Modifier = Modifier) {
+    val minWidth = with(LocalDensity.current) { 2.5.dp.toPx() }
+    Canvas(modifier) {
+        val width = max(minWidth, size.width * 0.006f)
+        for (s in strokes) {
+            if (s.points.size < 2) continue
+            val color = Color(s.color.argb).copy(alpha = 0.92f)
+            val x0 = s.points[0] * size.width
+            val y0 = s.points[1] * size.height
+            if (s.points.size < 4) {
+                drawCircle(color, width / 2, Offset(x0, y0))
+                continue
+            }
+            val path = Path().apply {
+                moveTo(x0, y0)
+                var i = 2
+                while (i + 1 < s.points.size) {
+                    lineTo(s.points[i] * size.width, s.points[i + 1] * size.height)
+                    i += 2
+                }
+            }
+            drawPath(path, color, style = Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+    }
+}
+
+/** Ink layer filling the picture of block [blockIndex]; also lets strokes find the picture. */
+@Composable
+internal fun InkLayer(blockIndex: Int, modifier: Modifier = Modifier) {
+    val marks = LocalMarks.current
+    val target = remember(blockIndex) { ImageTarget() }
+    DisposableEffect(blockIndex, marks.registry) {
+        marks.registry.images[blockIndex] = target
+        onDispose { if (marks.registry.images[blockIndex] === target) marks.registry.images.remove(blockIndex) }
+    }
+    InkCanvas(marks.ink[blockIndex].orEmpty(), modifier.fillMaxSize().onGloballyPositioned { target.coords = it })
 }
