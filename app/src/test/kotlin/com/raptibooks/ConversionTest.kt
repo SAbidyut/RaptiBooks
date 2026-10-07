@@ -178,11 +178,18 @@ class ConversionTest {
     fun keepsWorkedExampleBoxesAsText() {
         val (id, content) = convert("callout_book.pdf")
         val blocks = content.blocks(id, 0, 10_000)
-        val text = blocks.joinToString("\n") { it.plainText }
-        // A shaded callout box is running text with equations, not a table.
-        assertTrue("no table expected: ${blocks.filterIsInstance<TableBlock>().map { it.plainText }}", blocks.none { it is TableBlock })
-        assertTrue(text, text.contains("সমাধান"))
-        assertTrue(text, text.contains("সনাক্তকরণের সীমা"))
-        assertTrue(text, text.contains("উত্তর"))
+        val dump = blocks.joinToString("\n") { it.javaClass.simpleName + ": " + it.plainText }
+        // A shaded callout box is running text with equations, not a table or one big picture.
+        assertTrue(dump, blocks.none { it is TableBlock })
+        assertTrue(dump, blocks.filterIsInstance<ImageBlock>().all { it.kind == com.raptibooks.core.model.ImageKind.EQUATION })
+        assertEquals(dump, 4, blocks.count { it is ImageBlock })
+        assertTrue(dump, blocks.any { it is HeadingBlock && it.text == "সমাধান :" })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("উত্তর : পিক্সেল ঘনত্ব 160") })
+        // Short pieces printed on one row with wide gaps stay one line, each label starts a paragraph.
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("প্রদত্ত : N(H) = 1920 পিক্সেল") && it.text.contains("W = 12 মিটার") && !it.text.contains('\n') })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text == "নির্ণেয় : D = ?" })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("প্রদত্ত : 2 MP এ N(H) = 1920") && it.text.contains("D = 250 px/m") })
+        // "= 160 px/m" is part of the worked formula, not a stray line.
+        assertTrue(dump, blocks.none { it.plainText.trim() == "= 160 px/m" || it.plainText.contains("= 160 px/m ⏎") })
     }
 }
