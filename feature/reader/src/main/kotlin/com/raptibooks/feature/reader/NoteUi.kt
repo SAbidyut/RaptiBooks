@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -53,10 +54,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.font.FontWeight
@@ -78,38 +82,85 @@ import kotlin.math.roundToInt
 private val TextPin = Color(0xFFF59E0B)
 private val VoicePin = Color(0xFF00897B)
 
-/** The pins of one block, each at its place (fractions of the block's size). */
+/** Width kept free at the right of a block that has notes: the pins sit there, beside the text. */
+internal val NoteStrip = 26.dp
+private val PinSize = 22.dp
+
+/**
+ * The pins of one block. Each pin sits in the free strip at the right of the text, level with
+ * the place it belongs to, and an arrow runs from it to that place, so the text itself stays
+ * clear. The layer covers the whole block (text area plus strip).
+ */
 @Composable
 internal fun NotesLayer(notes: List<Note>, onOpen: (Note) -> Unit, modifier: Modifier = Modifier) {
+    val density = LocalDensity.current
+    val pin = with(density) { PinSize.roundToPx() }
+    val strip = with(density) { NoteStrip.roundToPx() }
+    val gap = with(density) { 3.dp.roundToPx() }
+    val line = with(density) { 1.4.dp.toPx() }
+    val dash = with(density) { floatArrayOf(5.dp.toPx(), 4.dp.toPx()) }
+    val head = with(density) { 9.dp.toPx() }
     Layout(
-        content = { for (n in notes) NotePin(n) { onOpen(n) } },
-        modifier = modifier,
-    ) { measurables, constraints ->
-        val placeables = measurables.map { it.measure(Constraints()) }
-        layout(constraints.maxWidth, constraints.maxHeight) {
-            placeables.forEachIndexed { i, p ->
-                val n = notes[i]
-                val x = (n.x * constraints.maxWidth - p.width / 2f).roundToInt().coerceIn(0, max(0, constraints.maxWidth - p.width))
-                val y = (n.y * constraints.maxHeight - p.height / 2f).roundToInt().coerceIn(0, max(0, constraints.maxHeight - p.height))
-                p.place(x, y)
+        content = { for (n in notes) NotePin(n, PinSize) { onOpen(n) } },
+        modifier = modifier.drawBehind {
+            val tops = pinTops(notes, size.height.roundToInt(), pin, gap)
+            val textWidth = size.width - strip
+            val startX = size.width - strip + (strip - pin) / 2f
+            for ((i, n) in notes.withIndex()) {
+                val color = (if (n.kind == NoteKind.VOICE) VoicePin else TextPin).copy(alpha = 0.85f)
+                val from = Offset(startX, tops[i] + pin / 2f)
+                val tip = Offset(n.x.coerceIn(0f, 1f) * textWidth, n.y.coerceIn(0f, 1f) * size.height)
+                val away = from - tip
+                val length = away.getDistance()
+                if (length < 1f) continue
+                val unit = away / length
+                val base = tip + unit * minOf(head, length)
+                drawLine(color, from, base, strokeWidth = line, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(dash))
+                val side = Offset(-unit.y, unit.x) * (head * 0.45f)
+                val arrow = Path().apply {
+                    moveTo(tip.x, tip.y)
+                    lineTo(base.x + side.x, base.y + side.y)
+                    lineTo(base.x - side.x, base.y - side.y)
+                    close()
+                }
+                drawPath(arrow, color)
             }
+        },
+    ) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(Constraints.fixed(pin, pin)) }
+        val tops = pinTops(notes, constraints.maxHeight, pin, gap)
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            val x = constraints.maxWidth - strip + (strip - pin) / 2
+            placeables.forEachIndexed { i, p -> p.place(x, tops[i]) }
         }
     }
 }
 
+/** Top of each pin: level with its place, pushed down where two would overlap. */
+private fun pinTops(notes: List<Note>, height: Int, pin: Int, gap: Int): IntArray {
+    val tops = IntArray(notes.size)
+    var free = 0
+    for (i in notes.indices.sortedBy { notes[it].y }) {
+        val wanted = (notes[i].y * height - pin / 2f).roundToInt().coerceIn(0, max(0, height - pin))
+        tops[i] = max(wanted, free)
+        free = tops[i] + pin + gap
+    }
+    return tops
+}
+
 @Composable
-private fun NotePin(note: Note, onClick: () -> Unit) {
+private fun NotePin(note: Note, size: Dp, onClick: () -> Unit) {
     val base = if (note.kind == NoteKind.VOICE) VoicePin else TextPin
     Box(
         Modifier
-            .size(32.dp)
-            .shadow(6.dp, CircleShape)
+            .size(size)
+            .shadow(4.dp, CircleShape)
             .background(Brush.verticalGradient(listOf(base.copy(alpha = 0.95f), base)), CircleShape)
-            .border(1.5.dp, Color.White.copy(alpha = 0.9f), CircleShape)
+            .border(1.2.dp, Color.White.copy(alpha = 0.9f), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        NoteGlyph(note.kind, Color.White, 16.dp)
+        NoteGlyph(note.kind, Color.White, size * 0.55f)
     }
 }
 

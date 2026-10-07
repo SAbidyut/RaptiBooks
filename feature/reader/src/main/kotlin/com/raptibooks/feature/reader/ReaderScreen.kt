@@ -239,6 +239,9 @@ private fun Reader(
                 if (block == null) {
                     BlockPlaceholder(style)
                 } else {
+                    val pins = notes[index]
+                    // A block with notes keeps a free strip at the right for the pins.
+                    val strip = if (pins.isNullOrEmpty()) 0.dp else NoteStrip
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -246,7 +249,7 @@ private fun Reader(
                                 if (tool == MarkTool.NOTE) {
                                     // Choosing a place for a note: the next tap anywhere in the block
                                     // (also on a picture or a table) is it; scrolling still works.
-                                    Modifier.pointerInput(index) {
+                                    Modifier.pointerInput(index, strip) {
                                         awaitEachGesture {
                                             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                             while (true) {
@@ -255,7 +258,11 @@ private fun Reader(
                                                 if (event.changes.size > 1 || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) break
                                                 if (change.changedToUp()) {
                                                     change.consume()
-                                                    spot = NoteSpot(block.index, block.pageIndex, down.position.x / size.width, down.position.y / size.height)
+                                                    val textWidth = (size.width - strip.toPx()).coerceAtLeast(1f)
+                                                    spot = NoteSpot(
+                                                        block.index, block.pageIndex,
+                                                        (down.position.x / textWidth).coerceIn(0f, 1f), (down.position.y / size.height).coerceIn(0f, 1f),
+                                                    )
                                                     noteStep = NoteStep.CHOOSE
                                                     tool = MarkTool.NONE
                                                     break
@@ -268,13 +275,14 @@ private fun Reader(
                                 },
                             ),
                     ) {
-                        BlockView(
-                            block, style, vm.highlight,
-                            onContentsClick = { title ->
-                                scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
-                            },
-                        ) { path, caption, equation, blockIndex -> viewer = ViewerState(path, caption, equation, blockIndex, penMenu) }
-                        val pins = notes[index]
+                        Box(Modifier.fillMaxWidth().padding(end = strip)) {
+                            BlockView(
+                                block, style, vm.highlight,
+                                onContentsClick = { title ->
+                                    scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
+                                },
+                            ) { path, caption, equation, blockIndex -> viewer = ViewerState(path, caption, equation, blockIndex, penMenu) }
+                        }
                         if (!pins.isNullOrEmpty()) NotesLayer(pins, onOpen = { openNote = it }, modifier = Modifier.matchParentSize())
                     }
                 }
