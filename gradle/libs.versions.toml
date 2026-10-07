@@ -22,6 +22,7 @@ tesseract = "5.3.1-1.5.9"
 leptonica = "1.83.0-1.5.9"
 
 junit = "4.13.2"
+robolectric = "4.16"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -45,6 +46,7 @@ tesseract = { module = "org.bytedeco:tesseract", version.ref = "tesseract" }
 leptonica = { module = "org.bytedeco:leptonica", version.ref = "leptonica" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

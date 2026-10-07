@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_title">RaptiBooks</string>
+    <string name="library_import">পিডিএফ যোগ করুন</string>
+    <string name="library_importing">যোগ হচ্ছে…</string>
+    <string name="library_imported">বই যোগ হয়েছে। মোবাইলের জন্য সাজানো হচ্ছে…</string>
+    <string name="library_still_converting">বইটি এখনও রূপান্তর হচ্ছে। শেষ হলে পড়া যাবে।</string>
+    <string name="action_more">আরও</string>
+    <string name="action_read">পড়ুন</string>
+    <string name="action_original">মূল পিডিএফ দেখুন</string>
+    <string name="action_cancel_conversion">রূপান্তর বাতিল</string>
+    <string name="action_reconvert">আবার রূপান্তর</string>
+    <string name="action_reconvert_ocr">OCR দিয়ে আবার রূপান্তর</string>
+    <string name="action_delete">মুছে ফেলুন</string>
+    <string name="action_cancel">বাতিল</string>
+    <string name="action_retry">আবার চেষ্টা</string>
+    <string name="action_close">বন্ধ</string>
+    <string name="menu_ocr_mode">লেখা শনাক্তকরণ (OCR)</string>
+    <string name="menu_about">অ্যাপ সম্পর্কে</string>
+    <string name="status_new">নতুন</string>
+    <string name="status_queued">রূপান্তরের অপেক্ষায়…</string>
+    <string name="status_failed">রূপান্তর ব্যর্থ</string>
+    <string name="one_page">১ পৃষ্ঠা</string>
+    <string name="n_pages">%1$d পৃষ্ঠা</string>
+    <string name="delete_title">বইটি মুছবেন?</string>
+    <string name="delete_message">“%1$s” এবং এর বুকমার্ক এই ফোন থেকে মুছে যাবে।</string>
+    <string name="empty_title">আপনার লাইব্রেরি খালি</string>
+    <string name="empty_body">যেকোনো পিডিএফ যোগ করুন, RaptiBooks সেটিকে মোবাইলে পড়ার উপযোগী বই হিসেবে সাজিয়ে দেবে: পর্দার মাপে লেখা, অধ্যায়, সারণি ও চিত্র। সবকিছু অফলাইনে কাজ করে।</string>
+    <string name="empty_steps">পিডিএফ → বিশ্লেষণ → সংগ্রহ → পুনর্বিন্যাস → মোবাইল বই</string>
+    <string name="ocr_explain">স্ক্যান করা পৃষ্ঠায় লেখা থাকে না। OCR অফলাইনে বাংলা ও ইংরেজি পড়ে নেয়।</string>
+    <string name="ocr_auto">স্বয়ংক্রিয় (প্রস্তাবিত)</string>
+    <string name="ocr_auto_desc">শুধু স্ক্যান করা বা ভাঙা লেখার পৃষ্ঠায় OCR ব্যবহার করুন।</string>
+    <string name="ocr_always">সবসময়</string>
+    <string name="ocr_always_desc">প্রতিটি পৃষ্ঠা OCR দিয়ে পড়ুন। ধীর, তবে লেখা ভুল এলে কাজে লাগে।</string>
+    <string name="ocr_never">কখনো না</string>
+    <string name="ocr_never_desc">স্ক্যান করা পৃষ্ঠা ছবি হিসেবে দেখান।</string>
+    <string name="about_body">RaptiBooks পিডিএফকে মোবাইলে আরামে পড়ার মতো বইয়ে রূপান্তর করে। এটি অধ্যায়, শিরোনাম, অনুচ্ছেদ, তালিকা, সারণি ও চিত্র শনাক্ত করে, পৃষ্ঠার হেডার-ফুটার ও পৃষ্ঠা নম্বর সরিয়ে দেয় এবং স্ক্যান করা পৃষ্ঠা অফলাইন OCR (বাংলা + ইংরেজি) দিয়ে পড়ে।\n\nফন্ট: Tiro Bangla ও Hind Siliguri (SIL Open Font License)। পিডিএফ ইঞ্জিন: PdfBox-Android (Apache 2.0)। OCR: Tesseract (Apache 2.0)।</string>
+</resources>

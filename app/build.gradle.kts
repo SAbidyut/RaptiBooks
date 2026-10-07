@@ -52,6 +52,12 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
     androidResources {
         // Tesseract models are memory-mapped/copied; keep them uncompressed in the APK.
         noCompress += listOf("traineddata")
@@ -91,4 +97,5 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
 }

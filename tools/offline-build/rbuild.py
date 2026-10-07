@@ -20,6 +20,7 @@ Usage:
   python3 tools/offline-build/rbuild.py fetch   # resolve + download everything (cached)
   python3 tools/offline-build/rbuild.py apk     # build signed APK -> build/offline/RaptiBooks.apk
   python3 tools/offline-build/rbuild.py test    # compile + run JUnit tests of pure-Kotlin modules
+  python3 tools/offline-build/rbuild.py robotest  # Robolectric tests of the app (DB, pipeline, UI)
 """
 from __future__ import annotations
 
@@ -627,7 +628,9 @@ def cmd_fetch(project: Project) -> dict:
         maven_roots.append((f"{key}:{v}", []))
     maven_roots.append((f"org.jetbrains.kotlin:kotlin-stdlib:{kotlin}", []))
 
-    excluded = {k.split(":")[0] for k in nodes}
+    # AndroidX artifacts never come from Maven Central (the test-only androidx.test classes that
+    # Robolectric needs are stubbed in tools/robolectric-stubs).
+    excluded = {k.split(":")[0] for k in nodes} | {"androidx.test", "androidx.test.espresso", "androidx.test.ext"}
     configs = {
         "main": maven_roots,
         "kotlinc": [(f"org.jetbrains.kotlin:kotlin-compiler-embeddable:{kotlin}", [])],
@@ -1081,7 +1084,91 @@ def cmd_apk(project: Project, refresh: bool) -> Path:
     sign_apk(tools, unsigned, signed, app)
     run([aapt2, "dump", "badging", str(signed)], "aapt2 dump badging")
     log(f"APK ready: {signed} ({signed.stat().st_size / 1e6:.1f} MB)")
-    return signed
+    return BuildOutput(signed, outputs, r_jar, lib_jars, android_jar, merged, res_apk, exploded, runtime_keys, resolved)
+
+
+@dataclass
+class BuildOutput:
+    apk: Path
+    module_classes: dict[str, Path]
+    r_jar: Path
+    lib_jars: list[Path]
+    android_jar: Path
+    manifest: Path
+    resources: Path
+    exploded: dict[str, Lib]
+    runtime_keys: list[str]
+    resolved: dict
+
+
+def cmd_robotest(project: Project, refresh: bool, only: list[str] | None) -> None:
+    """Robolectric tests of the app module, using the offline build outputs."""
+    out = cmd_apk(project, refresh)
+    resolved = out.resolved
+    app = project.modules[project.app["module"]]
+    if not app.test_dirs:
+        log("no app tests")
+        return
+    robo = OUT / "robolectric"
+    shutil.rmtree(robo / "config", ignore_errors=True)
+    # Stubs for the androidx.test classes Robolectric calls.
+    stub_src = sorted(str(p) for p in (TOOL_DIR.parent / "robolectric-stubs" / "src").rglob("*.java"))
+    stub_out = robo / "stubs"
+    shutil.rmtree(stub_out, ignore_errors=True)
+    stub_out.mkdir(parents=True)
+    run(["javac", "-nowarn", "--release", "17", "-d", str(stub_out), "-cp", str(out.android_jar)] + stub_src, "javac stubs")
+    # Merged assets + the config file Robolectric reads (what AGP's includeAndroidResources writes).
+    assets = robo / "assets"
+    shutil.rmtree(assets, ignore_errors=True)
+    assets.mkdir(parents=True)
+    dirs = [m.assets_dir for m in project.modules.values() if m.assets_dir.is_dir()]
+    dirs += [out.exploded[k].assets_dir for k in out.runtime_keys if out.exploded[k].assets_dir]
+    for d in dirs:
+        shutil.copytree(d, assets, dirs_exist_ok=True)
+    # Robolectric's binary-resources mode serves assets from the resource APK.
+    res_apk = robo / "resources-with-assets.ap_"
+    shutil.copyfile(out.resources, res_apk)
+    with zipfile.ZipFile(res_apk, "a") as zf:
+        for f in sorted(assets.rglob("*")):
+            if f.is_file():
+                zf.write(f, "assets/" + f.relative_to(assets).as_posix(), compress_type=zipfile.ZIP_STORED)
+    cfg = robo / "config" / "com" / "android" / "tools"
+    cfg.mkdir(parents=True)
+    (cfg / "test_config.properties").write_text(
+        f"android_merged_manifest={out.manifest}\n"
+        f"android_merged_assets={assets}\n"
+        f"android_resource_apk={res_apk}\n"
+        f"android_custom_package={app.namespace}\n"
+    )
+    test_jars = [Path(p) for p in resolved["test"]]
+    stdlib = [Path(p) for p in stdlib_jars(resolved["libs"])]
+    main_cp = list(out.module_classes.values()) + [out.r_jar] + out.lib_jars + stdlib
+    tout = robo / "test-classes"
+    kotlinc(resolved, app.safe_name + "-test", app.test_dirs, [stub_out] + main_cp + test_jars + [out.android_jar], tout, compose=True)
+    for rdir in [app.path / "src/test/resources"]:
+        if rdir.is_dir():
+            shutil.copytree(rdir, tout, dirs_exist_ok=True)
+    classes = sorted(
+        str(f.relative_to(tout))[:-6].replace("/", ".")
+        for f in tout.rglob("*Test.class") if "$" not in f.name)
+    if only:
+        classes = [c for c in classes if any(c.endswith(o) for o in only)]
+    # android.* must be visible outside the sandbox too (AGP adds a mockable android.jar).
+    cp = [tout, robo / "config", stub_out] + main_cp + test_jars + [out.android_jar]
+    cmd = [java(), "-Xmx3g",
+           f"-Drobolectric.dependency.repo.url={MAVEN_REPOS[0]}",
+           "-Drobolectric.dependency.repo.id=central-mirror",
+           f"-Djava.io.tmpdir={robo / 'tmp'}",
+           "-cp", os.pathsep.join(str(p) for p in cp), "org.junit.runner.JUnitCore"] + classes
+    (robo / "tmp").mkdir(exist_ok=True)
+    log(f"running {len(classes)} Robolectric test classes")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    text = "\n".join(l for l in (res.stdout + res.stderr).splitlines() if not l.startswith("Picked up"))
+    (robo / "last-run.txt").write_text(text)
+    print(text[-25000:])
+    if res.returncode != 0:
+        die("Robolectric tests failed")
+    log("Robolectric tests passed")
 
 
 def stdlib_jars(libs: dict[str, dict]) -> list[str]:
@@ -1276,7 +1363,7 @@ def cmd_test(project: Project, refresh: bool, only: list[str] | None) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["fetch", "apk", "test"])
+    ap.add_argument("command", choices=["fetch", "apk", "test", "robotest"])
     ap.add_argument("--refresh", action="store_true", help="re-resolve dependencies")
     ap.add_argument("--module", action="append", help="limit tests to module(s)")
     args = ap.parse_args()
@@ -1285,6 +1372,8 @@ def main() -> None:
         cmd_fetch(project)
     elif args.command == "apk":
         cmd_apk(project, args.refresh)
+    elif args.command == "robotest":
+        cmd_robotest(project, args.refresh, args.module)
     else:
         cmd_test(project, args.refresh, args.module)
 

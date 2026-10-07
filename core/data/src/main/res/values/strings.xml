@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="channel_conversion">Book conversion</string>
+    <string name="notification_converting">Converting “%1$s”</string>
+    <string name="notification_converting_generic">Converting book</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="progress_opening">Opening PDF…</string>
+    <string name="progress_page">Analyzing page %1$d of %2$d</string>
+    <string name="progress_ocr">Reading scanned page %1$d of %2$d (OCR)</string>
+    <string name="progress_layout">Building the book layout…</string>
+    <string name="status_cancelled">Conversion cancelled</string>
+    <string name="error_missing_file">The PDF file is missing. Please import it again.</string>
+    <string name="error_no_pages">This PDF has no pages.</string>
+    <string name="error_no_content">No readable content was found in this PDF.</string>
+    <string name="error_password">This PDF is protected with a password. Remove the password and import it again.</string>
+    <string name="error_damaged">This file could not be opened as a PDF. It may be damaged.</string>
+    <string name="error_memory">Not enough memory to convert this book. Close other apps and try again.</string>
+    <string name="error_storage">Not enough storage space. Free some space and try again.</string>
+    <string name="error_io">Could not read or write a file: %1$s</string>
+    <string name="error_generic">Conversion failed.</string>
+    <string name="error_with_reason">Conversion failed (%1$s).</string>
+    <string name="import_error_read">The selected file could not be read.</string>
+    <string name="import_error_not_pdf">The selected file is not a PDF.</string>
+</resources>
