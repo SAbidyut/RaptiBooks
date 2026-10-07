@@ -79,6 +79,8 @@ android {
                 "META-INF/{AL2.0,LGPL2.1}",
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
+                // GraalVM native-image configs shipped by every JavaCPP jar (unused on Android).
+                "META-INF/native-image/**",
             )
         }
     }
