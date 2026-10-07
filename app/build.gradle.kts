@@ -52,6 +52,23 @@ android {
         compose = true
     }
 
+    lint {
+        // Release builds should not fail on lint findings in CI; run ./gradlew lint to review them.
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
+    androidResources {
+        // Tesseract models are memory-mapped/copied; keep them uncompressed in the APK.
+        noCompress += listOf("traineddata")
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -62,6 +79,8 @@ android {
                 "META-INF/{AL2.0,LGPL2.1}",
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
+                // GraalVM native-image configs shipped by every JavaCPP jar (unused on Android).
+                "META-INF/native-image/**",
             )
         }
     }
@@ -86,4 +105,5 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
 }

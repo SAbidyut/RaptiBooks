@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="channel_conversion">বই রূপান্তর</string>
+    <string name="notification_converting">“%1$s” রূপান্তর হচ্ছে</string>
+    <string name="notification_converting_generic">বই রূপান্তর হচ্ছে</string>
+    <string name="action_cancel">বাতিল</string>
+    <string name="progress_opening">পিডিএফ খোলা হচ্ছে…</string>
+    <string name="progress_page">পৃষ্ঠা %1$d / %2$d বিশ্লেষণ হচ্ছে</string>
+    <string name="progress_ocr">স্ক্যান করা পৃষ্ঠা %1$d / %2$d পড়া হচ্ছে (OCR)</string>
+    <string name="progress_layout">বইয়ের বিন্যাস তৈরি হচ্ছে…</string>
+    <string name="status_cancelled">রূপান্তর বাতিল করা হয়েছে</string>
+    <string name="error_missing_file">পিডিএফ ফাইলটি পাওয়া যাচ্ছে না। আবার ইমপোর্ট করুন।</string>
+    <string name="error_no_pages">এই পিডিএফে কোনো পৃষ্ঠা নেই।</string>
+    <string name="error_no_content">এই পিডিএফে পড়ার মতো কিছু পাওয়া যায়নি।</string>
+    <string name="error_password">এই পিডিএফটি পাসওয়ার্ড দিয়ে সুরক্ষিত। পাসওয়ার্ড সরিয়ে আবার ইমপোর্ট করুন।</string>
+    <string name="error_damaged">ফাইলটি পিডিএফ হিসেবে খোলা যায়নি। এটি ক্ষতিগ্রস্ত হতে পারে।</string>
+    <string name="error_memory">রূপান্তরের জন্য যথেষ্ট মেমরি নেই। অন্য অ্যাপ বন্ধ করে আবার চেষ্টা করুন।</string>
+    <string name="error_storage">যথেষ্ট জায়গা নেই। কিছু জায়গা খালি করে আবার চেষ্টা করুন।</string>
+    <string name="error_io">ফাইল পড়া বা লেখা যায়নি: %1$s</string>
+    <string name="error_generic">রূপান্তর ব্যর্থ হয়েছে।</string>
+    <string name="error_with_reason">রূপান্তর ব্যর্থ হয়েছে (%1$s)।</string>
+    <string name="import_error_read">নির্বাচিত ফাইলটি পড়া যায়নি।</string>
+    <string name="import_error_not_pdf">নির্বাচিত ফাইলটি পিডিএফ নয়।</string>
+</resources>
