@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -1264,10 +1265,39 @@ def package_apk(project: Project, res_apk: Path, dex_dir: Path, exploded: dict[s
             zi = zipfile.ZipInfo(n, date_time=(1981, 1, 1, 0, 0, 0))
             zi.compress_type = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
             zi.external_attr = 0o644 << 16
+            if not compress:
+                zi.extra = alignment_extra(zf.fp.tell(), n, ALIGN_SO if n.endswith(".so") else ALIGN)
             zf.writestr(zi, raw, compresslevel=9 if compress else None)
     tmp.replace(dest)
     so = [n for n in entries if n.startswith("lib/")]
     log(f"packaged {len(entries)} entries ({len(so)} native libs)")
+
+
+ALIGN = 4          # zipalign: uncompressed entries (Android 11+ refuses a misaligned resources.arsc)
+ALIGN_SO = 16384   # uncompressed native libraries: page aligned (16 KB covers 4 KB and 16 KB pages)
+
+
+def alignment_extra(header_offset: int, name: str, align: int) -> bytes:
+    """Extra field that puts the entry's data on an [align] boundary (zipalign / apksig format)."""
+    data_start = header_offset + 30 + len(name.encode("utf-8")) + 6
+    pad = -data_start % align
+    return struct.pack("<HHH", 0xD935, 2 + pad, align) + bytes(pad)
+
+
+def check_alignment(apk: Path) -> None:
+    """Fails the build if any uncompressed entry is not aligned (the APK would not install)."""
+    bad = []
+    with open(apk, "rb") as f, zipfile.ZipFile(apk) as zf:
+        for info in zf.infolist():
+            if info.compress_type != zipfile.ZIP_STORED:
+                continue
+            f.seek(info.header_offset + 26)
+            name_len, extra_len = struct.unpack("<HH", f.read(4))
+            start = info.header_offset + 30 + name_len + extra_len
+            if start % (ALIGN_SO if info.filename.endswith(".so") else ALIGN):
+                bad.append(info.filename)
+    if bad:
+        die(f"misaligned uncompressed entries in {apk.name}: {bad[:5]}")
 
 
 SIGNER_SRC = r"""
@@ -1317,6 +1347,8 @@ def sign_apk(tools: dict, unsigned: Path, signed: Path, app: dict) -> None:
                str(unsigned), str(signed), keystore, app["storePassword"], app["keyAlias"],
                app["keyPassword"], str(app["minSdk"])], "apksig")
     log("signed: " + res.stdout.strip().splitlines()[-1])
+    check_alignment(signed)
+    log("zip alignment ok")
 
 
 # --------------------------------------------------------------------------------------
