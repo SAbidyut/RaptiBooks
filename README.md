@@ -85,6 +85,8 @@ side only extracts raw page data and renders.
 
 ### With the Android SDK (Android Studio or command line)
 
+Requires JDK 21 (Robolectric runs the Android 15 framework in the unit tests, which needs Java 21).
+
 ```
 ./gradlew test             # engine unit tests + Robolectric tests
 ./gradlew assembleRelease  # app/build/outputs/apk/release/app-release.apk
