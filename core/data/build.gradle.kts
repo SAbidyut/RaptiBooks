@@ -33,7 +33,7 @@ dependencies {
     implementation(project(":core:reflow"))
     implementation(project(":core:pdf"))
     implementation(project(":core:ocr"))
-    implementation(project(":core:database"))
+    api(project(":core:database"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.work.runtime)
     implementation(libs.kotlinx.coroutines.android)

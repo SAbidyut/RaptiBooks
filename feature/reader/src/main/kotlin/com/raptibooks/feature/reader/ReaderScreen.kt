@@ -161,8 +161,9 @@ private fun Reader(
     val firstVisible by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     val currentPage = source.peek(firstVisible)?.pageIndex ?: 0
     val chapter = remember(firstVisible, ready.toc) { ready.toc.lastOrNull { it.blockIndex <= firstVisible } }
-    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: firstVisible
-    val bookmarked = bookmarks.any { it.blockIndex in firstVisible..lastVisible }
+    // derivedStateOf: recompose when the visible range changes, not on every scrolled pixel.
+    val lastVisible by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: listState.firstVisibleItemIndex } }
+    val bookmarked = bookmarks.any { it.blockIndex in firstVisible..maxOf(firstVisible, lastVisible) }
     val progress = if (book.blockCount <= 1) 1f else firstVisible.toFloat() / (book.blockCount - 1)
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -230,7 +231,7 @@ private fun Reader(
                 onBack = onBack,
                 onSearch = { panel = Panel.SEARCH },
                 onContents = { panel = Panel.CONTENTS },
-                onBookmark = { vm.toggleBookmark(firstVisible, lastVisible) },
+                onBookmark = { vm.toggleBookmark(firstVisible, maxOf(firstVisible, lastVisible)) },
                 onSettings = { panel = Panel.SETTINGS },
                 onOriginal = { onOpenOriginal(currentPage) },
                 onInfo = { panel = Panel.INFO },
