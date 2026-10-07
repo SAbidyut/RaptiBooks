@@ -69,6 +69,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -371,7 +372,7 @@ private fun InfoRow(label: String, value: String) {
 
 /** Full-screen image viewer with pinch-zoom, pan and double-tap zoom. */
 @Composable
-internal fun ImageViewer(path: String, caption: String?, onClose: () -> Unit) {
+internal fun ImageViewer(path: String, caption: String?, ink: Boolean, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
@@ -386,6 +387,8 @@ internal fun ImageViewer(path: String, caption: String?, onClose: () -> Unit) {
             if (img != null) {
                 Image(
                     img, caption, contentScale = ContentScale.Fit,
+                    // Equations are ink masks: white on the black viewer.
+                    colorFilter = if (ink) ColorFilter.tint(Color.White) else null,
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {

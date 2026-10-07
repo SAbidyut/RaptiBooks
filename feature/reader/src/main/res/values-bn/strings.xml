@@ -57,5 +57,7 @@
     <string name="original_reflow">সাজানো লেখায় ফিরে যান</string>
     <string name="original_error">মূল পিডিএফ খোলা যায়নি।</string>
     <string name="action_close">বন্ধ</string>
+    <string name="equation_scroll_hint">← পুরো সূত্র দেখতে পাশে সরান →</string>
+    <string name="table_scroll_hint">← সব কলাম দেখতে পাশে সরান →</string>
     <string name="figure_scroll_hint">← পাশে সরিয়ে পুরোটা দেখুন · ট্যাপ করলে বড় হবে →</string>
 </resources>

@@ -36,6 +36,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -109,7 +112,7 @@ fun BlockView(
     style: ReaderStyle,
     highlight: String?,
     onContentsClick: (title: String) -> Unit = {},
-    onImageClick: (path: String, caption: String?) -> Unit,
+    onImageClick: (path: String, caption: String?, ink: Boolean) -> Unit,
 ) {
     when (block) {
         is HeadingBlock -> HeadingView(block, style, highlight)
@@ -119,7 +122,7 @@ fun BlockView(
             else -> ParagraphView(block, style, highlight)
         }
         is ListItemBlock -> ListItemView(block, style, highlight)
-        is ImageBlock -> ImageView(block, style, onImageClick)
+        is ImageBlock -> if (block.kind == ImageKind.EQUATION) EquationView(block, style, onImageClick) else ImageView(block, style, onImageClick)
         is TableBlock -> TableView(block, style, onImageClick)
         is SeparatorBlock -> Text(
             "⁂", style = style.body.copy(textAlign = TextAlign.Center, color = style.colors.secondary),
@@ -276,7 +279,7 @@ private fun ListItemView(block: ListItemBlock, style: ReaderStyle, highlight: St
 }
 
 @Composable
-private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?) -> Unit) {
+private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
         val density = LocalDensity.current
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
@@ -297,7 +300,7 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                         .aspectRatio(aspect)
                         .clip(RoundedCornerShape(6.dp))
                         .background(style.colors.surface)
-                        .clickable { onClick(block.path, block.caption) },
+                        .clickable { onClick(block.path, block.caption, false) },
                     contentAlignment = Alignment.Center,
                 ) {
                     val img = image
@@ -331,6 +334,74 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                         color = style.colors.secondary, textAlign = TextAlign.Center,
                     ),
                     modifier = Modifier.padding(top = 8.dp, start = 8.dp + bleed, end = 8.dp + bleed),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A display equation, drawn from its ink mask in the text colour so it reads like the text
+ * around it: its symbols are shown at the size of the body text. A formula too wide for the
+ * screen keeps a readable size and scrolls sideways. The equation number sits at the right.
+ */
+@Composable
+private fun EquationView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean) -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = (style.fontSize.value * 0.5f).dp)) {
+        val density = LocalDensity.current
+        val number = block.caption
+        val numberWidth = if (number != null) (style.fontSize.value * 0.82f * (number.length * 0.6f) + 12f).dp else 0.dp
+        val available = maxWidth - numberWidth
+        val aspect = (if (block.height > 0) block.width.toFloat() / block.height else 4f).coerceIn(0.2f, 40f)
+        // Size in the book (pt) scaled so that the formula's text matches the reader's text size.
+        val natural = if (block.sourceWidth > 0f && block.textSize > 0f) {
+            (block.sourceWidth * style.fontSize.value / block.textSize).dp
+        } else {
+            (block.width / 3f).dp
+        }
+        val scroll = natural * 0.8f > available
+        val width = when {
+            !scroll -> minOf(natural, available)
+            else -> natural * 0.85f
+        }
+        val widthPx = with(density) { width.toPx().roundToInt() }
+        val image by rememberLocalImage(block.path, widthPx)
+        val ink = style.colors.text
+        val picture = @Composable {
+            Box(
+                Modifier.width(width).aspectRatio(aspect).clickable { onClick(block.path, number, true) },
+                contentAlignment = Alignment.Center,
+            ) {
+                val img = image
+                if (img != null) {
+                    Image(
+                        img, contentDescription = block.altText, contentScale = ContentScale.Fit,
+                        colorFilter = ColorFilter.tint(ink), modifier = Modifier.fillMaxWidth().aspectRatio(aspect),
+                    )
+                }
+            }
+        }
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (scroll) {
+                    Box(Modifier.weight(1f).horizontalScroll(rememberScrollState())) { picture() }
+                } else {
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { picture() }
+                }
+                if (number != null) {
+                    Text(
+                        number,
+                        style = style.body.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.End),
+                        modifier = Modifier.width(numberWidth),
+                        maxLines = 1,
+                    )
+                }
+            }
+            if (scroll) {
+                Text(
+                    stringResource(R.string.equation_scroll_hint),
+                    style = style.body.copy(fontSize = 12.sp, color = style.colors.secondary, textAlign = TextAlign.Center),
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                 )
             }
         }
@@ -379,7 +450,7 @@ private fun Modifier.bleed(extra: Dp): Modifier = if (extra <= 0.dp) this else l
 }
 
 @Composable
-private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (String, String?) -> Unit) {
+private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (String, String?, Boolean) -> Unit) {
     var printed by rememberSaveable(block.index) { mutableStateOf(false) }
     val colors = style.colors
     val cellSize = (style.fontSize.value * 0.82f).sp
@@ -395,14 +466,35 @@ private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (Stri
             ImageView(ImageBlock(block.index, block.pageIndex, path, block.imageWidth, block.imageHeight, null, ImageKind.DIAGRAM), style, onImageClick)
         } else {
             val columns = block.rows.maxOfOrNull { it.size } ?: 0
-            val widths = remember(block, style.fontSize) { columnWidths(block.rows, columns, style.fontSize.value) }
+            val natural = remember(block, style.fontSize) { columnWidths(block.rows, columns, style.fontSize.value) }
             val border = colors.secondary.copy(alpha = 0.35f)
+            val scrollState = rememberScrollState()
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val total = natural.fold(0.dp) { a, b -> a + b }
+            val wide = total > maxWidth
+            // Narrow tables use the whole width; wide ones keep readable columns and scroll.
+            val widths = if (wide || total <= 0.dp) natural else natural.map { it * (maxWidth / total) }
+            Column {
             Box(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
                     .border(1.dp, border, RoundedCornerShape(8.dp))
-                    .horizontalScroll(rememberScrollState()),
+                    .then(
+                        if (wide && scrollState.canScrollForward) {
+                            Modifier.drawWithContent {
+                                drawContent()
+                                val fade = 28.dp.toPx()
+                                drawRect(
+                                    Brush.horizontalGradient(listOf(Color.Transparent, colors.background), startX = size.width - fade, endX = size.width),
+                                    topLeft = Offset(size.width - fade, 0f),
+                                )
+                            }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .horizontalScroll(scrollState),
             ) {
                 Column {
                     block.rows.forEachIndexed { r, row ->
@@ -439,6 +531,15 @@ private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (Stri
                         }
                     }
                 }
+            }
+            if (wide) {
+                Text(
+                    stringResource(R.string.table_scroll_hint),
+                    style = style.body.copy(fontSize = 12.sp, color = style.colors.secondary, textAlign = TextAlign.Center),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            }
+            }
             }
         }
         if (path != null) {

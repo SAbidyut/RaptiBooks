@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- Bangla physics worked example with stacked fractions (test book for equation detection). -->
+<style>
+@font-face { font-family: Tiro; src: url(../../core/ui/src/main/res/font/tiro_bangla_regular.ttf); }
+@font-face { font-family: Hind; src: url(../../core/ui/src/main/res/font/hind_siliguri_bold.ttf); font-weight: bold; }
+@page { size: 595pt 842pt; margin: 50pt 55pt; }
+body { font-family: Tiro, "DejaVu Serif"; font-size: 12pt; line-height: 19pt; }
+h2 { font-family: Hind; font-size: 15pt; margin: 18pt 0 8pt; }
+p { margin: 0 0 8pt; text-align: justify; }
+.eq { text-align: center; margin: 10pt 0; font-family: "DejaVu Serif"; font-style: italic; font-size: 12.5pt; }
+.frac { display: inline-flex; flex-direction: column; vertical-align: middle; text-align: center; margin: 0 3pt; }
+.frac > span + span { border-top: 0.7pt solid #000; }
+.up { font-style: normal; }
+</style></head><body>
+<h2>উদাহরণ ৭.৬</h2>
+<p>তিনটি রোধ — 10 Ω, 20 Ω ও 30 Ω — (ক) সিরিজে ও (খ) প্যারালালে যুক্ত। প্রতিটি ক্ষেত্রে মোট রোধ কত?</p>
+<p><b>প্রদত্ত :</b> R<sub>1</sub> = 10 Ω, R<sub>2</sub> = 20 Ω, R<sub>3</sub> = 30 Ω</p>
+<p><b>নির্ণেয় :</b> সিরিজে R<sub>T</sub> = ? প্যারালালে R<sub>T</sub> = ?</p>
+<p><b>সমাধান :</b></p>
+<div class="eq"><span class="up">Series:</span> R<sub>T</sub> = 10 + 20 + 30 = 60 Ω</div>
+<div class="eq"><span class="up">Parallel:</span> <span class="frac"><span>1</span><span>R<sub>T</sub></span></span> = <span class="frac"><span>1</span><span>10</span></span> + <span class="frac"><span>1</span><span>20</span></span> + <span class="frac"><span>1</span><span>30</span></span> = <span class="frac"><span>11</span><span>60</span></span></div>
+<div class="eq">R<sub>T</sub> = <span class="frac"><span>60</span><span>11</span></span> = 5.45 Ω</div>
+<p><b>উত্তর :</b> সিরিজে মোট রোধ 60 Ω; প্যারালালে মাত্র 5.45 Ω।</p>
+<p>প্যারালাল সংযোগে মোট রোধ সবসময় সবচেয়ে ছোট রোধটির চেয়েও কম হয়। তাই বাড়ির সব লোড প্যারালালে যুক্ত থাকে, যাতে প্রতিটি যন্ত্র পূর্ণ ভোল্টেজ পায় এবং একটি যন্ত্র বন্ধ হলেও অন্যগুলো চলতে থাকে।</p>
+<h2>উদাহরণ ৭.৭</h2>
+<p>একটি 220 V সাপ্লাইয়ে 100 W এর একটি বাতি জ্বলছে। বাতির মধ্য দিয়ে কত কারেন্ট প্রবাহিত হয়?</p>
+<div class="eq">I = <span class="frac"><span>P</span><span>V</span></span> = <span class="frac"><span>100</span><span>220</span></span> = 0.45 A</div>
+<p><b>উত্তর :</b> বাতির মধ্য দিয়ে 0.45 A কারেন্ট প্রবাহিত হয়।</p>
+</body></html>

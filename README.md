@@ -23,14 +23,31 @@ screen. Bangla and English are both first-class, and everything runs offline.
   - lists (bullets, including vector-drawn ones; 1. / a) / ক) / ১। enumerators);
   - tables: ruled grids, rule-delimited tables and column-aligned text → real tables, plus a
     snapshot of the printed table;
-  - figures: raster images and **vector diagrams** (clustered paths) rendered from the page,
-    with captions ("Figure 3", "চিত্র ২");
+  - figures: raster images and **vector diagrams** (clustered paths) rendered from the page
+    at high resolution and cropped tight to the printed content, with captions ("Figure 3",
+    "চিত্র ২") — also captions printed in the margin beside the figure, small labelled
+    diagrams (a circuit element with its i, +, v, −) and side-by-side panels (a), (b);
+    running text is never swallowed into a figure;
+  - **display equations**: stacked fractions, integral/sum limits, boxed and numbered formulas
+    become one picture of the formula (an ink mask drawn in the theme's text colour, at the
+    size of the body text, scrolling sideways when wider than the screen) with the equation
+    number beside it; stacked formulas are never mistaken for tables;
+  - **math symbols without Unicode mapping** (the "=", "×", "+" of Mathematical-Pi-style fonts,
+    which otherwise vanish from the text) are identified from their printed shape; "Δ"
+    printed with a "¢" code is repaired;
+  - printed **contents pages** with or without dot leaders (also as tables) become tappable
+    contents entries, and the reader's Contents panel follows the book's own contents when
+    it can be tied to the pages;
+  - margin columns (side notes) are read after the main text next to them;
   - multi-column reading order;
   - **Bangla**: visual→logical glyph order repair (ি ে ৈ, reph), ActualText clusters,
     Bijoy/SutonnyMJ (ANSI) → Unicode conversion;
   - **OCR** for scanned pages and broken text layers: Tesseract 5 with bundled `ben` + `eng`
     models, fully offline; text-as-outlines pages are detected too;
-  - table of contents from the PDF outline, or from detected headings.
+  - table of contents from the PDF outline, else from the printed contents page, else from
+    detected headings;
+  - tables keep superscripts and subscripts (10¹⁸, 10⁻³); wide tables scroll sideways with a
+    hint, narrow ones fill the width.
 - **Reader**: Light / Sepia / Dark / Black themes; bundled Tiro Bangla (serif) and Hind
   Siliguri (sans) fonts that cover Bangla and Latin, plus system fonts; text size, line
   spacing, margins, justification; tap screen edges to turn pages; contents, bookmarks,
@@ -72,10 +89,16 @@ side only extracts raw page data and renders.
 
 ### Conversion pipeline
 
+Conversion favours quality over speed: it reads the book twice and renders every picture
+and formula at high resolution, so a long book takes a few minutes.
+
+0. **Pass 0 – survey**: the body text size of the book is learned from up to 60 pages spread
+   over the book, so every page is judged against the same reference.
 1. **Pass 1 – per page (constant memory)**: extract glyphs/images/paths → decide whether the
    page needs OCR (scan, unmapped glyphs, broken encoding, outlined text) → OCR if needed →
-   build lines, detect tables and figures → render figures/table snapshots → write the page
-   analysis to a cache file and update document statistics.
+   identify unmapped math symbols from their rendering → build lines, detect display
+   equations, tables and figures → render figures, formulas and table snapshots (cropped to
+   the ink) → write the page analysis to a cache file and update document statistics.
 2. **Profile**: body font size, heading size levels, repeated header/footer lines, whether the
    Bangla text layer is in visual order, language.
 3. **Pass 2**: per page, remove running headers/footers, order columns, classify headings /
@@ -107,7 +130,11 @@ python3 tools/offline-build/rbuild.py apk       # build/offline/RaptiBooks.apk
 python3 tools/offline-build/rbuild.py test      # JVM unit tests (structure, reflow)
 python3 tools/offline-build/rbuild.py robotest  # Robolectric tests (DB, pipeline, UI)
 python3 tools/pdf-harness/harness.py some.pdf   # print the reflowed book of a PDF (desktop)
+HARNESS_IMAGES=/tmp/crops python3 tools/pdf-harness/harness.py some.pdf  # also save figure/formula crops
 ```
+
+The test books in `app/src/test/resources/pdf` are printed from HTML; `tools/test-pdfs` holds
+the sources of the math ones (`make_pdfs.py` regenerates them with Chromium).
 
 ### Signing
 
@@ -128,7 +155,9 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
 - Layout analysis is heuristic: unusual layouts (magazines, complex forms, math-heavy pages,
   tables with merged or borderless multi-line cells) may not reflow perfectly. The original
   page view and "Show as printed" for tables are there for those cases.
-- Equations are not reconstructed (they stay as text or as part of a figure).
+- Equations are shown as pictures of the printed formula (not as editable MathML); inline
+  math inside a sentence stays text. Unmapped symbols that are not among the recognised
+  shapes (= + − × ÷ ± · → ← < > ≤ ≥ ≡ Δ) are left out of the text.
 - OCR quality depends on scan quality; OCR is slow on low-end phones (seconds per page).
   The fast `tessdata` models are bundled to keep the app small.
 - Bijoy (SutonnyMJ) conversion covers the common character set; rare conjuncts may be missing

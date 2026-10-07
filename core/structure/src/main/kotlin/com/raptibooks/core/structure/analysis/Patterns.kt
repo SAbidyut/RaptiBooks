@@ -56,6 +56,22 @@ object Patterns {
      */
     val tocEntry = Regex("^\\s*(.*?\\S)\\s*(?:[.·…‥_]\\s?){4,}\\s*($NUM{1,4}|[ivxlcdm]{1,6})\\s*$", RegexOption.IGNORE_CASE)
 
+    /** Title of a printed table of contents ("Contents", "সূচিপত্র", "Index" as Bangla books call it). */
+    val contentsTitle = Regex(
+        "^\\s*(?:contents|table of contents|content|index|সূচিপত্র|সূচীপত্র|সূচি|সূচী|বিষয়সূচি|বিষয়সূচী|বিষয়সূচি|পাঠসূচি)\\s*[:ঃ]?\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** Labels of worked examples and exercises ("Example 1.4", "Practice Problem 2.1", "উদাহরণ ৭.৬"). */
+    val exampleLabel = Regex(
+        "^\\s*(?:example|practice problem|problem|exercise|solution|answer|উদাহরণ|অনুশীলনী|সমাধান|সমস্যা|প্রশ্ন)" +
+            "\\s*(?:$NUM+(?:[.\\-]$NUM+)*)?\\s*[:ঃ]?\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** A page number printed in a table of contents. */
+    val contentsPage = Regex("^\\s*($NUM{1,4}|[ivxlc]{1,6})\\s*$", RegexOption.IGNORE_CASE)
+
     /** An enumerator inside a line, e.g. the "(খ)" of "(ক) তিন   (খ) চার" (multiple-choice options). */
     val inlineEnumerator = Regex("(?<=\\s)(\\(?(?:[ক-হ]|[a-hA-H]|$NUM{1,2})\\))\\s+")
 

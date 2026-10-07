@@ -26,6 +26,8 @@ import com.raptibooks.core.structure.layout.FigureKind
 import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.raw.RawPage
+import com.raptibooks.core.structure.text.GrayImage
+import com.raptibooks.core.structure.text.SymbolRecognizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -103,6 +105,13 @@ class ConversionPipeline(
                 val stats = DocumentStats()
                 var usedOcr = false
 
+                // ------------------------------------------------------------- pass 0
+                // Learn the book's body text size first, so every page is judged against the
+                // same reference (labels, formulas and captions are measured against it).
+                val bodySize = documentBodySize(extractor, pageCount, cacheDir) { done, total ->
+                    onProgress(Progress(0.02f + 0.06f * done / total, context.getString(com.raptibooks.core.data.R.string.progress_scan)))
+                }
+
                 // ------------------------------------------------------------- pass 1
                 for (i in 0 until pageCount) {
                     currentCoroutineContext().ensureActive()
@@ -115,9 +124,9 @@ class ConversionPipeline(
                             continue
                         }
                     }
-                    onProgress(Progress(0.02f + 0.83f * i / pageCount, msg(com.raptibooks.core.data.R.string.progress_page, i + 1, pageCount)))
-                    val layout = analysePage(i, pageCount, extractor, renderer, book.ocrMode, lowMemory, figuresDir, ::ocrEngine) { message ->
-                        onProgress(Progress(0.02f + 0.83f * i / pageCount, message))
+                    onProgress(Progress(0.08f + 0.77f * i / pageCount, msg(com.raptibooks.core.data.R.string.progress_page, i + 1, pageCount)))
+                    val layout = analysePage(i, pageCount, extractor, renderer, book.ocrMode, lowMemory, figuresDir, bodySize, ::ocrEngine) { message ->
+                        onProgress(Progress(0.08f + 0.77f * i / pageCount, message))
                     }
                     usedOcr = usedOcr || layout.fromOcr
                     PageLayout.write(layout, cacheFile)
@@ -147,7 +156,7 @@ class ConversionPipeline(
                 content.insertBlocks(bookId, batch)
                 if (engine.blockCount == 0) throw ConversionException(context.getString(com.raptibooks.core.data.R.string.error_no_content))
                 val outline = extractor.outline().map { OutlineItem(it.title, it.pageIndex, it.level) }
-                content.saveToc(bookId, TocBuilder.build(outline, headings, engine.pageStarts(), engine.blockCount))
+                content.saveToc(bookId, TocBuilder.build(outline, headings, engine.pageStarts(), engine.blockCount, engine.printedContents()))
                 content.notifyContentChanged()
                 books.finishConversion(bookId, engine.blockCount, profile.language, usedOcr, LAYOUT_VERSION)
                 // Converted again: continue reading on the same page, bookmarks follow their pages.
@@ -172,6 +181,7 @@ class ConversionPipeline(
         mode: OcrMode,
         lowMemory: Boolean,
         figuresDir: File,
+        bodySize: Float?,
         ocrEngine: () -> OcrEngine?,
         report: suspend (String) -> Unit,
     ): PageLayout {
@@ -215,8 +225,18 @@ class ConversionPipeline(
             }
         }
 
+        if (!raw.fromOcr && renderer != null && renderer.rendersRegionsDirectly) {
+            // Symbols whose font has no Unicode mapping (the "=" and "×" of math fonts) are
+            // identified from their printed shape.
+            raw = try {
+                SymbolRecognizer.recognize(raw) { region, scale -> renderGray(renderer, index, region, scale) }
+            } catch (e: OutOfMemoryError) {
+                System.gc()
+                raw
+            }
+        }
         var layout = try {
-            PageAnalyzer().analyze(raw)
+            PageAnalyzer(bodySize).analyze(raw)
         } catch (e: Exception) {
             PageLayout(index, w, h, emptyList(), emptyList(), emptyList(), raw.fromOcr, 0)
         }
@@ -236,12 +256,37 @@ class ConversionPipeline(
 
     private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File, lowMemory: Boolean) {
         layout.figures.forEachIndexed { k, f ->
-            val photo = f.kind != FigureKind.VECTOR
-            val file = File(dir, "p$index-f$k." + if (photo) "jpg" else "png")
-            // Diagrams are rendered sharp enough to be shown larger than the screen and zoomed.
-            val maxScale = if (f.kind == FigureKind.SCAN) 2.2f else 4f
-            val maxWidth = if (f.kind == FigureKind.SCAN || lowMemory) 1400 else 2400
-            val bmp = image(index, f.bounds, renderer, pageBitmap, layout.width, maxScale, maxWidth) ?: return@forEachIndexed
+            val equation = f.kind == FigureKind.EQUATION
+            val photo = f.kind != FigureKind.VECTOR && !equation
+            val file = File(dir, "p$index-${if (equation) "e" else "f"}$k." + if (photo) "jpg" else "png")
+            // Rendered sharp enough to be shown larger than the screen and zoomed: diagrams at
+            // up to 5 px/pt, formulas at up to 7 px/pt (their strokes are thin).
+            val maxScale = when {
+                f.kind == FigureKind.SCAN -> 2.2f
+                equation -> if (lowMemory) 4f else 7f
+                else -> if (lowMemory) 3f else 5f
+            }
+            val maxWidth = when {
+                f.kind == FigureKind.SCAN -> 1400
+                lowMemory -> 1600
+                else -> 3200
+            }
+            var bmp = image(index, f.bounds, renderer, pageBitmap, layout.width, maxScale, maxWidth) ?: return@forEachIndexed
+            if (f.kind != FigureKind.SCAN) {
+                // Tight crop: drop the empty margin around the printed content.
+                val scale = bmp.width / f.bounds.width
+                val ink = inkBounds(bmp, if (equation) 1f else 3f * scale)
+                if (ink != null) {
+                    if (ink.left > 0 || ink.top > 0 || ink.right < bmp.width || ink.bottom < bmp.height) {
+                        val cropped = Bitmap.createBitmap(bmp, ink.left, ink.top, ink.width(), ink.height())
+                        if (cropped !== bmp) bmp.recycle()
+                        bmp = cropped
+                    }
+                    val b = f.bounds
+                    f.bounds = Rect(b.left + ink.left / scale, b.top + ink.top / scale, b.left + ink.right / scale, b.top + ink.bottom / scale)
+                }
+            }
+            if (equation) bmp = inkMask(bmp)
             if (save(bmp, file, photo)) {
                 f.imagePath = file.absolutePath
                 f.imageWidth = bmp.width
@@ -251,7 +296,7 @@ class ConversionPipeline(
         }
         layout.tables.forEachIndexed { k, t ->
             val file = File(dir, "p$index-t$k.png")
-            val bmp = image(index, t.bounds.outset(4f).clamp(layout.width, layout.height), renderer, pageBitmap, layout.width, 2.5f)
+            val bmp = image(index, t.bounds.outset(4f).clamp(layout.width, layout.height), renderer, pageBitmap, layout.width, if (lowMemory) 2.5f else 3.5f)
                 ?: return@forEachIndexed
             if (save(bmp, file, photo = false)) {
                 t.imagePath = file.absolutePath
@@ -260,6 +305,124 @@ class ConversionPipeline(
             }
             bmp.recycle()
         }
+    }
+
+    /** Bounding box (pixels) of everything that is not background, with [pad] pixels around it. */
+    private fun inkBounds(bmp: Bitmap, pad: Float): android.graphics.Rect? {
+        val w = bmp.width
+        val h = bmp.height
+        val row = IntArray(w)
+        var top = -1
+        var bottom = -1
+        var left = w
+        var right = -1
+        for (y in 0 until h) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            var first = -1
+            var last = -1
+            for (x in 0 until w) {
+                val p = row[x]
+                val lum = ((p shr 16 and 0xFF) * 299 + (p shr 8 and 0xFF) * 587 + (p and 0xFF) * 114) / 1000
+                if ((p ushr 24) > 16 && lum < 244) {
+                    if (first < 0) first = x
+                    last = x
+                }
+            }
+            if (first >= 0) {
+                if (top < 0) top = y
+                bottom = y
+                left = minOf(left, first)
+                right = maxOf(right, last)
+            }
+        }
+        if (top < 0) return null
+        val d = pad.roundToInt()
+        return android.graphics.Rect(
+            (left - d).coerceAtLeast(0), (top - d).coerceAtLeast(0),
+            (right + 1 + d).coerceAtMost(w), (bottom + 1 + d).coerceAtMost(h),
+        )
+    }
+
+    /**
+     * A formula as ink: black with the darkness of each pixel as its opacity, so the reader can
+     * draw it in the text colour of any theme (light paper, sepia, night).
+     */
+    private fun inkMask(bmp: Bitmap): Bitmap {
+        val w = bmp.width
+        val h = bmp.height
+        val out = try {
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            return bmp
+        }
+        val row = IntArray(w)
+        for (y in 0 until h) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val p = row[x]
+                val lum = ((p shr 16 and 0xFF) * 299 + (p shr 8 and 0xFF) * 587 + (p and 0xFF) * 114) / 1000
+                // Paper and light tints (shaded boxes) vanish, strokes keep their antialiasing.
+                val alpha = ((236 - lum) * 255 / 196).coerceIn(0, 255)
+                row[x] = alpha shl 24
+            }
+            out.setPixels(row, 0, w, 0, y, w, 1)
+        }
+        bmp.recycle()
+        return out
+    }
+
+    private fun renderGray(renderer: PageRenderer, index: Int, region: Rect, scale: Float): GrayImage? {
+        val bmp = try {
+            renderer.renderRegion(index, region, scale)
+        } catch (e: Exception) {
+            return null
+        } catch (e: LinkageError) {
+            return null
+        }
+        return try {
+            val px = IntArray(bmp.width * bmp.height)
+            bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+            SymbolRecognizer.gray(px, bmp.width, bmp.height)
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    /**
+     * Body text size of the whole book: the size that carries the most characters, from up to
+     * [SAMPLE_PAGES] pages spread over the book. Cached so a resumed conversion skips it.
+     */
+    private suspend fun documentBodySize(
+        extractor: PdfExtractor,
+        pageCount: Int,
+        cacheDir: File,
+        report: suspend (Int, Int) -> Unit,
+    ): Float? {
+        val cache = File(cacheDir, "body-size.txt")
+        cache.takeIf { it.exists() }?.readText()?.toFloatOrNull()?.let { return it.takeIf { v -> v > 0f } }
+        val pages = if (pageCount <= SAMPLE_PAGES) (0 until pageCount).toList()
+        else List(SAMPLE_PAGES) { it * (pageCount - 1) / (SAMPLE_PAGES - 1) }.distinct()
+        val chars = HashMap<Int, Long>()
+        for ((n, i) in pages.withIndex()) {
+            currentCoroutineContext().ensureActive()
+            if (n % 5 == 0) report(n, pages.size)
+            val page = try {
+                extractor.extractPage(i).page
+            } catch (e: Exception) {
+                continue
+            } catch (e: OutOfMemoryError) {
+                System.gc()
+                continue
+            }
+            for (f in page.fragments) {
+                if (f.isSpace) continue
+                val key = (f.fontSize * 2f).roundToInt()
+                chars[key] = (chars[key] ?: 0L) + f.text.length
+            }
+        }
+        val body = chars.maxByOrNull { it.value }?.key?.let { it / 2f }
+        runCatching { cache.writeText((body ?: 0f).toString()) }
+        return body
     }
 
     private fun image(
@@ -325,7 +488,10 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 2
+        const val LAYOUT_VERSION = 3
+
+        /** Pages read to learn the book's body text size before the real analysis. */
+        private const val SAMPLE_PAGES = 60
 
         /** One conversion at a time keeps memory use predictable on low-end phones. */
         private val lock = Mutex()

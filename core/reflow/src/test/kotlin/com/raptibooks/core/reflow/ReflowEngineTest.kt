@@ -131,4 +131,37 @@ class ReflowEngineTest {
         assertEquals(listOf(3, 10, 20), toc.map { it.blockIndex })
         assertEquals(2, toc[2].level)
     }
+
+    @Test
+    fun printedContentsBecomesTheTableOfContents() {
+        // Contents on page 1 (blocks 1-6); the book's page "1" is PDF page 3.
+        val printed = listOf(
+            PrintedEntry("Chapter 1 Basics", "1", true, 1),
+            PrintedEntry("1.1 Units", "2", false, 2),
+            PrintedEntry("1.2 Charge", "4", false, 3),
+            PrintedEntry("Chapter 2 Laws", "9", true, 4),
+            PrintedEntry("2.1 Ohm's law", "10", false, 5),
+        )
+        // Only some of them were detected as headings.
+        val headings = listOf(
+            com.raptibooks.core.model.TocEntry("Contents", 1, 0, 1),
+            com.raptibooks.core.model.TocEntry("Chapter 1 Basics", 1, 10, 3),
+            com.raptibooks.core.model.TocEntry("Chapter 2 Laws", 1, 60, 11),
+        )
+        val starts = (1..13).associateWith { (it - 1) * 6 }
+        val toc = TocBuilder.build(emptyList(), headings, starts, 80, printed)
+        assertEquals(listOf("Chapter 1 Basics", "1.1 Units", "1.2 Charge", "Chapter 2 Laws", "2.1 Ohm's law"), toc.map { it.title })
+        assertEquals(listOf(1, 2, 2, 1, 2), toc.map { it.level })
+        assertEquals(listOf(3, 4, 6, 11, 12), toc.map { it.pageIndex })
+        assertEquals(10, toc[0].blockIndex)
+        assertEquals(starts[4], toc[1].blockIndex)
+    }
+
+    @Test
+    fun unrelatedPrintedContentsIsIgnored() {
+        val printed = (1..5).map { PrintedEntry("Topic $it", "${it * 100}", false, it) }
+        val headings = listOf(com.raptibooks.core.model.TocEntry("Real chapter", 1, 10, 2))
+        val toc = TocBuilder.build(emptyList(), headings, mapOf(0 to 0, 2 to 9), 30, printed)
+        assertEquals(listOf("Real chapter"), toc.map { it.title })
+    }
 }

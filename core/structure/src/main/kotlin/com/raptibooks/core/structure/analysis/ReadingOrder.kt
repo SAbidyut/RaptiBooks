@@ -32,9 +32,11 @@ object ReadingOrder {
         val band = mutableListOf<T>()
         fun columnIndex(r: Rect): Int = gutters.count { g -> r.centerX > g.second }
         fun crosses(r: Rect) = gutters.any { g -> r.left < g.first - 1f && r.right > g.second + 1f }
+        // Side notes in a margin column are read after the main text next to them.
+        val asides = asideColumns(items.map(boundsOf), gutters, area, em)
         fun flush() {
             if (band.isEmpty()) return
-            val byCol = band.groupBy { columnIndex(boundsOf(it)) }.toSortedMap()
+            val byCol = band.groupBy { columnIndex(boundsOf(it)) }.toSortedMap(compareBy({ it in asides }, { it }))
             for ((col, members) in byCol) {
                 val colLeft = if (col == 0) area.left else gutters[col - 1].second
                 val colRight = if (col >= gutters.size) area.right else gutters[col].first
@@ -58,6 +60,30 @@ object ReadingOrder {
 
     private fun medianWidth(rects: List<Rect>): Float = rects.map { it.width }.sorted()[rects.size / 2]
 
+    /**
+     * A narrow margin column ([side], [sideWidth] wide) of notes next to a well filled main
+     * column: textbooks put side notes and figure captions there.
+     */
+    private fun isMargin(side: List<Rect>, main: List<Rect>, sideWidth: Float, area: Rect, em: Float): Boolean =
+        sideWidth <= area.width * 0.36f && side.size >= 2 && side.sumOf { it.height.toDouble() } >= em * 2.5 &&
+            main.size >= 6 && main.sumOf { it.height.toDouble() } >= area.height * 0.3 &&
+            medianWidth(side) >= max(40f, sideWidth * 0.5f) &&
+            // the main column holds the page's text: its lines are much wider than the notes
+            medianWidth(main) >= medianWidth(side) * 1.5f
+
+    /** Indices of columns that are margin columns (read after the main column of a band). */
+    private fun asideColumns(rects: List<Rect>, gutters: List<Pair<Float, Float>>, area: Rect, em: Float): Set<Int> {
+        if (gutters.size != 1) return emptySet()
+        val (gl, gr) = gutters[0]
+        val left = rects.filter { it.right <= gl + 0.5f }
+        val right = rects.filter { it.left >= gr - 0.5f }
+        return when {
+            isMargin(left, right, gl - area.left, area, em) -> setOf(0)
+            isMargin(right, left, area.right - gr, area, em) -> setOf(1)
+            else -> emptySet()
+        }
+    }
+
     private fun <T> sortTopDown(items: List<T>, boundsOf: (T) -> Rect): List<T> =
         items.sortedWith { a, b ->
             val ra = boundsOf(a)
@@ -70,7 +96,7 @@ object ReadingOrder {
     private fun <T> findGutters(items: List<T>, boundsOf: (T) -> Rect, area: Rect, em: Float): List<Pair<Float, Float>> {
         if (items.size < 6 || area.width < 100f) return emptyList()
         val narrow = items.map(boundsOf).filter { it.width < area.width * 0.62f }
-        if (narrow.size < 6) return emptyList()
+        if (narrow.size < 2) return emptyList()
         val step = 1f
         val bins = (area.width / step).toInt() + 2
         val cover = FloatArray(bins)
@@ -101,8 +127,14 @@ object ReadingOrder {
                 k++
             }
         }
-        // Require real columns on both sides of each gutter.
+        // Require real columns on both sides of each gutter (or a margin column of side notes).
+        val all = items.map(boundsOf)
         return gutters.filter { (gl, gr) ->
+            val leftAll = all.filter { it.right <= gl + 0.5f }
+            val rightAll = all.filter { it.left >= gr - 0.5f }
+            if (isMargin(leftAll, rightAll, gl - area.left, area, em) || isMargin(rightAll, leftAll, area.right - gr, area, em)) {
+                return@filter true
+            }
             val left = narrow.filter { it.right <= gl + 0.5f }
             val right = narrow.filter { it.left >= gr - 0.5f }
             val lh = left.sumOf { it.height.toDouble() }
@@ -114,4 +146,5 @@ object ReadingOrder {
                 medianWidth(left) >= (gl - area.left) * 0.5f && medianWidth(right) >= (area.right - gr) * 0.5f
         }
     }
+
 }

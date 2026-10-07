@@ -55,7 +55,15 @@ data class ListItemBlock(
     override val plainText: String get() = "$marker $text"
 }
 
-enum class ImageKind { FIGURE, DIAGRAM, PHOTO, PAGE }
+enum class ImageKind {
+    FIGURE, DIAGRAM, PHOTO, PAGE,
+
+    /**
+     * A display equation, stored as an ink mask (black with alpha) so the reader can draw it in
+     * the text colour of any theme; [ImageBlock.caption] is the equation number.
+     */
+    EQUATION,
+}
 
 data class ImageBlock(
     override val index: Int,
@@ -70,8 +78,11 @@ data class ImageBlock(
     val sourceWidth: Float = 0f,
     /** Typical size (pt) of the text inside the figure (0 if none/unknown); used to keep labels readable. */
     val textSize: Float = 0f,
+    /** Text content of the picture (an equation), for search. */
+    val altText: String? = null,
 ) : ContentBlock {
-    override val plainText: String get() = caption ?: ""
+    override val plainText: String
+        get() = listOfNotNull(altText, caption).joinToString(" ")
 }
 
 data class TableBlock(

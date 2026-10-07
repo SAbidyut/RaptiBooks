@@ -6,6 +6,7 @@ import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.PathShape
 import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.raw.TextFragment
+import com.raptibooks.core.structure.text.TextCleaner
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -118,12 +119,13 @@ class TableDetector(private val lineBuilder: LineBuilder) {
             val pieces = mutableListOf<Piece>()
             for (l in group.sortedBy { it.bounds.left }) {
                 if (l.chunks.size > 1) {
+                    val text = LineBuilder.scriptText(l)
                     for (c in l.chunks) {
-                        val t = l.text.substring(c.textStart.coerceIn(0, l.text.length), c.textEnd.coerceIn(0, l.text.length)).trim()
+                        val t = text.substring(c.textStart.coerceIn(0, text.length), c.textEnd.coerceIn(0, text.length)).trim()
                         if (t.isNotEmpty()) pieces += Piece(c.left, c.right, t, l.isBold)
                     }
                 } else {
-                    pieces += Piece(l.bounds.left, l.bounds.right, l.text, l.isBold)
+                    pieces += Piece(l.bounds.left, l.bounds.right, LineBuilder.scriptText(l), l.isBold)
                 }
             }
             rows += Row(group, pieces)
@@ -180,7 +182,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                         val cells = MutableList(columns.size) { "" }
                         for (p in r.pieces) {
                             val col = columns.indexOfLast { it <= p.left + 6f }.coerceAtLeast(0)
-                            cells[col] = (cells[col] + " " + p.text).trim()
+                            cells[col] = (cells[col] + " " + TextCleaner.finish(p.text)).trim()
                         }
                         cells
                     }
@@ -403,7 +405,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
             val r = ys.indexOfLast { it <= cy }.coerceIn(0, nRows - 1)
             buckets[r][c] += f
         }
-        var grid = buckets.map { row -> row.map { lineBuilder.assembleText(it) } }
+        var grid = buckets.map { row -> row.map { TextCleaner.finish(lineBuilder.assembleText(it, unicodeScripts = true)).trim() } }
         val boldFirstRow = buckets.firstOrNull()?.flatMap { it }?.filter { !it.isSpace }?.let { cells ->
             cells.isNotEmpty() && cells.count { it.bold } * 10 >= cells.size * 6
         } ?: false
