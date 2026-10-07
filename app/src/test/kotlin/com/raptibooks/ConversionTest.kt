@@ -173,4 +173,16 @@ class ConversionTest {
         assertTrue(paragraphs.none { it == "printer." })
         assertTrue(content.blocks(id, 0, 100).filterIsInstance<HeadingBlock>().any { it.text == "Method" })
     }
+
+    @Test
+    fun keepsWorkedExampleBoxesAsText() {
+        val (id, content) = convert("callout_book.pdf")
+        val blocks = content.blocks(id, 0, 10_000)
+        val text = blocks.joinToString("\n") { it.plainText }
+        // A shaded callout box is running text with equations, not a table.
+        assertTrue("no table expected: ${blocks.filterIsInstance<TableBlock>().map { it.plainText }}", blocks.none { it is TableBlock })
+        assertTrue(text, text.contains("সমাধান"))
+        assertTrue(text, text.contains("সনাক্তকরণের সীমা"))
+        assertTrue(text, text.contains("উত্তর"))
+    }
 }
