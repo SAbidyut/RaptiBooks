@@ -67,6 +67,7 @@ import com.raptibooks.core.model.Highlight
 import com.raptibooks.core.model.InkStroke
 import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.MarkKey
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.ui.ReaderColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -75,9 +76,12 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** What the marking pen is doing: nothing (the page scrolls), drawing in a colour, or erasing. */
+/**
+ * What the marking pen is doing: nothing (the page scrolls), drawing in a colour, erasing, or
+ * waiting for a tap where a note should be left.
+ */
 internal enum class MarkTool(val color: MarkColor?) {
-    NONE(null), RED(MarkColor.RED), BLUE(MarkColor.BLUE), YELLOW(MarkColor.YELLOW), GREEN(MarkColor.GREEN), ERASER(null),
+    NONE(null), RED(MarkColor.RED), BLUE(MarkColor.BLUE), YELLOW(MarkColor.YELLOW), GREEN(MarkColor.GREEN), ERASER(null), NOTE(null),
 }
 
 /** The laid-out text of a block that is on screen, so a stroke can be turned into characters. */
@@ -355,6 +359,7 @@ internal fun MarkPalette(
     onSelect: (MarkTool) -> Unit,
     modifier: Modifier = Modifier,
     onClose: (() -> Unit)? = null,
+    withNote: Boolean = true,
 ) {
     val shape = RoundedCornerShape(30.dp)
     val glass = if (colors.isDark) Color(0xFF3A3A40) else Color.White
@@ -381,13 +386,14 @@ internal fun MarkPalette(
     ) {
         Box(Modifier.size(width = 26.dp, height = 4.dp).background(colors.secondary.copy(alpha = 0.45f), RoundedCornerShape(2.dp)))
         for (t in MarkTool.entries) {
-            if (t == MarkTool.NONE) continue
+            if (t == MarkTool.NONE || (t == MarkTool.NOTE && !withNote)) continue
             val name = stringResource(
                 when (t) {
                     MarkTool.RED -> R.string.mark_red
                     MarkTool.BLUE -> R.string.mark_blue
                     MarkTool.YELLOW -> R.string.mark_yellow
                     MarkTool.GREEN -> R.string.mark_green
+                    MarkTool.NOTE -> R.string.mark_note
                     else -> R.string.mark_eraser
                 },
             )
@@ -406,7 +412,7 @@ internal fun MarkPalette(
                     Box(Modifier.fillMaxSize().then(ring).background(Color(t.color.argb), CircleShape))
                 } else {
                     Box(Modifier.fillMaxSize().then(ring).background(colors.secondary.copy(alpha = 0.25f), CircleShape), contentAlignment = Alignment.Center) {
-                        EraserGlyph(colors.text)
+                        if (t == MarkTool.NOTE) NoteGlyph(NoteKind.TEXT, colors.text, 20.dp) else EraserGlyph(colors.text)
                     }
                 }
             }

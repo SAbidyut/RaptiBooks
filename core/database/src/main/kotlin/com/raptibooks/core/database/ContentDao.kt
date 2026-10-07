@@ -8,6 +8,8 @@ import com.raptibooks.core.model.InkCodec
 import com.raptibooks.core.model.InkStroke
 import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.MarkSpan
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.Marking
 import com.raptibooks.core.model.MarkKey
 import com.raptibooks.core.model.ContentBlock
@@ -293,6 +295,68 @@ class ContentDao(private val db: RaptiDatabase) {
         if (ids.isEmpty()) return
         db.transaction { for (id in ids) delete("ink", "id = ?", arrayOf(id.toString())) }
         db.notifyChanged(RaptiDatabase.INK)
+    }
+
+    // ------------------------------------------------------------------ notes
+
+    fun observeNotes(bookId: Long): Flow<List<Note>> = db.observe(RaptiDatabase.NOTES) {
+        db.readableDatabase.rawQuery(
+            "SELECT id, book_id, block_idx, page, x, y, kind, text, audio_path, duration, created_at FROM notes WHERE book_id = ? ORDER BY block_idx, y, id",
+            arrayOf(bookId.toString()),
+        ).use { c ->
+            val out = ArrayList<Note>(c.count)
+            while (c.moveToNext()) {
+                out += Note(
+                    c.getLong(0), c.getLong(1), c.getInt(2), c.getInt(3), c.getFloat(4), c.getFloat(5),
+                    NoteKind.fromId(c.getInt(6)), c.getString(7) ?: "", if (c.isNull(8)) null else c.getString(8),
+                    c.getLong(9), c.getLong(10),
+                )
+            }
+            out
+        }
+    }
+
+    fun addNote(
+        bookId: Long, blockIndex: Int, page: Int, x: Float, y: Float,
+        kind: NoteKind, text: String, audioPath: String?, durationMs: Long,
+    ): Long {
+        val id = db.writableDatabase.insert(
+            "notes", null,
+            ContentValues().apply {
+                put("book_id", bookId)
+                put("block_idx", blockIndex)
+                put("page", page)
+                put("x", x)
+                put("y", y)
+                put("kind", kind.id)
+                put("text", text)
+                put("audio_path", audioPath)
+                put("duration", durationMs)
+                put("created_at", System.currentTimeMillis())
+            },
+        )
+        db.notifyChanged(RaptiDatabase.NOTES)
+        return id
+    }
+
+    fun updateNoteText(id: Long, text: String) {
+        db.writableDatabase.update("notes", ContentValues().apply { put("text", text) }, "id = ?", arrayOf(id.toString()))
+        db.notifyChanged(RaptiDatabase.NOTES)
+    }
+
+    fun deleteNote(id: Long) {
+        db.writableDatabase.delete("notes", "id = ?", arrayOf(id.toString()))
+        db.notifyChanged(RaptiDatabase.NOTES)
+    }
+
+    /** After a re-conversion, puts every note at the top of the first block of its page. */
+    fun remapNotes(bookId: Long) {
+        db.writableDatabase.execSQL(
+            "UPDATE notes SET y = 0.05, block_idx = COALESCE((SELECT MIN(idx) FROM blocks b WHERE b.book_id = notes.book_id " +
+                "AND b.page >= notes.page), 0) WHERE book_id = ?",
+            arrayOf<Any>(bookId),
+        )
+        db.notifyChanged(RaptiDatabase.NOTES)
     }
 }
 

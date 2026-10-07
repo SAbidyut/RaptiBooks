@@ -12,6 +12,8 @@ import com.raptibooks.core.model.Bookmark
 import com.raptibooks.core.model.Highlight
 import com.raptibooks.core.model.InkStroke
 import com.raptibooks.core.model.MarkKey
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.model.ReadingPosition
@@ -74,6 +76,25 @@ class ReaderViewModel(
 
     fun eraseInk(ids: List<Long>) {
         viewModelScope.launch { repo.eraseInk(ids) }
+    }
+
+    /** The user's pinned notes, by block. */
+    val notes: StateFlow<Map<Int, List<Note>>> =
+        repo.notes(bookId).map { all -> all.groupBy { it.blockIndex } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun newVoiceFile() = repo.newVoiceFile(bookId)
+
+    fun addNote(block: Int, page: Int, x: Float, y: Float, kind: NoteKind, text: String, audioPath: String?, durationMs: Long) {
+        viewModelScope.launch { repo.addNote(bookId, block, page, x, y, kind, text, audioPath, durationMs) }
+    }
+
+    fun updateNoteText(noteId: Long, text: String) {
+        viewModelScope.launch { repo.updateNoteText(noteId, text) }
+    }
+
+    fun deleteNote(note: Note) {
+        viewModelScope.launch { repo.deleteNote(note) }
     }
 
     /** Search term highlighted in the text after jumping to a search result. */

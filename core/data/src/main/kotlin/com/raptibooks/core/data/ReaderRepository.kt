@@ -9,6 +9,8 @@ import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.Highlight
 import com.raptibooks.core.model.InkStroke
 import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SearchHit
 import com.raptibooks.core.model.TocEntry
@@ -17,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import java.io.File
 
 /** Read access to a converted book. Everything comes from the local database. */
 class ReaderRepository(
@@ -54,6 +57,23 @@ class ReaderRepository(
         withContext(Dispatchers.IO) { content.addInk(id, blockIndex, color, points) }
 
     suspend fun eraseInk(ids: List<Long>) = withContext(Dispatchers.IO) { content.deleteInk(ids) }
+
+    fun notes(id: Long): Flow<List<Note>> = content.observeNotes(id)
+
+    /** Where the next voice note of the book is recorded to. */
+    fun newVoiceFile(id: Long): File = File(files.notes(id), "voice-${System.currentTimeMillis()}.m4a")
+
+    suspend fun addNote(
+        id: Long, blockIndex: Int, page: Int, x: Float, y: Float,
+        kind: NoteKind, text: String, audioPath: String?, durationMs: Long,
+    ) = withContext(Dispatchers.IO) { content.addNote(id, blockIndex, page, x, y, kind, text, audioPath, durationMs) }
+
+    suspend fun updateNoteText(noteId: Long, text: String) = withContext(Dispatchers.IO) { content.updateNoteText(noteId, text) }
+
+    suspend fun deleteNote(note: Note) = withContext(Dispatchers.IO) {
+        content.deleteNote(note.id)
+        note.audioPath?.let { File(it).delete() }
+    }
 
     suspend fun savePosition(id: Long, position: ReadingPosition, progress: Float) =
         withContext(Dispatchers.IO) { books.updatePosition(id, position, progress) }

@@ -103,6 +103,7 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
         db.execSQL("CREATE INDEX bookmarks_book ON bookmarks(book_id, block_idx)")
         createHighlights(db)
         createInk(db)
+        createNotes(db)
     }
 
     /** Underlined passages: a colour on a character range of one block's text. */
@@ -139,6 +140,28 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
         db.execSQL("CREATE INDEX IF NOT EXISTS ink_book ON ink(book_id, block_idx)")
     }
 
+    /** Written and voice notes pinned to a place in the book. */
+    private fun createNotes(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                block_idx INTEGER NOT NULL,
+                page INTEGER NOT NULL,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                kind INTEGER NOT NULL,
+                text TEXT NOT NULL DEFAULT '',
+                audio_path TEXT,
+                duration INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS notes_book ON notes(book_id, block_idx)")
+    }
+
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             // Which converter produced a book (to improve old books after an update), and the
@@ -152,6 +175,7 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
             db.execSQL("ALTER TABLE highlights ADD COLUMN part INTEGER NOT NULL DEFAULT 0")
         }
         if (oldVersion < 4) createInk(db)
+        if (oldVersion < 5) createNotes(db)
     }
 
     internal fun notifyChanged(vararg tables: String) {
@@ -183,7 +207,7 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
 
     companion object {
         private const val NAME = "raptibooks.db"
-        private const val VERSION = 4
+        private const val VERSION = 5
 
         const val BOOKS = "books"
         const val BLOCKS = "blocks"
@@ -191,5 +215,6 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
         const val BOOKMARKS = "bookmarks"
         const val HIGHLIGHTS = "highlights"
         const val INK = "ink"
+        const val NOTES = "notes"
     }
 }

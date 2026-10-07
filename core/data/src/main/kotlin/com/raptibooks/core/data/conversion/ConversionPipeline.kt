@@ -165,6 +165,8 @@ class ConversionPipeline(
                     books.restorePosition(bookId, content.firstBlockAtOrAfterPage(bookId, restore) ?: 0)
                     content.remapBookmarks(bookId)
                 }
+                // Notes follow their pages too (the blocks they pointed to are gone).
+                content.remapNotes(bookId)
                 files.clearConversionCache(bookId)
             } finally {
                 renderer?.close()

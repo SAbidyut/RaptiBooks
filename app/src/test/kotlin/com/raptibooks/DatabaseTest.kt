@@ -9,6 +9,7 @@ import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
 import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.MarkKey
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.OcrMode
 import com.raptibooks.core.model.ReadingPosition
@@ -120,5 +121,33 @@ class DatabaseTest {
         books.delete(id)
         assertTrue(runBlocking { content.observeHighlights(id).first() }.isEmpty())
         assertTrue(runBlocking { content.observeInk(id).first() }.isEmpty())
+    }
+
+    @Test
+    fun storesNotes() {
+        val books = TestSupport.app.container.bookDao
+        val content = TestSupport.app.container.contentDao
+        val id = books.insert(NewBook("Notes", null, "n.pdf", "/n.pdf", null, 3, 10))
+        content.insertBlocks(id, listOf(HeadingBlock(0, 0, 1, "A"), ParagraphBlock(1, 1, "B"), ParagraphBlock(2, 2, "C")))
+        val text = content.addNote(id, 1, 1, 0.25f, 0.5f, NoteKind.TEXT, "remember this", null, 0L)
+        content.addNote(id, 2, 2, 0.9f, 0.1f, NoteKind.VOICE, "", "/v.m4a", 4200L)
+        var notes = runBlocking { content.observeNotes(id).first() }
+        assertEquals(2, notes.size)
+        assertEquals("remember this", notes[0].text)
+        assertEquals(0.25f, notes[0].x, 0.0001f)
+        assertEquals(NoteKind.VOICE, notes[1].kind)
+        assertEquals(4200L, notes[1].durationMs)
+
+        content.updateNoteText(text, "changed")
+        content.remapNotes(id)
+        notes = runBlocking { content.observeNotes(id).first() }
+        assertEquals("changed", notes[0].text)
+        assertEquals(1, notes[0].blockIndex)
+        assertEquals(2, notes[1].blockIndex)
+
+        content.deleteNote(text)
+        assertEquals(1, runBlocking { content.observeNotes(id).first() }.size)
+        books.delete(id)
+        assertTrue(runBlocking { content.observeNotes(id).first() }.isEmpty())
     }
 }

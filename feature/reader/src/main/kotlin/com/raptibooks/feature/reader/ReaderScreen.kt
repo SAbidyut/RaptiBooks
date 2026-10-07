@@ -65,6 +65,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -81,6 +83,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.raptibooks.core.data.appContainer
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.ui.RaptiIcons
 import com.raptibooks.core.ui.ReaderColors
@@ -122,8 +126,13 @@ fun ReaderRoute(
 
 private enum class Panel { NONE, CONTENTS, SETTINGS, SEARCH, INFO }
 
+private enum class NoteStep { CHOOSE, WRITE, RECORD }
+
 /** A picture opened full screen; [block] is where the user's drawing on it is kept. */
-private class ViewerState(val path: String, val caption: String?, val equation: Boolean, val block: Int)
+private class ViewerState(val path: String, val caption: String?, val equation: Boolean, val block: Int, val pen: Boolean)
+
+/** A place in the book chosen for a new note. */
+private class NoteSpot(val block: Int, val page: Int, val x: Float, val y: Float)
 
 @OptIn(FlowPreview::class)
 @Composable
@@ -146,6 +155,10 @@ private fun Reader(
     var penMenu by rememberSaveable { mutableStateOf(false) }
     var tool by rememberSaveable { mutableStateOf(MarkTool.NONE) }
     var viewer by remember { mutableStateOf<ViewerState?>(null) }
+    var spot by remember { mutableStateOf<NoteSpot?>(null) }
+    var noteStep by remember { mutableStateOf(NoteStep.CHOOSE) }
+    var openNote by remember { mutableStateOf<Note?>(null) }
+    val notes by vm.notes.collectAsStateWithLifecycle()
     val style = remember(colors, settings) { readerStyle(colors, settings) }
     val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
     val highlights by vm.highlights.collectAsStateWithLifecycle()
@@ -175,11 +188,13 @@ private fun Reader(
         onDispose { vm.savePosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
     }
     BackHandler(enabled = panel != Panel.NONE || penMenu) {
-        if (panel != Panel.NONE) {
-            panel = Panel.NONE
-        } else {
-            penMenu = false
-            tool = MarkTool.NONE
+        when {
+            panel != Panel.NONE -> panel = Panel.NONE
+            tool == MarkTool.NOTE -> tool = MarkTool.NONE
+            else -> {
+                penMenu = false
+                tool = MarkTool.NONE
+            }
         }
     }
 
@@ -224,12 +239,44 @@ private fun Reader(
                 if (block == null) {
                     BlockPlaceholder(style)
                 } else {
-                    BlockView(
-                        block, style, vm.highlight,
-                        onContentsClick = { title ->
-                            scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
-                        },
-                    ) { path, caption, equation, blockIndex -> viewer = ViewerState(path, caption, equation, blockIndex) }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (tool == MarkTool.NOTE) {
+                                    // Choosing a place for a note: the next tap anywhere in the block
+                                    // (also on a picture or a table) is it; scrolling still works.
+                                    Modifier.pointerInput(index) {
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                            while (true) {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                if (event.changes.size > 1 || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) break
+                                                if (change.changedToUp()) {
+                                                    change.consume()
+                                                    spot = NoteSpot(block.index, block.pageIndex, down.position.x / size.width, down.position.y / size.height)
+                                                    noteStep = NoteStep.CHOOSE
+                                                    tool = MarkTool.NONE
+                                                    break
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    ) {
+                        BlockView(
+                            block, style, vm.highlight,
+                            onContentsClick = { title ->
+                                scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
+                            },
+                        ) { path, caption, equation, blockIndex -> viewer = ViewerState(path, caption, equation, blockIndex, penMenu) }
+                        val pins = notes[index]
+                        if (!pins.isNullOrEmpty()) NotesLayer(pins, onOpen = { openNote = it }, modifier = Modifier.matchParentSize())
+                    }
                 }
             }
         }
@@ -299,7 +346,7 @@ private fun Reader(
         }
 
         // Pen: while a colour (or the eraser) is chosen, a finger draws instead of scrolling.
-        if (tool != MarkTool.NONE) {
+        if (tool != MarkTool.NONE && tool != MarkTool.NOTE) {
             MarkOverlay(
                 tool = tool,
                 onStroke = { points, origin ->
@@ -324,7 +371,7 @@ private fun Reader(
             )
         }
         AnimatedVisibility(
-            penMenu, Modifier.align(Alignment.CenterEnd),
+            penMenu && tool != MarkTool.NOTE, Modifier.align(Alignment.CenterEnd),
             enter = slideInHorizontally { it } + fadeIn(), exit = slideOutHorizontally { it } + fadeOut(),
         ) {
             MarkPalette(
@@ -334,7 +381,51 @@ private fun Reader(
                 modifier = Modifier.padding(end = 10.dp),
             )
         }
+        AnimatedVisibility(
+            tool == MarkTool.NOTE, Modifier.align(Alignment.TopCenter),
+            enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut(),
+        ) {
+            NoteHint(colors, onCancel = { tool = MarkTool.NONE })
+        }
     }
+    }
+
+    // Notes: place chosen -> voice or written note; a pin opens its note.
+    spot?.let { place ->
+        fun done() { spot = null }
+        when (noteStep) {
+            NoteStep.CHOOSE -> NoteChooserDialog(
+                onVoice = { noteStep = NoteStep.RECORD },
+                onText = { noteStep = NoteStep.WRITE },
+                onDismiss = ::done,
+            )
+            NoteStep.WRITE -> NoteEditorDialog(
+                initial = "", onDelete = null, onDismiss = ::done,
+                onSave = { text ->
+                    vm.addNote(place.block, place.page, place.x, place.y, NoteKind.TEXT, text, null, 0L)
+                    done()
+                },
+            )
+            NoteStep.RECORD -> VoiceRecordDialog(
+                newFile = vm::newVoiceFile, onDismiss = ::done,
+                onSaved = { file, duration ->
+                    vm.addNote(place.block, place.page, place.x, place.y, NoteKind.VOICE, "", file.absolutePath, duration)
+                    done()
+                },
+            )
+        }
+    }
+    openNote?.let { note ->
+        if (note.kind == NoteKind.VOICE) {
+            VoiceNoteDialog(note, onDelete = { vm.deleteNote(note); openNote = null }, onDismiss = { openNote = null })
+        } else {
+            NoteEditorDialog(
+                initial = note.text,
+                onSave = { text -> vm.updateNoteText(note.id, text); openNote = null },
+                onDelete = { vm.deleteNote(note); openNote = null },
+                onDismiss = { openNote = null },
+            )
+        }
     }
 
     when (panel) {
@@ -367,6 +458,7 @@ private fun Reader(
             path = v.path, caption = v.caption, equation = v.equation,
             strokes = if (v.equation) emptyList() else ink[v.block].orEmpty(),
             colors = colors,
+            penOnStart = v.pen,
             onDraw = { color, line -> vm.addInk(v.block, color, line) },
             onErase = vm::eraseInk,
             onClose = { viewer = null },
