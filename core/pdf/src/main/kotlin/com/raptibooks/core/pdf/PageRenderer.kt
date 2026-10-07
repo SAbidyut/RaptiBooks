@@ -30,11 +30,16 @@ interface PageRenderer : Closeable {
     fun renderRegion(index: Int, region: Rect, scale: Float): Bitmap
 
     companion object {
-        /** Opens the fastest available renderer, falling back to PdfBox when pdfium refuses the file. */
+        /**
+         * Opens the fastest available renderer, falling back to PdfBox when pdfium refuses the file
+         * (or is unusable, e.g. a LinkageError from a broken platform build or a JVM test sandbox).
+         */
         fun open(file: File, scratchDir: File): PageRenderer =
             try {
                 AndroidPageRenderer(file)
             } catch (e: Exception) {
+                PdfBoxPageRenderer(file, scratchDir)
+            } catch (e: LinkageError) {
                 PdfBoxPageRenderer(file, scratchDir)
             }
 
@@ -53,8 +58,8 @@ private class AndroidPageRenderer(file: File) : PageRenderer {
     private val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
     private val renderer = try {
         PdfRenderer(fd)
-    } catch (e: Exception) {
-        fd.close()
+    } catch (e: Throwable) {
+        runCatching { fd.close() }
         throw e
     }
 

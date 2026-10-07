@@ -1155,7 +1155,9 @@ def cmd_robotest(project: Project, refresh: bool, only: list[str] | None) -> Non
         classes = [c for c in classes if any(c.endswith(o) for o in only)]
     # android.* must be visible outside the sandbox too (AGP adds a mockable android.jar).
     cp = [tout, robo / "config", stub_out] + main_cp + test_jars + [out.android_jar]
-    cmd = [java(), "-Xmx3g",
+    # Same JVM flags as Gradle's test workers, so Robolectric takes the same code paths as in CI.
+    opens = [f"--add-opens=java.base/{p}=ALL-UNNAMED" for p in ("java.io", "java.lang", "java.util", "java.net", "java.nio")]
+    cmd = [java(), "-Xmx3g", *opens,
            f"-Drobolectric.dependency.repo.url={MAVEN_REPOS[0]}",
            "-Drobolectric.dependency.repo.id=central-mirror",
            f"-Djava.io.tmpdir={robo / 'tmp'}",

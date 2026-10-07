@@ -75,6 +75,8 @@ class ConversionPipeline(
                 PageRenderer.open(pdf, scratch)
             } catch (e: Exception) {
                 null
+            } catch (e: LinkageError) {
+                null
             }
             var ocr: OcrEngine? = null
             var ocrUnavailable = false

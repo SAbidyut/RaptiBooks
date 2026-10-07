@@ -15,7 +15,6 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          # Robolectric needs Java 21 to run the Android 15 (SDK 35) framework.
           java-version: 21
 
       - uses: gradle/actions/setup-gradle@v4
