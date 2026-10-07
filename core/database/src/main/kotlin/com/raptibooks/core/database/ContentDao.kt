@@ -3,6 +3,10 @@ package com.raptibooks.core.database
 import android.content.ContentValues
 import android.database.Cursor
 import com.raptibooks.core.model.Bookmark
+import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.MarkSpan
+import com.raptibooks.core.model.Marking
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
@@ -29,8 +33,10 @@ class ContentDao(private val db: RaptiDatabase) {
         db.transaction {
             delete("blocks", "book_id = ?", arrayOf(bookId.toString()))
             delete("toc", "book_id = ?", arrayOf(bookId.toString()))
+            // Marks point into the old blocks; they cannot follow a re-conversion.
+            delete("highlights", "book_id = ?", arrayOf(bookId.toString()))
         }
-        db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC)
+        db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC, RaptiDatabase.HIGHLIGHTS)
     }
 
     fun insertBlocks(bookId: Long, blocks: List<ContentBlock>) {
@@ -194,6 +200,55 @@ class ContentDao(private val db: RaptiDatabase) {
     fun deleteBookmarks(bookId: Long) {
         db.writableDatabase.delete("bookmarks", "book_id = ?", arrayOf(bookId.toString()))
         db.notifyChanged(RaptiDatabase.BOOKMARKS)
+    }
+
+    // ------------------------------------------------------------------ highlights
+
+    fun observeHighlights(bookId: Long): Flow<List<Highlight>> = db.observe(RaptiDatabase.HIGHLIGHTS) {
+        db.readableDatabase.rawQuery(
+            "SELECT id, book_id, block_idx, start_pos, end_pos, color FROM highlights WHERE book_id = ? ORDER BY block_idx, start_pos",
+            arrayOf(bookId.toString()),
+        ).use { c ->
+            val out = ArrayList<Highlight>(c.count)
+            while (c.moveToNext()) {
+                val color = MarkColor.fromId(c.getInt(5)) ?: continue
+                out += Highlight(c.getLong(0), c.getLong(1), c.getInt(2), c.getInt(3), c.getInt(4), color)
+            }
+            out
+        }
+    }
+
+    /**
+     * Marks (or, with a null [color], un-marks) character [edits] per block, cutting and joining
+     * the marks already there. All blocks are written in one transaction.
+     */
+    fun markRanges(bookId: Long, edits: Map<Int, List<IntRange>>, color: MarkColor?) {
+        if (edits.isEmpty()) return
+        db.transaction {
+            for ((block, ranges) in edits) {
+                val args = arrayOf(bookId.toString(), block.toString())
+                val existing = ArrayList<MarkSpan>()
+                rawQuery("SELECT start_pos, end_pos, color FROM highlights WHERE book_id = ? AND block_idx = ?", args).use { c ->
+                    while (c.moveToNext()) MarkColor.fromId(c.getInt(2))?.let { existing += MarkSpan(c.getInt(0), c.getInt(1), it) }
+                }
+                val result = Marking.apply(existing, ranges, color)
+                if (result == existing) continue
+                delete("highlights", "book_id = ? AND block_idx = ?", args)
+                for (s in result) {
+                    insert(
+                        "highlights", null,
+                        ContentValues().apply {
+                            put("book_id", bookId)
+                            put("block_idx", block)
+                            put("start_pos", s.start)
+                            put("end_pos", s.end)
+                            put("color", s.color.id)
+                        },
+                    )
+                }
+            }
+        }
+        db.notifyChanged(RaptiDatabase.HIGHLIGHTS)
     }
 }
 

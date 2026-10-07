@@ -6,6 +6,8 @@ import com.raptibooks.core.database.ContentDao
 import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
 import com.raptibooks.core.model.ContentBlock
+import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SearchHit
 import com.raptibooks.core.model.TocEntry
@@ -38,6 +40,12 @@ class ReaderRepository(
         withContext(Dispatchers.IO) { content.addBookmark(id, blockIndex, page, snippet) }
 
     suspend fun removeBookmark(bookmarkId: Long) = withContext(Dispatchers.IO) { content.deleteBookmark(bookmarkId) }
+
+    fun highlights(id: Long): Flow<List<Highlight>> = content.observeHighlights(id)
+
+    /** Underlines [edits] (character ranges per block) in [color]; a null colour erases them. */
+    suspend fun mark(id: Long, edits: Map<Int, List<IntRange>>, color: MarkColor?) =
+        withContext(Dispatchers.IO) { content.markRanges(id, edits, color) }
 
     suspend fun savePosition(id: Long, position: ReadingPosition, progress: Float) =
         withContext(Dispatchers.IO) { books.updatePosition(id, position, progress) }

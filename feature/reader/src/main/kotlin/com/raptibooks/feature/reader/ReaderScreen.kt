@@ -7,10 +7,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -45,6 +47,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -59,6 +62,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -132,9 +136,15 @@ private fun Reader(
     val scope = rememberCoroutineScope()
     var chrome by rememberSaveable { mutableStateOf(true) }
     var panel by rememberSaveable { mutableStateOf(Panel.NONE) }
+    var penMenu by rememberSaveable { mutableStateOf(false) }
+    var tool by rememberSaveable { mutableStateOf(MarkTool.NONE) }
     var viewer by remember { mutableStateOf<Triple<String, String?, Boolean>?>(null) }
     val style = remember(colors, settings) { readerStyle(colors, settings) }
     val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
+    val highlights by vm.highlights.collectAsStateWithLifecycle()
+    val registry = remember { MarkRegistry() }
+    val marks = remember(highlights, registry) { ReaderMarks(highlights, registry) }
+    val density = LocalDensity.current.density
 
     SystemBars(dark = colors.isDark, visible = chrome || panel != Panel.NONE)
     KeepScreenOn(settings.keepScreenOn)
@@ -156,7 +166,14 @@ private fun Reader(
     DisposableEffect(Unit) {
         onDispose { vm.savePosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
     }
-    BackHandler(enabled = panel != Panel.NONE) { panel = Panel.NONE }
+    BackHandler(enabled = panel != Panel.NONE || penMenu) {
+        if (panel != Panel.NONE) {
+            panel = Panel.NONE
+        } else {
+            penMenu = false
+            tool = MarkTool.NONE
+        }
+    }
 
     val firstVisible by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     val currentPage = source.peek(firstVisible)?.pageIndex ?: 0
@@ -166,8 +183,8 @@ private fun Reader(
     val bookmarked = bookmarks.any { it.blockIndex in firstVisible..maxOf(firstVisible, lastVisible) }
     val progress = if (book.blockCount <= 1) 1f else firstVisible.toFloat() / (book.blockCount - 1)
 
+    CompositionLocalProvider(LocalMarks provides marks) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val viewportPx = constraints.maxHeight.toFloat()
         val margin = settings.margin.dp
         val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -175,20 +192,15 @@ private fun Reader(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(settings.tapToTurn) {
+                .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = { pos ->
-                            val w = size.width
-                            when {
-                                settings.tapToTurn && pos.x < w * 0.2f -> {
-                                    chrome = false
-                                    scope.launch { listState.animateScrollBy(-viewportPx * 0.88f) }
-                                }
-                                settings.tapToTurn && pos.x > w * 0.8f -> {
-                                    chrome = false
-                                    scope.launch { listState.animateScrollBy(viewportPx * 0.88f) }
-                                }
-                                else -> chrome = !chrome
+                            if (pos.x > size.width * 0.8f) {
+                                // Right edge: the pen menu.
+                                penMenu = !penMenu
+                                if (!penMenu) tool = MarkTool.NONE
+                            } else {
+                                chrome = !chrome
                             }
                         },
                     )
@@ -240,6 +252,7 @@ private fun Reader(
                 onSettings = { panel = Panel.SETTINGS },
                 onOriginal = { onOpenOriginal(currentPage) },
                 onInfo = { panel = Panel.INFO },
+                onMarker = { penMenu = true; chrome = false },
             )
         }
         AnimatedVisibility(
@@ -255,6 +268,29 @@ private fun Reader(
                 onSeek = { f -> scope.launch { listState.scrollToItem(((source.count - 1) * f).roundToInt().coerceIn(0, maxOf(0, source.count - 1))) } },
             )
         }
+
+        // Pen: while a colour (or the eraser) is chosen, a finger draws instead of scrolling.
+        if (tool != MarkTool.NONE) {
+            MarkOverlay(
+                tool = tool,
+                onStroke = { points ->
+                    val edits = strokeToRanges(points, registry, density)
+                    if (edits.isNotEmpty()) vm.mark(edits, tool.color)
+                },
+            )
+        }
+        AnimatedVisibility(
+            penMenu, Modifier.align(Alignment.CenterEnd),
+            enter = slideInHorizontally { it } + fadeIn(), exit = slideOutHorizontally { it } + fadeOut(),
+        ) {
+            MarkPalette(
+                tool = tool, colors = colors,
+                onSelect = { tool = it; if (it != MarkTool.NONE) chrome = false },
+                onClose = { penMenu = false; tool = MarkTool.NONE },
+                modifier = Modifier.padding(end = 10.dp),
+            )
+        }
+    }
     }
 
     when (panel) {
@@ -298,6 +334,7 @@ private fun TopBar(
     onSettings: () -> Unit,
     onOriginal: () -> Unit,
     onInfo: () -> Unit,
+    onMarker: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     Surface(color = colors.surface, contentColor = colors.text, shadowElevation = 4.dp) {
@@ -320,6 +357,7 @@ private fun TopBar(
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, stringResource(R.string.reader_more)) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.reader_marker)) }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { menu = false; onMarker() })
                     DropdownMenuItem(text = { Text(stringResource(R.string.reader_original)) }, leadingIcon = { Icon(RaptiIcons.Pdf, null) }, onClick = { menu = false; onOriginal() })
                     DropdownMenuItem(text = { Text(stringResource(R.string.reader_info)) }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { menu = false; onInfo() })
                 }

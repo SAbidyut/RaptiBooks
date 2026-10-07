@@ -242,7 +242,6 @@ internal fun SettingsSheet(settings: ReaderSettings, onChange: ((ReaderSettings)
                 valueRange = ReaderSettings.MIN_MARGIN.toFloat()..ReaderSettings.MAX_MARGIN.toFloat(),
             )
             SwitchRow(stringResource(R.string.settings_justify), settings.justify) { v -> onChange { it.copy(justify = v) } }
-            SwitchRow(stringResource(R.string.settings_tap_turn), settings.tapToTurn) { v -> onChange { it.copy(tapToTurn = v) } }
             SwitchRow(stringResource(R.string.settings_keep_on), settings.keepScreenOn) { v -> onChange { it.copy(keepScreenOn = v) } }
         }
     }

@@ -10,6 +10,13 @@
     <string name="reader_text_settings">লেখার সেটিংস</string>
     <string name="reader_more">আরও</string>
     <string name="reader_original">মূল পিডিএফ পৃষ্ঠা</string>
+    <string name="reader_marker">আন্ডারলাইন কলম</string>
+    <string name="mark_red">লাল কলম</string>
+    <string name="mark_blue">নীল কলম</string>
+    <string name="mark_yellow">হলুদ কলম</string>
+    <string name="mark_green">সবুজ কলম</string>
+    <string name="mark_eraser">রাবার</string>
+    <string name="mark_close">কলমের মেনু বন্ধ করুন</string>
     <string name="reader_info">বইয়ের তথ্য</string>
     <string name="reader_page">পৃষ্ঠা %1$d / %2$d</string>
     <string name="reader_page_short">পৃ. %1$d</string>
@@ -36,7 +43,6 @@
     <string name="settings_line_spacing">লাইনের দূরত্ব</string>
     <string name="settings_margins">মার্জিন</string>
     <string name="settings_justify">দুই পাশে সমান করুন</string>
-    <string name="settings_tap_turn">পর্দার কিনারায় চাপ দিয়ে পাতা উল্টান</string>
     <string name="settings_keep_on">পর্দা চালু রাখুন</string>
     <string name="table_show_original">ছাপানো রূপে দেখুন</string>
     <string name="table_show_text">সারণি হিসেবে দেখুন</string>

@@ -101,6 +101,24 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX bookmarks_book ON bookmarks(book_id, block_idx)")
+        createHighlights(db)
+    }
+
+    /** Underlined passages: a colour on a character range of one block's text. */
+    private fun createHighlights(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS highlights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                block_idx INTEGER NOT NULL,
+                start_pos INTEGER NOT NULL,
+                end_pos INTEGER NOT NULL,
+                color INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS highlights_book ON highlights(book_id, block_idx)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -110,6 +128,7 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
             db.execSQL("ALTER TABLE books ADD COLUMN layout_version INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE books ADD COLUMN restore_page INTEGER NOT NULL DEFAULT -1")
         }
+        if (oldVersion < 3) createHighlights(db)
     }
 
     internal fun notifyChanged(vararg tables: String) {
@@ -141,11 +160,12 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
 
     companion object {
         private const val NAME = "raptibooks.db"
-        private const val VERSION = 2
+        private const val VERSION = 3
 
         const val BOOKS = "books"
         const val BLOCKS = "blocks"
         const val TOC = "toc"
         const val BOOKMARKS = "bookmarks"
+        const val HIGHLIGHTS = "highlights"
     }
 }

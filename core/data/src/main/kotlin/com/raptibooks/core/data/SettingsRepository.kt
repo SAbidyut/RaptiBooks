@@ -37,7 +37,6 @@ class SettingsRepository(context: Context) {
             .putInt("margin", next.margin)
             .putString("theme", next.theme.name)
             .putBoolean("justify", next.justify)
-            .putBoolean("tap_to_turn", next.tapToTurn)
             .putBoolean("keep_screen_on", next.keepScreenOn)
             .apply()
     }
@@ -56,7 +55,6 @@ class SettingsRepository(context: Context) {
             margin = prefs.getInt("margin", d.margin),
             theme = runCatching { ReaderTheme.valueOf(prefs.getString("theme", d.theme.name)!!) }.getOrDefault(d.theme),
             justify = prefs.getBoolean("justify", d.justify),
-            tapToTurn = prefs.getBoolean("tap_to_turn", d.tapToTurn),
             keepScreenOn = prefs.getBoolean("keep_screen_on", d.keepScreenOn),
         )
     }

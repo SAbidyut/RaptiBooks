@@ -10,6 +10,13 @@
     <string name="reader_text_settings">Text settings</string>
     <string name="reader_more">More</string>
     <string name="reader_original">Original PDF page</string>
+    <string name="reader_marker">Highlighter pen</string>
+    <string name="mark_red">Red pen</string>
+    <string name="mark_blue">Blue pen</string>
+    <string name="mark_yellow">Yellow pen</string>
+    <string name="mark_green">Green pen</string>
+    <string name="mark_eraser">Eraser</string>
+    <string name="mark_close">Close pen menu</string>
     <string name="reader_info">Book info</string>
     <string name="reader_page">Page %1$d of %2$d</string>
     <string name="reader_page_short">p. %1$d</string>
@@ -36,7 +43,6 @@
     <string name="settings_line_spacing">Line spacing</string>
     <string name="settings_margins">Margins</string>
     <string name="settings_justify">Justify text</string>
-    <string name="settings_tap_turn">Tap screen edges to turn pages</string>
     <string name="settings_keep_on">Keep screen on</string>
     <string name="table_show_original">Show as printed</string>
     <string name="table_show_text">Show as table</string>

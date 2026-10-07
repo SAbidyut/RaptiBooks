@@ -7,6 +7,7 @@ import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ImageKind
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
+import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.OcrMode
 import com.raptibooks.core.model.ReadingPosition
@@ -89,5 +90,22 @@ class DatabaseTest {
         assertNull(LibraryRepository.cleanTitle("Untitled"))
         assertEquals("Thesis", LibraryRepository.cleanTitle("Microsoft Word - Thesis.docx"))
         assertEquals("বাংলা বই", LibraryRepository.cleanTitle("বাংলা বই"))
+    }
+
+    @Test
+    fun storesUnderlinedPassages() {
+        val books = TestSupport.app.container.bookDao
+        val content = TestSupport.app.container.contentDao
+        val id = books.insert(NewBook("Marks", null, "m.pdf", "/m.pdf", null, 1, 10))
+        content.markRanges(id, mapOf(3 to listOf(0..4, 10..12)), MarkColor.RED)
+        content.markRanges(id, mapOf(3 to listOf(2..3), 5 to listOf(1..1)), MarkColor.BLUE)
+        content.markRanges(id, mapOf(3 to listOf(10..12)), null)
+        val marks = runBlocking { content.observeHighlights(id).first() }
+        assertEquals(
+            listOf(Triple(3, 0, 2) to MarkColor.RED, Triple(3, 2, 4) to MarkColor.BLUE, Triple(3, 4, 5) to MarkColor.RED, Triple(5, 1, 2) to MarkColor.BLUE),
+            marks.map { Triple(it.blockIndex, it.start, it.end) to it.color },
+        )
+        books.delete(id)
+        assertTrue(runBlocking { content.observeHighlights(id).first() }.isEmpty())
     }
 }

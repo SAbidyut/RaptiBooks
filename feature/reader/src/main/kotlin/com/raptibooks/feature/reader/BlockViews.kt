@@ -151,7 +151,8 @@ private fun HeadingView(block: HeadingBlock, style: ReaderStyle, highlight: Stri
             Box(Modifier.width(40.dp).height(3.dp).background(style.colors.accent, RoundedCornerShape(2.dp)))
             Spacer(Modifier.height(14.dp))
         }
-        Text(
+        MarkableText(
+            blockIndex = block.index,
             text = styled(block.text, emptyList(), highlight, style.colors),
             style = TextStyle(
                 fontFamily = style.headingFont,
@@ -171,15 +172,15 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
     val base = style.body
     val spacing = (style.fontSize.value * 0.75f).dp
     when (block.kind) {
-        ParagraphKind.BODY -> Text(text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing))
-        ParagraphKind.CENTERED -> Text(
-            text, style = base.copy(textAlign = TextAlign.Center),
+        ParagraphKind.BODY -> MarkableText(block.index, text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing))
+        ParagraphKind.CENTERED -> MarkableText(
+            block.index, text, style = base.copy(textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(vertical = spacing / 2).padding(bottom = spacing / 2),
         )
         ParagraphKind.QUOTE -> {
             val bar = style.colors.accent.copy(alpha = 0.6f)
-            Text(
-                text, style = base.copy(fontStyle = FontStyle.Italic),
+            MarkableText(
+                block.index, text, style = base.copy(fontStyle = FontStyle.Italic),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = spacing)
@@ -187,12 +188,12 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
                     .padding(start = 16.dp),
             )
         }
-        ParagraphKind.CAPTION -> Text(
-            text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
+        ParagraphKind.CAPTION -> MarkableText(
+            block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing),
         )
-        ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> Text(
-            text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
+        ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> MarkableText(
+            block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2),
         )
     }
@@ -274,7 +275,7 @@ private fun ListItemView(block: ListItemBlock, style: ReaderStyle, highlight: St
             style = style.body.copy(textAlign = TextAlign.End, color = style.colors.accent),
             modifier = Modifier.width(markerWidth).padding(end = 8.dp),
         )
-        Text(text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f))
+        MarkableText(block.index, text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f))
     }
 }
 

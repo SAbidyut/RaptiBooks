@@ -9,6 +9,8 @@ import com.raptibooks.core.data.ReaderRepository
 import com.raptibooks.core.data.SettingsRepository
 import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
+import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SearchHit
@@ -20,6 +22,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -47,6 +50,16 @@ class ReaderViewModel(
 
     val bookmarks: StateFlow<List<Bookmark>> =
         repo.bookmarks(bookId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The user's underlined passages, by block. */
+    val highlights: StateFlow<Map<Int, List<Highlight>>> =
+        repo.highlights(bookId).map { all -> all.groupBy { it.blockIndex } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Underlines [edits] (character ranges per block) in [color]; a null colour erases them. */
+    fun mark(edits: Map<Int, List<IntRange>>, color: MarkColor?) {
+        viewModelScope.launch { repo.mark(bookId, edits, color) }
+    }
 
     /** Search term highlighted in the text after jumping to a search result. */
     var highlight by mutableStateOf<String?>(null)
