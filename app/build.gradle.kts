@@ -52,6 +52,11 @@ android {
         compose = true
     }
 
+    androidResources {
+        // Tesseract models are memory-mapped/copied; keep them uncompressed in the APK.
+        noCompress += listOf("traineddata")
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true

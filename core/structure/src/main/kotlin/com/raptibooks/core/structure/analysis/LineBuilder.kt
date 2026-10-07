@@ -25,6 +25,13 @@ class LineBuilder(
     private val segmentGapEm: Float = 1.6f,
     private val chunkGapEm: Float = 0.8f,
 ) {
+    /**
+     * Whether the current page's text layer has real space glyphs. Set per page by
+     * [PageAnalyzer] so that small fragment sets (table cells) use the page's convention;
+     * null = decide per line.
+     */
+    var explicitSpacesHint: Boolean? = null
+
     private class Frag(val f: TextFragment, val order: Int) {
         val left get() = f.left
         val right get() = f.right
@@ -158,6 +165,7 @@ class LineBuilder(
         val segments = mutableListOf<MutableList<Frag>>()
         var current = mutableListOf<Frag>()
         var lastSolid: Frag? = null
+        var maxRight = -Float.MAX_VALUE
         for (fr in ordered) {
             if (fr.f.isSpace) {
                 current += fr
@@ -166,13 +174,15 @@ class LineBuilder(
             val prev = lastSolid
             if (prev != null) {
                 val em = max(prev.size, fr.size)
-                if (fr.left - prev.right > segmentGapEm * em) {
+                if (fr.left - maxRight > segmentGapEm * em) {
                     segments += current
                     current = mutableListOf()
+                    maxRight = -Float.MAX_VALUE
                 }
             }
             current += fr
             lastSolid = fr
+            maxRight = max(maxRight, fr.right)
         }
         if (current.isNotEmpty()) segments += current
         return segments.filter { seg -> seg.any { !it.f.isSpace } }
@@ -192,7 +202,14 @@ class LineBuilder(
         var chunkLeft = solid.first().left
         var chunkRight = chunkLeft
         var prev: Frag? = null
+        // Gaps are measured from the furthest right edge so far: combining marks (Bangla vowel
+        // signs, nukta) are zero-width glyphs placed inside their base glyph.
+        var maxRight = -Float.MAX_VALUE
         var pendingSpace = false
+        // When the text layer contains real space glyphs, trust them: glyph advances of
+        // complex scripts (Bangla clusters positioned by the shaper) understate their extent,
+        // so gap-based inference would split words. Without spaces (e.g. LaTeX), infer.
+        val explicitSpaces = explicitSpacesHint ?: segment.any { it.f.isSpace }
         var startNewChunk = false
         var boldChars = 0
         var italicChars = 0
@@ -223,9 +240,9 @@ class LineBuilder(
             val p = prev
             var needSpace = false
             if (p != null) {
-                val gap = f.left - p.right
+                val gap = f.left - maxRight
                 val sw = min(p.f.spaceWidth, f.spaceWidth).takeIf { it > 0f } ?: (lineSize * 0.25f)
-                val threshold = (sw * 0.5f).coerceIn(lineSize * 0.1f, lineSize * 0.3f)
+                val threshold = if (explicitSpaces) lineSize * 0.6f else (sw * 0.5f).coerceIn(lineSize * 0.1f, lineSize * 0.3f)
                 needSpace = pendingSpace || gap > threshold
                 if (gap > chunkGapEm * lineSize) {
                     flushBijoy()
@@ -272,6 +289,7 @@ class LineBuilder(
             if (f.italic) italicChars += n
             fontChars.merge(f.fontName, n, Int::plus)
             chunkRight = max(chunkRight, f.right)
+            maxRight = max(maxRight, f.right)
             prev = fr
             pendingSpace = false
         }

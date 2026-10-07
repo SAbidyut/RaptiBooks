@@ -123,9 +123,11 @@ class PageAnalysisTest {
             }
         }
         assertEquals("H:A Two Column Title", texts.first())
-        val leftIdx = texts.indexOfFirst { it.contains("left 7") }
-        val rightIdx = texts.indexOfFirst { it.contains("right 0") }
+        val all = texts.joinToString("\n")
+        val leftIdx = all.indexOf("left 7")
+        val rightIdx = all.indexOf("right 0")
         assertTrue("left column must come before right column: $texts", leftIdx in 0 until rightIdx)
+        assertTrue(all.indexOf("left 0") < all.indexOf("left 1") && all.indexOf("right 6") < all.indexOf("right 7"))
     }
 
     @Test

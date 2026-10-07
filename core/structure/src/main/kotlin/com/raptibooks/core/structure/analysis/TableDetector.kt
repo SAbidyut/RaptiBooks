@@ -46,7 +46,13 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                 columns = inferColumns(frags, bounds) ?: continue
             }
             if ((columns.size - 1) * (ys.size - 1) < 2) continue
-            val table = fillGrid(frags, bounds, columns, ys, ruled = true) ?: continue
+            // A shaded first row (th background) marks a header.
+            val firstRow = Rect(bounds.left, ys[0], bounds.right, ys[1])
+            val shadedHeader = page.paths.any { p ->
+                p.filled && !p.lightFill && p.shape == PathShape.RECTANGLE && p.bounds.height > 4f &&
+                    firstRow.outset(1f).contains(p.bounds) && p.bounds.width > 8f
+            } && ys.size > 2
+            val table = fillGrid(frags, bounds, columns, ys, ruled = true, header = shadedHeader) ?: continue
             tables += table
             used += component
         }
@@ -151,7 +157,15 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     val first = r.pieces.first()
                     Patterns.listMarker.containsMatchIn(first.text + " ") && first.text.length <= 4
                 }
-                if (columns.size >= 2 && justifiedColumns < columns.size && !firstColumnMarkers &&
+                // Real tables have white channels between columns: no piece crosses into the
+                // next column. Justified prose split at wide word gaps fails this.
+                val crossing = run.any { r ->
+                    r.pieces.any { p ->
+                        val col = columns.indexOfLast { it <= p.left + 6f }
+                        col >= 0 && col + 1 < columns.size && p.right > columns[col + 1] - 2f
+                    }
+                }
+                if (columns.size >= 2 && justifiedColumns < columns.size && !firstColumnMarkers && !crossing &&
                     (shortCells || (columns.size >= 3 && avgWords <= 6))
                 ) {
                     val bounds = Rect.bounding(run.flatMap { r -> r.lines.map { it.bounds } })!!

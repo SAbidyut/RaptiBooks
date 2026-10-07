@@ -75,7 +75,7 @@ class PageStructurer(private val profile: DocumentProfile) {
     }
 
     /** Paragraph/list item under construction. */
-    private class Builder(first: NLine, val column: Rect, val marker: String?, val markerLeft: Float) {
+    private class Builder(first: NLine, var column: Rect, val marker: String?, val markerLeft: Float) {
         val lines = mutableListOf(first)
         val text = StringBuilder()
         val styles = mutableListOf<InlineStyle>()
@@ -133,7 +133,9 @@ class PageStructurer(private val profile: DocumentProfile) {
                     val marker = Patterns.listMarker.find(line.text)
                     val b = current
                     if (b != null && marker == null && continues(b, line, p.column, leading)) {
-                        append(b, line, lineBreak = isLineBreak(b, line, p.column))
+                        val sameColumn = b.column == p.column
+                        b.column = p.column // a paragraph may continue into the next column
+                        append(b, line, lineBreak = sameColumn && isLineBreak(b, line, p.column))
                         continue
                     }
                     flush()
@@ -249,7 +251,14 @@ class PageStructurer(private val profile: DocumentProfile) {
 
     private fun continues(b: Builder, cur: NLine, column: Rect, leading: Float): Boolean {
         val prev = b.last
-        if (column != b.column) return false
+        if (column != b.column) {
+            // A paragraph running from the bottom of one column to the top of the next.
+            val first = cur.text.firstOrNull() ?: return false
+            return b.marker == null && column.left > b.column.left && cur.bounds.top < prev.bounds.top &&
+                !Patterns.endsSentence(prev.text) && abs(cur.size - prev.size) < 0.6f &&
+                (first.isLowerCase() || BanglaText.isBengali(first)) &&
+                cur.bounds.left - column.left < cur.size * 0.5f
+        }
         val dy = cur.src.baseline - prev.src.baseline
         if (dy <= 0f) return false
         val sizeRatio = cur.size / prev.size
@@ -268,6 +277,8 @@ class PageStructurer(private val profile: DocumentProfile) {
         val prevIndent = prev.bounds.left - colLeft
         if (curIndent > em * 0.9f && prevIndent < em * 0.5f && b.lines.size >= 1 && !isCentered(cur, column)) return false
         val prevShort = prev.bounds.right < colRight - em * 2.5f
+        // Centred verse keeps going line by line even when a line ends with a danda/full stop.
+        if (isCentered(prev, column) && isCentered(cur, column) && dy <= expected * 1.15f + 1f) return true
         if (prevShort && Patterns.endsSentence(prev.text)) return false
         return true
     }

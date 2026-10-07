@@ -1,11 +1,14 @@
 package com.raptibooks.core.structure.analysis
 
+import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.structure.geometry.Rect
+import com.raptibooks.core.structure.layout.Chunk
 import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.PathShape
 import com.raptibooks.core.structure.raw.RawPage
+import com.raptibooks.core.structure.raw.VectorPath
 import com.raptibooks.core.structure.text.BijoyConverter
 import com.raptibooks.core.structure.text.TextQuality
 
@@ -19,13 +22,16 @@ class PageAnalyzer {
     private val figureDetector = FigureDetector()
 
     fun analyze(page: RawPage): PageLayout {
+        val spaces = page.fragments.count { it.isSpace }
+        val solid = page.fragments.size - spaces
+        lineBuilder.explicitSpacesHint = if (solid < 20) null else spaces * 30 >= solid
         val ruled = if (page.fromOcr) emptyList() else tableDetector.detectRuled(page)
         val remaining = page.fragments.filter { f ->
             val cx = (f.left + f.right) / 2f
             val cy = (f.top + f.bottom) / 2f
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
         }
-        val allLines = lineBuilder.build(remaining)
+        val (allLines, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining), page)
         val (aligned, consumed) = tableDetector.detectAligned(allLines, page)
         var lines = allLines.filter { it !in consumed }
 
@@ -47,12 +53,50 @@ class PageAnalyzer {
         }
         lines = lines.filter { it !in captionLines }
 
-        val figures = figureDetector.detect(page, lines, tables)
+        val figurePage = if (bulletPaths.isEmpty()) page else RawPage(
+            page.index, page.width, page.height, page.fragments, page.images,
+            page.paths.filter { it !in bulletPaths }, page.rotatedText, page.fromOcr, page.ocrPictures,
+        )
+        val figures = figureDetector.detect(figurePage, lines, tables)
         val body = lines.filter { it !in figures.absorbed }
         val chars = allLines.sumOf { TextQuality.letterCount(it.text) } +
             ruled.sumOf { t -> t.rows.sumOf { r -> r.sumOf { TextQuality.letterCount(it) } } }
         return PageLayout(page.index, page.width, page.height, body, figures.figures, tables, page.fromOcr, chars)
     }
+}
+
+/**
+ * Browsers and some layout tools draw list bullets as small filled shapes instead of a "•"
+ * glyph. A small, roughly square filled path just left of a line, vertically inside it, is
+ * turned into a "• " prefix so the list structure survives.
+ */
+internal fun attachGraphicBullets(lines: List<TextLine>, page: RawPage): Pair<List<TextLine>, Set<VectorPath>> {
+    val candidates = page.paths.filter { p ->
+        val b = p.bounds
+        p.filled && !p.lightFill && b.width in 1.5f..9f && b.height in 1.5f..9f &&
+            b.width / b.height in 0.5f..2f && (p.shape == PathShape.COMPLEX || p.shape == PathShape.RECTANGLE)
+    }
+    if (candidates.isEmpty()) return lines to emptySet()
+    val used = HashSet<VectorPath>()
+    val out = lines.map { line ->
+        val em = line.fontSize
+        val bullet = candidates.firstOrNull { p ->
+            p !in used && line.bounds.left - p.bounds.right in 0.5f..em * 2.2f &&
+                p.bounds.centerY in line.bounds.top..line.bounds.bottom && p.bounds.height <= em * 0.8f
+        }
+        if (bullet == null) {
+            line
+        } else {
+            used += bullet
+            TextLine(
+                "• " + line.text,
+                line.styles.map { InlineStyle(it.start + 2, it.end + 2, it.flags) },
+                line.bounds.union(bullet.bounds), line.baseline, line.fontSize, line.boldRatio, line.italicRatio,
+                line.fontName, line.chunks.map { Chunk(it.left, it.right, it.textStart + 2, it.textEnd + 2) },
+            )
+        }
+    }
+    return out to used
 }
 
 /** Decides whether a page's text layer is unusable and the page should be OCR'd. */

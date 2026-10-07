@@ -64,14 +64,14 @@ class DocumentStats {
             if (last != null && last.last() / s < 1.06f) last += s else clusters += mutableListOf(s)
         }
         var reps = clusters.map { it.last() }
-        // A size used only on a title page should not push chapter headings down a level.
-        if (reps.size > 3) {
+        // A size used only on a title/cover page should not push chapter headings down a level.
+        if (reps.size >= 2 && pageCount >= 4) {
             val firstPages = clusters.first().sumOf { sizePages[sizeKey(it)] ?: 0 }
             if (firstPages <= 2) reps = reps.drop(1)
         }
         val minEdgeRepeats = when {
             pagesWithText >= 6 -> 3
-            pagesWithText >= 3 -> 2
+            pagesWithText >= 2 -> 2
             else -> Int.MAX_VALUE
         }
         val repeated = edgePages.filter { it.value >= minEdgeRepeats }.keys

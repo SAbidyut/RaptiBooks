@@ -67,7 +67,8 @@ class LineBuilderTest {
 
     @Test
     fun recordsBoldRanges() {
-        val frags = words("Note:", 72f, 100f, bold = true) + words("plain text", 72f + 5 * 5.5f + 2.75f, 100f)
+        val space = TextFragment(" ", 99.5f, 91.2f, 102.25f, 102.2f, 100f, 11f)
+        val frags = words("Note:", 72f, 100f, bold = true) + space + words("plain text", 72f + 5 * 5.5f + 2.75f, 100f)
         val line = builder.build(frags).single()
         assertEquals("Note: plain text", line.text)
         val bold = line.styles.single { it.bold }
