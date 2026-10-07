@@ -35,6 +35,7 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     private var pendingTable: TableBlock? = null
     private val deferred = mutableListOf<StructuredElement>()
     private val headings = mutableListOf<TocEntry>()
+    private val printed = mutableListOf<PrintedEntry>()
     private val firstBlockOfPage = sortedMapOf<Int, Int>()
 
     val blockCount: Int get() = nextIndex
@@ -88,6 +89,9 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         return headings.toList()
     }
 
+    /** Lines of the book's own printed table of contents, in order. */
+    fun printedContents(): List<PrintedEntry> = printed.toList()
+
     /** First block index for each page that produced blocks. */
     fun pageStarts(): Map<Int, Int> = firstBlockOfPage.toMap()
 
@@ -119,7 +123,7 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                 var caption = region.caption
                 var consumed = 1
                 val next = elements.getOrNull(i + 1)
-                if (caption == null && next is StructuredElement.Paragraph && next.text.length < 400 &&
+                if (caption == null && region.kind != FigureKind.EQUATION && next is StructuredElement.Paragraph && next.text.length < 400 &&
                     Patterns.caption.containsMatchIn(next.text)
                 ) {
                     caption = next.text
@@ -132,11 +136,16 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                         FigureKind.RASTER -> ImageKind.PHOTO
                         FigureKind.SCAN -> ImageKind.PAGE
                         FigureKind.MIXED -> ImageKind.FIGURE
+                        FigureKind.EQUATION -> ImageKind.EQUATION
                     }
                     emit {
                         ImageBlock(it, el.pageIndex, path, region.imageWidth, region.imageHeight, caption, kind,
-                            region.bounds.width, region.textSize)
+                            region.bounds.width, region.textSize, region.text)
                     }
+                } else if (region.kind == FigureKind.EQUATION) {
+                    // Not rendered (no renderer): the formula's text is better than nothing.
+                    val text = listOfNotNull(region.text, caption).joinToString("   ")
+                    if (text.isNotBlank()) emit { ParagraphBlock(it, el.pageIndex, text, kind = ParagraphKind.CENTERED) }
                 } else if (caption != null) {
                     emit { ParagraphBlock(it, el.pageIndex, caption, kind = ParagraphKind.CAPTION) }
                 }
@@ -173,7 +182,13 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     private fun emitParagraph(p: StructuredElement.Paragraph) {
         val text = p.text.trim()
         if (text.isEmpty()) return
-        emit { ParagraphBlock(it, p.pageIndex, text, p.styles, p.kind) }
+        val idx = emit { ParagraphBlock(it, p.pageIndex, text, p.styles, p.kind) }
+        if (p.kind == ParagraphKind.TOC) {
+            val tab = text.indexOf('\t')
+            val title = if (tab >= 0) text.substring(0, tab) else text
+            val page = if (tab >= 0) text.substring(tab + 1) else ""
+            printed += PrintedEntry(title.trim(), page.trim(), p.styles.any { it.bold }, idx)
+        }
     }
 
     private fun continuesTable(prev: TableBlock, next: StructuredElement.Table): Boolean {

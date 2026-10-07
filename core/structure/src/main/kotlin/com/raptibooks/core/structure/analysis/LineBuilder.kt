@@ -66,10 +66,14 @@ class LineBuilder(
         return lines
     }
 
-    /** Builds text for an arbitrary fragment set (e.g. one table cell), lines joined by spaces. */
-    fun assembleText(fragments: List<TextFragment>): String =
+    /**
+     * Builds text for an arbitrary fragment set (e.g. one table cell), lines joined by spaces.
+     * With [unicodeScripts], superscript/subscript digits become Unicode scripts ("10¹⁸"),
+     * since cells carry no styles.
+     */
+    fun assembleText(fragments: List<TextFragment>, unicodeScripts: Boolean = false): String =
         build(fragments).sortedWith(compareBy({ it.baseline }, { it.bounds.left }))
-            .joinToString(" ") { it.text }.trim()
+            .joinToString(" ") { if (unicodeScripts) scriptText(it) else it.text }.trim()
 
     private fun groupRows(frags: List<Frag>): MutableList<Row> {
         val sorted = frags.sortedWith(compareBy({ it.f.baseline }, { it.left }))
@@ -107,7 +111,7 @@ class LineBuilder(
                 val rSize = r.size
                 val candidates = listOfNotNull(sorted.getOrNull(i - 1), sorted.getOrNull(i + 1))
                 val target = candidates.firstOrNull { n ->
-                    rSize <= n.size * 0.8f &&
+                    rSize <= n.size * 0.87f &&
                         r.baseline > n.baseline - n.size * 0.9f && r.baseline < n.baseline + n.size * 0.45f &&
                         r.left < n.right + n.size && r.right > n.left - n.size
                 } ?: continue
@@ -255,7 +259,7 @@ class LineBuilder(
             var flags = 0
             if (f.bold) flags = flags or InlineStyle.BOLD
             if (f.italic) flags = flags or InlineStyle.ITALIC
-            if (f.fontSize < lineSize * 0.8f) {
+            if (f.fontSize < lineSize * 0.87f) {
                 if (f.baseline < baseline - lineSize * 0.15f) flags = flags or InlineStyle.SUPERSCRIPT
                 else if (f.baseline > baseline + lineSize * 0.08f) flags = flags or InlineStyle.SUBSCRIPT
             }
@@ -333,6 +337,34 @@ class LineBuilder(
     }
 
     companion object {
+        private const val SUPER_FROM = "0123456789+-−=()ni"
+        private const val SUPER_TO = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ⁿⁱ"
+        private const val SUB_FROM = "0123456789+-−=()aeox"
+        private const val SUB_TO = "₀₁₂₃₄₅₆₇₈₉₊₋₋₌₍₎ₐₑₒₓ"
+
+        /**
+         * The line's text with superscript/subscript runs written as Unicode script characters
+         * where possible (one character for one, so offsets stay valid).
+         */
+        fun scriptText(line: TextLine): String {
+            if (line.styles.none { it.superscript || it.subscript }) return line.text
+            val chars = line.text.toCharArray()
+            for (s in line.styles) {
+                val sup = s.superscript
+                if (!sup && !s.subscript) continue
+                val from = if (sup) SUPER_FROM else SUB_FROM
+                val to = if (sup) SUPER_TO else SUB_TO
+                val a = s.start.coerceIn(0, chars.size)
+                val b = s.end.coerceIn(a, chars.size)
+                if ((a until b).any { chars[it] != ' ' && from.indexOf(chars[it]) < 0 }) continue
+                for (k in a until b) {
+                    val i = from.indexOf(chars[k])
+                    if (i >= 0) chars[k] = to[i]
+                }
+            }
+            return String(chars)
+        }
+
         private fun medianSize(frags: List<Frag>): Float {
             if (frags.isEmpty()) return 0f
             // Character-weighted median so that a few large glyphs don't dominate.
@@ -341,7 +373,7 @@ class LineBuilder(
             var acc = 0
             for ((size, w) in weighted) {
                 acc += w
-                if (acc * 2 >= total) return size
+                if (acc * 2 > total) return size // ties go to the larger size (base text vs. its scripts)
             }
             return weighted.last().first
         }

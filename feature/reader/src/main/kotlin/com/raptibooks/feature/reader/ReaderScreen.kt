@@ -132,7 +132,7 @@ private fun Reader(
     val scope = rememberCoroutineScope()
     var chrome by rememberSaveable { mutableStateOf(true) }
     var panel by rememberSaveable { mutableStateOf(Panel.NONE) }
-    var viewer by remember { mutableStateOf<Pair<String, String?>?>(null) }
+    var viewer by remember { mutableStateOf<Triple<String, String?, Boolean>?>(null) }
     val style = remember(colors, settings) { readerStyle(colors, settings) }
     val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
 
@@ -209,7 +209,7 @@ private fun Reader(
                         onContentsClick = { title ->
                             scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
                         },
-                    ) { path, caption -> viewer = path to caption }
+                    ) { path, caption, ink -> viewer = Triple(path, caption, ink) }
                 }
             }
         }
@@ -282,7 +282,7 @@ private fun Reader(
         Panel.INFO -> BookInfoDialog(book, onDismiss = { panel = Panel.NONE })
         Panel.NONE -> Unit
     }
-    viewer?.let { (path, caption) -> ImageViewer(path, caption, onClose = { viewer = null }) }
+    viewer?.let { (path, caption, ink) -> ImageViewer(path, caption, ink, onClose = { viewer = null }) }
 }
 
 @Composable

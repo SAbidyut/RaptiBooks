@@ -13,6 +13,9 @@ import com.raptibooks.core.structure.analysis.DocumentStats
 import com.raptibooks.core.structure.analysis.OcrDecision
 import com.raptibooks.core.structure.analysis.PageAnalyzer
 import com.raptibooks.core.structure.analysis.PageStructurer
+import com.raptibooks.core.structure.geometry.Rect
+import com.raptibooks.core.structure.text.GrayImage
+import com.raptibooks.core.structure.text.SymbolRecognizer
 import java.io.File
 
 /** Runs the real extraction + structure + reflow code on PDFs and prints the reflowed book. */
@@ -34,8 +37,20 @@ fun convert(pdf: File) {
     val layouts = (0 until ex.pageCount).map { i ->
         val e = ex.extractPage(i)
         val reason = OcrDecision.evaluate(e.page, e.glyphsDrawn, e.glyphsMapped)
-        val layout = analyzer.analyze(e.page)
+        // Like the app: symbols without Unicode mapping are identified from their rendering.
+        val page = SymbolRecognizer.recognize(e.page) { r, scale -> renderGray(pdf, i, r, scale) }
+        val layout = analyzer.analyze(page)
         layout.figures.forEachIndexed { k, f -> f.imagePath = "fig-p$i-$k.png"; f.imageWidth = f.bounds.width.toInt(); f.imageHeight = f.bounds.height.toInt() }
+        // HARNESS_IMAGES=dir: save the figure and equation crops as the app would cut them.
+        System.getenv("HARNESS_IMAGES")?.let { dir ->
+            File(dir).mkdirs()
+            layout.figures.forEachIndexed { k, f ->
+                val g = renderGray(pdf, i, f.bounds, 3f) ?: return@forEachIndexed
+                val img = java.awt.image.BufferedImage(g.width, g.height, java.awt.image.BufferedImage.TYPE_BYTE_GRAY)
+                img.raster.setPixels(0, 0, g.width, g.height, g.pixels)
+                javax.imageio.ImageIO.write(img, "png", File(dir, "${pdf.nameWithoutExtension}-p$i-${f.kind}-$k.png"))
+            }
+        }
         stats.add(layout)
         println("page $i: ${e.page.width}x${e.page.height} frags=${e.page.fragments.size} glyphs=${e.glyphsDrawn}/${e.glyphsMapped} images=${e.page.images.size} paths=${e.page.paths.size} -> lines=${layout.lines.size} figures=${layout.figures.size} tables=${layout.tables.size} ocr=$reason")
         if (System.getenv("HARNESS_PATHS") != null) {
@@ -55,7 +70,7 @@ fun convert(pdf: File) {
     val engine = ReflowEngine { blocks += it }
     layouts.forEach { engine.addPage(structurer.structure(it)) }
     val headings = engine.finish()
-    val toc = TocBuilder.build(ex.outline().map { OutlineItem(it.title, it.pageIndex, it.level) }, headings, engine.pageStarts(), engine.blockCount)
+    val toc = TocBuilder.build(ex.outline().map { OutlineItem(it.title, it.pageIndex, it.level) }, headings, engine.pageStarts(), engine.blockCount, engine.printedContents())
     println("-".repeat(100))
     for (b in blocks) println(render(b))
     println("-".repeat(100))
@@ -64,12 +79,42 @@ fun convert(pdf: File) {
     ex.close()
 }
 
+/** Renders a page region with poppler (the app uses Android's renderer). */
+fun renderGray(pdf: File, page: Int, r: Rect, scale: Float): GrayImage? {
+    val out = File.createTempFile("harness", "")
+    try {
+        val dpi = scale * 72f
+        val cmd = listOf("pdftoppm", "-gray", "-singlefile", "-r", dpi.toString(), "-f", "${page + 1}", "-l", "${page + 1}",
+            "-x", "${(r.left * scale).toInt()}", "-y", "${(r.top * scale).toInt()}",
+            "-W", "${(r.width * scale).toInt()}", "-H", "${(r.height * scale).toInt()}", pdf.path, out.path)
+        if (ProcessBuilder(cmd).redirectErrorStream(true).start().waitFor() != 0) return null
+        val bytes = File(out.path + ".pgm").readBytes()
+        // P5 header: magic, width, height, maxval, each followed by whitespace.
+        var pos = 0
+        val fields = mutableListOf<Int>()
+        while (fields.size < 4) {
+            while (bytes[pos].toInt().toChar().isWhitespace()) pos++
+            val start = pos
+            while (!bytes[pos].toInt().toChar().isWhitespace()) pos++
+            val token = String(bytes, start, pos - start)
+            fields += if (token == "P5") 0 else token.toInt()
+        }
+        pos++
+        val w = fields[1]
+        val h = fields[2]
+        return GrayImage(IntArray(w * h) { bytes[pos + it].toInt() and 0xFF }, w, h)
+    } finally {
+        out.delete()
+        File(out.path + ".pgm").delete()
+    }
+}
+
 fun render(b: ContentBlock): String = when (b) {
     is HeadingBlock -> "#".repeat(b.level) + " " + b.text + "   [p${b.pageIndex}]"
     is ParagraphBlock -> (if (b.kind.name != "BODY") "(${b.kind}) " else "") + b.text.replace("\n", " ⏎ ") +
         (if (b.styles.isNotEmpty()) "   {styles: " + b.styles.joinToString { "'" + b.text.substring(b.start(it), b.end(it)) + "'=" + it.flags } + "}" else "") + "   [p${b.pageIndex}]"
     is ListItemBlock -> "  ${b.marker} ${b.text}"
-    is ImageBlock -> "[IMAGE ${b.kind} ${b.width}x${b.height} caption=${b.caption}]"
+    is ImageBlock -> "[IMAGE ${b.kind} ${b.width}x${b.height} caption=${b.caption}" + (b.altText?.let { " alt=$it" } ?: "") + "]"
     is TableBlock -> "[TABLE header=${b.headerRows} caption=${b.caption}]\n" + b.rows.joinToString("\n") { "  | " + it.joinToString(" | ") + " |" }
     is SeparatorBlock -> "----"
 }
