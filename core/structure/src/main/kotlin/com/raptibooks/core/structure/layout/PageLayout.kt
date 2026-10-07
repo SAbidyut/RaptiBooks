@@ -41,6 +41,8 @@ class FigureRegion(
     var imagePath: String? = null,
     var imageWidth: Int = 0,
     var imageHeight: Int = 0,
+    /** Typical size (pt) of the text printed inside the figure, 0 if it has none. */
+    val textSize: Float = 0f,
 )
 
 class TableRegion(
@@ -68,7 +70,7 @@ class PageLayout(
     val charCount: Int,
 ) {
     companion object {
-        private const val MAGIC = 0x52424C31 // "RBL1"
+        private const val MAGIC = 0x52424C32 // "RBL2"
 
         fun write(layout: PageLayout, file: File) {
             val tmp = File(file.parentFile, file.name + ".tmp")
@@ -89,6 +91,7 @@ class PageLayout(
                     writeNullable(out, f.imagePath)
                     out.writeInt(f.imageWidth)
                     out.writeInt(f.imageHeight)
+                    out.writeFloat(f.textSize)
                 }
                 out.writeInt(layout.tables.size)
                 for (t in layout.tables) {
@@ -126,7 +129,7 @@ class PageLayout(
                     val kind = FigureKind.entries[inp.readByte().toInt()]
                     val caption = readNullable(inp)
                     val path = readNullable(inp)
-                    FigureRegion(b, kind, caption, path, inp.readInt(), inp.readInt())
+                    FigureRegion(b, kind, caption, path, inp.readInt(), inp.readInt(), inp.readFloat())
                 }
                 val tables = List(inp.readInt()) {
                     val b = readRect(inp)

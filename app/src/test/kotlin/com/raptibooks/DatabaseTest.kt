@@ -35,7 +35,7 @@ class DatabaseTest {
             HeadingBlock(0, 0, 1, "Chapter 1"),
             ParagraphBlock(1, 0, "Hello reflowed world", listOf(InlineStyle(6, 14, InlineStyle.BOLD or InlineStyle.ITALIC))),
             ListItemBlock(2, 1, "1.", "Item", emptyList(), 1),
-            ImageBlock(3, 1, "/p.png", 100, 50, "Figure 1", ImageKind.DIAGRAM),
+            ImageBlock(3, 1, "/p.png", 100, 50, "Figure 1", ImageKind.DIAGRAM, sourceWidth = 352.5f, textSize = 7.5f),
             TableBlock(4, 2, listOf(listOf("a", "b"), listOf("c", "d")), 1, "/t.png", 10, 10, "Table 1"),
             SeparatorBlock(5, 2),
             ParagraphBlock(6, 3, "বাংলা ভাষায় লেখা বই"),

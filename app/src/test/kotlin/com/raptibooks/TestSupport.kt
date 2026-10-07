@@ -3,6 +3,7 @@ package com.raptibooks
 import android.os.Looper
 import com.raptibooks.core.database.NewBook
 import com.raptibooks.core.model.BookStatus
+import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ImageKind
@@ -43,6 +44,15 @@ object TestSupport {
 
     private const val PNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAYCAIAAAAzn+mLAAAAcElEQVR4nGP88OEZw2ACTAPtAHQw6iBCgAWZo5dQR6r+SwuaqOcYBgY0B5FqARkeIAgGXZSNOogQGHUQITDoHISe7UkFlOR8rEUMpQ6iesE46KJs1EGEwKiDCIFB5yD0bE+LFgVJgHG0kU8ADDoHAQB+/RHFUriBNwAAAABJRU5ErkJggg=="
 
+    private fun reindex(b: ContentBlock, i: Int): ContentBlock = when (b) {
+        is HeadingBlock -> b.copy(index = i)
+        is ParagraphBlock -> b.copy(index = i)
+        is ListItemBlock -> b.copy(index = i)
+        is ImageBlock -> b.copy(index = i)
+        is TableBlock -> b.copy(index = i)
+        is SeparatorBlock -> b.copy(index = i)
+    }
+
     /** Seeds a converted book with every block type, plus a converting and a failed book. */
     fun seedLibrary(): Long {
         val books = app.container.bookDao
@@ -51,6 +61,9 @@ object TestSupport {
         val id = books.insert(NewBook("নমুনা বই – Sample Book", "Rapti", "sample.pdf", "/missing.pdf", null, 3, 2048))
         val blocks = listOf(
             HeadingBlock(0, 0, 1, "অধ্যায় ১: ভূমিকা"),
+            ParagraphBlock(0, 0, "অধ্যায় ১: ভূমিকা\t5", listOf(InlineStyle(0, 16, InlineStyle.BOLD)), ParagraphKind.TOC),
+            ParagraphBlock(0, 0, "1.1 Lists and tables\t9", kind = ParagraphKind.TOC),
+            ImageBlock(0, 0, image.absolutePath, 48, 24, "চিত্র ১: wide flow chart", ImageKind.DIAGRAM, sourceWidth = 470f, textSize = 6f),
             ParagraphBlock(1, 0, "বাংলা ভাষায় লেখা বই মোবাইলে পড়ার সময় অনেক সমস্যা হয়। Mixed English text with bold words.", listOf(InlineStyle(66, 70, InlineStyle.BOLD))),
             ParagraphBlock(2, 0, "আমার সোনার বাংলা,\nআমি তোমায় ভালোবাসি।", kind = ParagraphKind.CENTERED),
             HeadingBlock(3, 1, 2, "1.1 Lists and tables"),
@@ -63,8 +76,9 @@ object TestSupport {
             SeparatorBlock(10, 2),
             ParagraphBlock(11, 2, "Last paragraph E = mc2", listOf(InlineStyle(21, 22, InlineStyle.SUPERSCRIPT))),
         )
+            .mapIndexed { i, b -> reindex(b, i) }
         content.insertBlocks(id, blocks)
-        content.saveToc(id, listOf(TocEntry("অধ্যায় ১: ভূমিকা", 1, 0, 0), TocEntry("1.1 Lists and tables", 2, 3, 1)))
+        content.saveToc(id, listOf(TocEntry("অধ্যায় ১: ভূমিকা", 1, 0, 0), TocEntry("1.1 Lists and tables", 2, 6, 1)))
         books.finishConversion(id, blocks.size, "bn+en", false)
         val converting = books.insert(NewBook("Converting book", null, "c.pdf", "", null, 10, 1))
         books.updateProgress(converting, 0.4f, "Analyzing page 4 of 10")

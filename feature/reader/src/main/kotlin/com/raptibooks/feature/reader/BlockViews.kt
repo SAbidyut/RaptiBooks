@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +40,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -83,6 +86,8 @@ data class ReaderStyle(
     val fontSize: TextUnit,
     val lineSpacing: Float,
     val justify: Boolean,
+    /** Side margin of the reading column; figures may extend into it. */
+    val margin: Dp = 0.dp,
 ) {
     val body: TextStyle
         get() = TextStyle(
@@ -103,11 +108,16 @@ fun BlockView(
     block: ContentBlock,
     style: ReaderStyle,
     highlight: String?,
+    onContentsClick: (title: String) -> Unit = {},
     onImageClick: (path: String, caption: String?) -> Unit,
 ) {
     when (block) {
         is HeadingBlock -> HeadingView(block, style, highlight)
-        is ParagraphBlock -> ParagraphView(block, style, highlight)
+        is ParagraphBlock -> if (block.kind == ParagraphKind.TOC) {
+            ContentsEntryView(block, style, highlight, onContentsClick)
+        } else {
+            ParagraphView(block, style, highlight)
+        }
         is ListItemBlock -> ListItemView(block, style, highlight)
         is ImageBlock -> ImageView(block, style, onImageClick)
         is TableBlock -> TableView(block, style, onImageClick)
@@ -178,10 +188,43 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
             text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing),
         )
-        ParagraphKind.NOTE -> Text(
+        ParagraphKind.NOTE, ParagraphKind.TOC -> Text(
             text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2),
         )
+    }
+}
+
+/** A line of the book's printed contents: title and page number, tap to go to the chapter. */
+@Composable
+private fun ContentsEntryView(block: ParagraphBlock, style: ReaderStyle, highlight: String?, onClick: (String) -> Unit) {
+    val tab = block.text.indexOf('\t')
+    val title = if (tab >= 0) block.text.substring(0, tab) else block.text
+    val page = if (tab >= 0) block.text.substring(tab + 1) else ""
+    val main = block.styles.any { it.bold }
+    val text = remember(block, highlight, style.colors) { styled(title, block.styles, highlight, style.colors) }
+    val size = style.fontSize.value * if (main) 1f else 0.94f
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { onClick(title) }
+                .padding(start = if (main) 2.dp else 16.dp, end = 2.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Text(
+                text,
+                style = style.body.copy(fontSize = size.sp, lineHeight = (size * 1.4f).sp, textAlign = TextAlign.Start),
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                page,
+                style = style.body.copy(fontSize = (size * 0.86f).sp, color = style.colors.secondary, textAlign = TextAlign.End),
+                modifier = Modifier.padding(start = 14.dp, top = 1.dp),
+            )
+        }
+        HorizontalDivider(thickness = 0.5.dp, color = style.colors.secondary.copy(alpha = 0.18f))
     }
 }
 
@@ -203,32 +246,49 @@ private fun ListItemView(block: ListItemBlock, style: ReaderStyle, highlight: St
 private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
         val density = LocalDensity.current
-        // Figures rendered at ~3 px/pt; show small ones at their natural size, big ones full width.
-        val natural = with(density) { (block.width / 2.2f).toDp() }
-        val width: Dp = if (block.kind == ImageKind.PAGE) maxWidth else minOf(maxWidth, maxOf(natural, maxWidth * 0.6f))
-        val widthPx = with(density) { width.toPx().roundToInt() }
+        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+        val aspect = (if (block.height > 0) block.width.toFloat() / block.height else 1.5f).coerceIn(0.15f, 10f)
+        // Diagrams use the full screen width (into the page margins); photos stay in the text column.
+        val bleed = if (block.kind == ImageKind.PHOTO) 0.dp else (style.margin - 8.dp).coerceAtLeast(0.dp)
+        val available = maxWidth + bleed * 2
+        val fit = remember(block, available, style.fontSize, screenHeight) {
+            figureSize(block, available, aspect, style.fontSize.value, screenHeight)
+        }
+        val widthPx = with(density) { fit.width.toPx().roundToInt() }
         val image by rememberLocalImage(block.path, widthPx)
-        val aspect = if (block.height > 0) block.width.toFloat() / block.height else 1.5f
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(
-                Modifier
-                    .width(width)
-                    .aspectRatio(aspect.coerceIn(0.2f, 6f))
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(style.colors.surface)
-                    .clickable { onClick(block.path, block.caption) },
-                contentAlignment = Alignment.Center,
-            ) {
-                val img = image
-                if (img != null) {
-                    Image(
-                        img, contentDescription = block.caption, contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(aspect.coerceIn(0.2f, 6f)),
-                        colorFilter = if (style.colors.isDark) DIM else null,
-                    )
-                } else {
-                    CircularProgressIndicator(Modifier.size(24.dp), color = style.colors.accent, strokeWidth = 2.dp)
+        Column(Modifier.bleed(bleed).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            val picture = @Composable {
+                Box(
+                    Modifier
+                        .width(fit.width)
+                        .aspectRatio(aspect)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(style.colors.surface)
+                        .clickable { onClick(block.path, block.caption) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val img = image
+                    if (img != null) {
+                        Image(
+                            img, contentDescription = block.caption, contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(aspect),
+                            colorFilter = if (style.colors.isDark) DIM else null,
+                        )
+                    } else {
+                        CircularProgressIndicator(Modifier.size(24.dp), color = style.colors.accent, strokeWidth = 2.dp)
+                    }
                 }
+            }
+            if (fit.scroll) {
+                // Too wide to read at screen width: show it at a readable size, scrollable sideways.
+                Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) { picture() }
+                Text(
+                    stringResource(R.string.figure_scroll_hint),
+                    style = style.body.copy(fontSize = 12.sp, color = style.colors.secondary, textAlign = TextAlign.Center),
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            } else {
+                picture()
             }
             block.caption?.let {
                 Text(
@@ -237,11 +297,52 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                         fontSize = (style.fontSize.value * 0.82f).sp, fontStyle = FontStyle.Italic,
                         color = style.colors.secondary, textAlign = TextAlign.Center,
                     ),
-                    modifier = Modifier.padding(top = 8.dp, start = 8.dp, end = 8.dp),
+                    modifier = Modifier.padding(top = 8.dp, start = 8.dp + bleed, end = 8.dp + bleed),
                 )
             }
         }
     }
+}
+
+private class FigureSize(val width: Dp, val scroll: Boolean)
+
+/**
+ * Display width of a figure. When the size of its printed labels is known, the figure is shown
+ * so that they stay readable next to the body text; a figure that would need to be wider than
+ * the screen for that scrolls sideways instead of shrinking its text to unreadable sizes.
+ */
+private fun figureSize(block: ImageBlock, available: Dp, aspect: Float, fontSize: Float, screenHeight: Dp): FigureSize {
+    if (block.kind == ImageKind.PAGE) return FigureSize(available, false)
+    var width: Dp
+    var scroll = false
+    if (block.sourceWidth > 0f && block.textSize > 0f) {
+        val pt = block.sourceWidth
+        val comfortable = (pt * (fontSize * 0.72f / block.textSize).coerceIn(1f, 3f)).dp
+        val readable = (pt * fontSize * 0.5f / block.textSize).dp
+        when {
+            comfortable <= available -> width = minOf(available, maxOf(comfortable, available * 0.7f))
+            readable <= available -> width = available
+            else -> {
+                width = minOf(readable, available * 2.4f)
+                scroll = true
+            }
+        }
+    } else {
+        // Older books / photos: rendered at ~3 px/pt; small ones at natural size, big ones full width.
+        width = minOf(available, maxOf((block.width / 2.2f).dp, available * 0.6f))
+    }
+    // Keep tall figures within one screen so they can be seen whole.
+    val maxHeight = screenHeight * 0.8f
+    if (!scroll && width / aspect > maxHeight) width = maxOf(maxHeight * aspect, available * 0.5f)
+    return FigureSize(width, scroll)
+}
+
+/** Lets content extend [extra] beyond both sides of the parent (into the page margins). */
+private fun Modifier.bleed(extra: Dp): Modifier = if (extra <= 0.dp) this else layout { measurable, constraints ->
+    val e = extra.roundToPx()
+    val w = constraints.maxWidth + 2 * e
+    val placeable = measurable.measure(constraints.copy(minWidth = w, maxWidth = w))
+    layout(constraints.maxWidth, placeable.height) { placeable.place(-e, 0) }
 }
 
 @Composable
@@ -373,5 +474,5 @@ internal fun styled(text: String, styles: List<InlineStyle>, highlight: String?,
 internal fun readerStyle(colors: ReaderColors, settings: com.raptibooks.core.model.ReaderSettings): ReaderStyle {
     val body = RaptiFonts.forReader(settings.font)
     val heading = if (settings.font == com.raptibooks.core.model.ReaderFont.SYSTEM_SERIF) FontFamily.Serif else RaptiFonts.sans
-    return ReaderStyle(colors, body, heading, settings.fontSize.sp, settings.lineSpacing, settings.justify)
+    return ReaderStyle(colors, body, heading, settings.fontSize.sp, settings.lineSpacing, settings.justify, settings.margin.dp)
 }

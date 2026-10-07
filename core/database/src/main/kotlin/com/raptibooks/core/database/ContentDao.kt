@@ -204,7 +204,8 @@ internal object BlockCodec {
         is ListItemBlock -> Row(LIST_ITEM, b.level, b.text, InlineStyle.encode(b.styles).ifEmpty { null }, b.marker)
         is ImageBlock -> Row(
             IMAGE, b.kind.ordinal, b.caption ?: "", null,
-            JSONObject().put("path", b.path).put("w", b.width).put("h", b.height).toString(),
+            JSONObject().put("path", b.path).put("w", b.width).put("h", b.height)
+                .put("pt", b.sourceWidth.toDouble()).put("ts", b.textSize.toDouble()).toString(),
         )
         is TableBlock -> Row(
             TABLE, b.headerRows, b.plainText, null,
@@ -233,7 +234,8 @@ internal object BlockCodec {
                 IMAGE -> {
                     val o = JSONObject(extra ?: "{}")
                     ImageBlock(idx, page, o.getString("path"), o.optInt("w"), o.optInt("h"), text.ifEmpty { null },
-                        ImageKind.entries.getOrElse(level) { ImageKind.FIGURE })
+                        ImageKind.entries.getOrElse(level) { ImageKind.FIGURE },
+                        o.optDouble("pt", 0.0).toFloat(), o.optDouble("ts", 0.0).toFloat())
                 }
                 TABLE -> {
                     val o = JSONObject(extra ?: "{}")

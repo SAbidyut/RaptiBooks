@@ -114,6 +114,17 @@ class PageStructurer(private val profile: DocumentProfile) {
                 }
                 is LineItem -> {
                     val line = item.line
+                    val toc = tocEntry(line)
+                    if (toc != null) {
+                        flush(); out += toc.copy(pageIndex = page)
+                        continue
+                    }
+                    val options = if (line.src.chunks.size >= 2) splitOptions(line.text) else emptyList()
+                    if (options.size >= 2) {
+                        flush()
+                        options.forEach { (m, t) -> out += StructuredElement.ListItem(page, m, t, emptyList(), 1) }
+                        continue
+                    }
                     val prevLine = (placed.getOrNull(i - 1)?.item as? LineItem)?.line
                     val nextLine = (placed.getOrNull(i + 1)?.item as? LineItem)?.line
                     val level = headingLevel(line, prevLine, nextLine, leading)
@@ -157,6 +168,37 @@ class PageStructurer(private val profile: DocumentProfile) {
         }
         flush()
         return out
+    }
+
+    // ---------------------------------------------------------------- contents and options
+
+    /** A printed table-of-contents line, kept as a "title\tpage" entry instead of a heading. */
+    private fun tocEntry(line: NLine): StructuredElement.Paragraph? {
+        val m = Patterns.tocEntry.matchEntire(line.text) ?: return null
+        val title = m.groupValues[1].trimEnd('.', ' ', '·', '…', '_')
+        if (title.count { it.isLetter() || BanglaText.isMatra(it) } < 2) return null
+        val main = line.src.isBold || line.size > profile.bodySize * 1.05f
+        val styles = if (main) listOf(InlineStyle(0, title.length, InlineStyle.BOLD)) else emptyList()
+        return StructuredElement.Paragraph(0, title + "\t" + m.groupValues[2], styles, ParagraphKind.TOC, false, line.size)
+    }
+
+    /** "(ক) তিন     (খ) চার" printed side by side: one list item per option. */
+    private fun splitOptions(text: String): List<Pair<String, String>> {
+        val first = Patterns.listMarker.find(text) ?: return emptyList()
+        val marker = first.groupValues[1]
+        if (!marker.endsWith(")")) return emptyList()
+        val rest = Patterns.inlineEnumerator.findAll(text, first.range.last + 1).toList()
+        if (rest.isEmpty()) return emptyList()
+        val out = mutableListOf<Pair<String, String>>()
+        var m = marker
+        var from = first.range.last + 1
+        for (r in rest) {
+            out += m to text.substring(from, r.range.first).trim()
+            m = r.groupValues[1]
+            from = r.range.last + 1
+        }
+        out += m to text.substring(from).trim()
+        return if (out.all { it.second.isNotEmpty() }) out else emptyList()
     }
 
     // ---------------------------------------------------------------- normalisation

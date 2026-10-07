@@ -14,7 +14,13 @@ r = json.loads((CACHE / "resolved.json").read_text())
 libs = r["libs"]
 def files(key): return libs[key]["files"]
 pdfbox_dir = next((CACHE / "exploded" / "com.tom-roush" / "pdfbox-android").glob("*/pdfbox-android-*"))
-classes = [ROOT / "build/offline/classes" / m for m in ["core-model", "core-structure", "core-reflow", "core-pdf"]]
+def module_classes(m):
+    # Pure-Kotlin modules: `rbuild.py test` output is fresher than the last APK build, if newer.
+    full, quick = ROOT / "build/offline/classes" / m, ROOT / "build/offline/test-classes" / m / "main"
+    if quick.is_dir() and (not full.is_dir() or quick.stat().st_mtime > full.stat().st_mtime):
+        return quick
+    return full
+classes = [module_classes(m) for m in ["core-model", "core-structure", "core-reflow", "core-pdf"]]
 cp = [str(OUT / "shim")] + [str(c) for c in classes] + files("org.jetbrains.kotlin:kotlin-stdlib") + \
      [str(pdfbox_dir / "classes.jar"), r["tools"]["androidJar"]]
 OUT.mkdir(parents=True, exist_ok=True)

@@ -50,6 +50,15 @@ object Patterns {
 
     val frontMatter = Regex("^\\s*(?:$FRONT_MATTER_WORDS)\\s*[:.]?\\s*$", RegexOption.IGNORE_CASE)
 
+    /**
+     * Table-of-contents line: a title, a dot leader and a page number
+     * ("অধ্যায় ০২ টুলস.........13"). Group 1 = title, group 2 = page.
+     */
+    val tocEntry = Regex("^\\s*(.*?\\S)\\s*(?:[.·…‥_]\\s?){4,}\\s*($NUM{1,4}|[ivxlcdm]{1,6})\\s*$", RegexOption.IGNORE_CASE)
+
+    /** An enumerator inside a line, e.g. the "(খ)" of "(ক) তিন   (খ) চার" (multiple-choice options). */
+    val inlineEnumerator = Regex("(?<=\\s)(\\(?(?:[ক-হ]|[a-hA-H]|$NUM{1,2})\\))\\s+")
+
     /** "2.3 Methods" -> group 1 = "2.3" */
     val numberedHeading = Regex("^\\s*($NUM{1,2}(?:\\.$NUM{1,2}){0,3})\\.?\\s+\\S")
 

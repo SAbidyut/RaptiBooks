@@ -28,6 +28,7 @@ class DocumentStats {
         val seenSizes = HashSet<Int>()
         val seenEdges = HashSet<String>()
         for (l in lines) {
+            if (Patterns.tocEntry.containsMatchIn(l.text)) continue // contents lines aren't headings
             val key = sizeKey(l.fontSize)
             val letters = TextQuality.letterCount(l.text)
             sizeChars[key] = (sizeChars[key] ?: 0L) + letters

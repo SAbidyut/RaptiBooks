@@ -221,19 +221,21 @@ class ConversionPipeline(
             layout = PageLayout(index, w, h, emptyList(), listOf(FigureRegion(Rect(0f, 0f, w, h), FigureKind.SCAN)), emptyList(), raw.fromOcr, 0)
         }
         try {
-            renderFigures(index, layout, renderer, pageBitmap, figuresDir)
+            renderFigures(index, layout, renderer, pageBitmap, figuresDir, lowMemory)
         } finally {
             pageBitmap?.recycle()
         }
         return layout
     }
 
-    private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File) {
+    private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File, lowMemory: Boolean) {
         layout.figures.forEachIndexed { k, f ->
             val photo = f.kind != FigureKind.VECTOR
             val file = File(dir, "p$index-f$k." + if (photo) "jpg" else "png")
-            val maxScale = if (f.kind == FigureKind.SCAN) 2.2f else 3f
-            val bmp = image(index, f.bounds, renderer, pageBitmap, layout.width, maxScale) ?: return@forEachIndexed
+            // Diagrams are rendered sharp enough to be shown larger than the screen and zoomed.
+            val maxScale = if (f.kind == FigureKind.SCAN) 2.2f else 4f
+            val maxWidth = if (f.kind == FigureKind.SCAN || lowMemory) 1400 else 2400
+            val bmp = image(index, f.bounds, renderer, pageBitmap, layout.width, maxScale, maxWidth) ?: return@forEachIndexed
             if (save(bmp, file, photo)) {
                 f.imagePath = file.absolutePath
                 f.imageWidth = bmp.width
@@ -254,7 +256,15 @@ class ConversionPipeline(
         }
     }
 
-    private fun image(index: Int, region: Rect, renderer: PageRenderer?, pageBitmap: Bitmap?, pageWidth: Float, maxScale: Float): Bitmap? {
+    private fun image(
+        index: Int,
+        region: Rect,
+        renderer: PageRenderer?,
+        pageBitmap: Bitmap?,
+        pageWidth: Float,
+        maxScale: Float,
+        maxWidthPx: Int = 1400,
+    ): Bitmap? {
         if (region.width < 2f || region.height < 2f) return null
         if (pageBitmap != null) {
             val s = pageBitmap.width / pageWidth
@@ -270,7 +280,7 @@ class ConversionPipeline(
             }
         }
         renderer ?: return null
-        var scale = PageRenderer.fitScale(region, maxWidthPx = 1400, maxScale = maxScale)
+        var scale = PageRenderer.fitScale(region, maxWidthPx = maxWidthPx, maxScale = maxScale)
         repeat(2) {
             try {
                 return renderer.renderRegion(index, region, scale)

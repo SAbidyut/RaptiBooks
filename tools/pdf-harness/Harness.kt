@@ -38,6 +38,13 @@ fun convert(pdf: File) {
         layout.figures.forEachIndexed { k, f -> f.imagePath = "fig-p$i-$k.png"; f.imageWidth = f.bounds.width.toInt(); f.imageHeight = f.bounds.height.toInt() }
         stats.add(layout)
         println("page $i: ${e.page.width}x${e.page.height} frags=${e.page.fragments.size} glyphs=${e.glyphsDrawn}/${e.glyphsMapped} images=${e.page.images.size} paths=${e.page.paths.size} -> lines=${layout.lines.size} figures=${layout.figures.size} tables=${layout.tables.size} ocr=$reason")
+        if (System.getenv("HARNESS_PATHS") != null) {
+            e.page.paths.forEach { println("     path ${it.shape} ${it.bounds} stroked=${it.stroked} filled=${it.filled} light=${it.lightFill} seg=${it.segments}") }
+        }
+        if (System.getenv("HARNESS_REGIONS") != null) {
+            layout.figures.forEach { println("     FIGURE ${it.kind} ${it.bounds}") }
+            layout.tables.forEach { println("     TABLE ruled=${it.ruled} ${it.bounds}") }
+        }
         if (System.getenv("HARNESS_LINES") != null) layout.lines.forEach { println("     ${it.bounds.left.toInt()},${it.bounds.top.toInt()} s=${it.fontSize} b=${it.boldRatio} | ${it.text}") }
         layout
     }

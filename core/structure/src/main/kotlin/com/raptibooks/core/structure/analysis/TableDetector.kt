@@ -53,6 +53,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     firstRow.outset(1f).contains(p.bounds) && p.bounds.width > 8f
             } && ys.size > 2
             val table = fillGrid(frags, bounds, columns, ys, ruled = true, header = shadedHeader) ?: continue
+            if (looksLikeDiagram(page, table, (columns.size - 1) * (ys.size - 1))) continue
             tables += table
             used += component
         }
@@ -81,7 +82,9 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                 val bounds = Rect(group.first().start, group.first().pos, group.first().end, group.last().pos)
                 val frags = fragmentsIn(page, bounds)
                 val rows = rowsOf(frags)
-                if (rows.size >= 2 && bounds.height > 20f) {
+                if (rows.size >= 2 && bounds.height > 20f && existing.none { it.bounds.intersects(bounds) } &&
+                    plausibleRuleDelimited(rows, bounds)
+                ) {
                     val columns = inferColumns(frags, bounds)
                     if (columns != null && columns.size >= 3) {
                         val ys = (listOf(bounds.top) + rowBoundaries(rows) + listOf(bounds.bottom)).distinct().sorted()
@@ -138,7 +141,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                 rows[j].top - rows[j - 1].bottom < rows[j - 1].size * 2.2f
             ) j++
             val run = rows.subList(i, j)
-            if (run.size >= 3) {
+            if (run.size >= 3 && !onDrawing(page, Rect.bounding(run.flatMap { r -> r.lines.map { it.bounds } })!!)) {
                 val lefts = cluster(run.flatMap { r -> r.pieces.map { it.left } }, 6f)
                 val support = lefts.associateWith { x -> run.count { r -> r.pieces.any { abs(it.left - x) <= 6f } } }
                 val columns = support.filter { it.value * 2 >= run.size }.keys.sorted()
@@ -190,6 +193,55 @@ class TableDetector(private val lineBuilder: LineBuilder) {
     }
 
     // ------------------------------------------------------------------------------------
+
+    /** Real (non-thin) curved or diagonal shapes overlapping [r]: circles, arrowheads, rounded boxes. */
+    private fun drawingShapes(page: RawPage, r: Rect): Int = page.paths.count { p ->
+        val b = p.bounds
+        p.shape == PathShape.COMPLEX && min(b.width, b.height) > 4f && b.intersects(r) &&
+            b.area < r.area * 4f
+    }
+
+    /** Text sitting on boxes and circles is diagram labelling, not an unruled table. */
+    private fun onDrawing(page: RawPage, r: Rect): Boolean = drawingShapes(page, r.outset(4f)) >= 2
+
+    /**
+     * Flow charts made of boxes joined by arrows form a "grid" of rules too, but most of its
+     * cells are empty (the gaps between boxes) and it contains curved shapes.
+     */
+    private fun looksLikeDiagram(page: RawPage, table: TableRegion, cells: Int): Boolean {
+        if (cells <= 0) return false
+        val filled = table.rows.sumOf { row -> row.count { it.isNotBlank() } }
+        val ratio = filled.toFloat() / cells
+        val shapes = drawingShapes(page, table.bounds.outset(8f))
+        return ratio < 0.2f || (ratio < 0.4f && shapes >= 1) || (ratio < 0.6f && shapes >= 3)
+    }
+
+    /**
+     * Rules above and below a heading, a callout box or a horizontal divider also come in
+     * matching pairs; only accept rows that look like table rows: uniform text size, mostly
+     * split into columns, and no running prose.
+     */
+    private fun plausibleRuleDelimited(rows: List<List<TextFragment>>, bounds: Rect): Boolean {
+        val sizes = rows.flatten().map { it.fontSize }.sorted()
+        if (sizes.isEmpty()) return false
+        val median = sizes[sizes.size / 2]
+        if (sizes.last() > median * 1.2f) return false
+        var split = 0
+        for ((k, row) in rows.withIndex()) {
+            val sorted = row.sortedBy { it.left }
+            val pieces = 1 + sorted.zipWithNext().count { (a, b) -> b.left - a.right > median }
+            if (pieces >= 2) {
+                split++
+                continue
+            }
+            // A sentence or question on its own line is prose, not a table row.
+            val text = lineBuilder.assembleText(row).trim()
+            val words = 1 + sorted.zipWithNext().count { (a, b) -> b.left - a.right > median * 0.15f }
+            val wide = row.maxOf { it.right } - row.minOf { it.left } > bounds.width * 0.55f
+            if (words >= (if (k == 0) 8 else 6) || (words >= 4 && Patterns.endsSentence(text)) || (k > 0 && wide)) return false
+        }
+        return split * 10 >= rows.size * 6
+    }
 
     private fun collectSegments(page: RawPage): List<Seg> {
         val raw = mutableListOf<Seg>()

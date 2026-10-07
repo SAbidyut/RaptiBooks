@@ -23,7 +23,12 @@ data class HeadingBlock(
     override val plainText: String get() = text
 }
 
-enum class ParagraphKind { BODY, QUOTE, CAPTION, CENTERED, NOTE }
+enum class ParagraphKind {
+    BODY, QUOTE, CAPTION, CENTERED, NOTE,
+
+    /** A line of a printed table of contents; text is "title\tpage" (new values go last: stored by ordinal). */
+    TOC,
+}
 
 data class ParagraphBlock(
     override val index: Int,
@@ -58,6 +63,10 @@ data class ImageBlock(
     val height: Int,
     val caption: String? = null,
     val kind: ImageKind = ImageKind.FIGURE,
+    /** Printed width of the figure in points (0 if unknown). */
+    val sourceWidth: Float = 0f,
+    /** Typical size (pt) of the text inside the figure (0 if none/unknown); used to keep labels readable. */
+    val textSize: Float = 0f,
 ) : ContentBlock {
     override val plainText: String get() = caption ?: ""
 }

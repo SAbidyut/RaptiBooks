@@ -129,7 +129,10 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                         FigureKind.SCAN -> ImageKind.PAGE
                         FigureKind.MIXED -> ImageKind.FIGURE
                     }
-                    emit { ImageBlock(it, el.pageIndex, path, region.imageWidth, region.imageHeight, caption, kind) }
+                    emit {
+                        ImageBlock(it, el.pageIndex, path, region.imageWidth, region.imageHeight, caption, kind,
+                            region.bounds.width, region.textSize)
+                    }
                 } else if (caption != null) {
                     emit { ParagraphBlock(it, el.pageIndex, caption, kind = ParagraphKind.CAPTION) }
                 }

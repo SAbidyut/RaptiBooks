@@ -8,6 +8,7 @@ import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.PathShape
 import com.raptibooks.core.structure.raw.RawPage
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Finds figures: raster images and clusters of vector graphics (diagrams, charts, drawings).
@@ -43,7 +44,13 @@ class FigureDetector {
             if (inTable(b)) continue
             when (p.shape) {
                 PathShape.COMPLEX -> if (max(b.width, b.height) >= 4f) {
-                    items += Item(b, strong = p.segments >= 3 || b.width * b.height > 400f, raster = false, complex = true, rect = false)
+                    // Thin pieces (mitred box borders, rules drawn as polygons) are lines, not drawings.
+                    val thin = min(b.width, b.height) <= 4f && max(b.width, b.height) >= min(b.width, b.height) * 6f
+                    items += if (thin) {
+                        Item(b, strong = false, raster = false, complex = false, rect = false)
+                    } else {
+                        Item(b, strong = p.segments >= 3 || b.width * b.height > 400f, raster = false, complex = true, rect = false)
+                    }
                 }
                 PathShape.RECTANGLE -> if (!p.lightFill || p.stroked) {
                     items += Item(b, strong = b.width >= 8f && b.height >= 8f, raster = false, complex = false, rect = true)
@@ -74,6 +81,7 @@ class FigureDetector {
 
         val figures = mutableListOf<FigureRegion>()
         val absorbed = HashSet<TextLine>()
+        val bodySize = typicalSize(lines)
         for (c in clusters) {
             var bounds = boundsOf(c)
             val hasRaster = c.any { it.raster }
@@ -93,12 +101,21 @@ class FigureDetector {
             } else if (inside.size > 15 && textArea > bounds.area * 0.4f) {
                 continue // decorative background image behind text
             }
-            // Short labels that stick out of the drawing belong to it as well.
-            val labels = lines.filter { l ->
-                l !in inside && l.wordCount <= 6 && l.bounds.coveredBy(bounds.outset(4f)) >= 0.3f
+            // Labels around the drawing (titles above nodes, notes beside them) belong to it too,
+            // otherwise they leak into the text and the picture is cropped through them.
+            val members = inside.toMutableSet()
+            var grown = true
+            while (grown) {
+                grown = false
+                for (l in lines) {
+                    if (l in members || l in absorbed) continue
+                    if (isLabel(l, bounds, bodySize, page.width)) {
+                        members += l
+                        bounds = bounds.union(l.bounds)
+                        grown = true
+                    }
+                }
             }
-            labels.forEach { bounds = bounds.union(it.bounds) }
-            val members = inside + labels
             absorbed += members
             val kind = when {
                 page.fromOcr -> FigureKind.SCAN
@@ -106,7 +123,8 @@ class FigureDetector {
                 hasRaster -> FigureKind.MIXED
                 else -> FigureKind.VECTOR
             }
-            figures += FigureRegion(bounds.outset(3f).clamp(page.width, page.height), kind)
+            val textSize = members.map { it.fontSize }.sorted().let { if (it.isEmpty()) 0f else it[it.size / 2] }
+            figures += FigureRegion(bounds.clamp(page.width, page.height), kind, textSize = textSize)
         }
 
         // Merge figures that overlap after label expansion.
@@ -116,23 +134,77 @@ class FigureDetector {
             if (idx >= 0) {
                 val m = merged[idx]
                 val kind = if (m.kind == f.kind) m.kind else FigureKind.MIXED
-                merged[idx] = FigureRegion(m.bounds.union(f.bounds), kind)
+                val size = listOf(m.textSize, f.textSize).filter { it > 0f }.minOrNull() ?: 0f
+                merged[idx] = FigureRegion(m.bounds.union(f.bounds), kind, textSize = size)
             } else {
                 merged += f
             }
         }
 
         // Captions.
-        val result = merged.map { f ->
+        val withCaptions = merged.map { f ->
             val caption = findCaption(f.bounds, lines.filter { it !in absorbed })
             if (caption != null) {
                 absorbed += caption
-                FigureRegion(f.bounds, f.kind, caption.joinToString(" ") { it.text })
+                FigureRegion(f.bounds, f.kind, caption.joinToString(" ") { it.text }, textSize = f.textSize)
             } else {
                 f
             }
         }
+        // Breathing room around the crop, without cutting into the text next to it.
+        val others = lines.filter { it !in absorbed }
+        val result = withCaptions.map { f ->
+            FigureRegion(pad(f.bounds, others, PAD).clamp(page.width, page.height), f.kind, f.caption, textSize = f.textSize)
+        }
         return Result(result, absorbed)
+    }
+
+    private fun pad(b: Rect, others: List<TextLine>, d: Float): Rect {
+        var top = b.top - d
+        var bottom = b.bottom + d
+        var left = b.left - d
+        var right = b.right + d
+        for (l in others) {
+            val r = l.bounds
+            if (r.horizontalOverlap(b) > 0f) {
+                if (r.bottom <= b.top + 1f) top = max(top, min(b.top, r.bottom + 1f))
+                if (r.top >= b.bottom - 1f) bottom = min(bottom, max(b.bottom, r.top - 1f))
+            }
+            if (r.verticalOverlap(b) > 0f) {
+                if (r.right <= b.left + 1f) left = max(left, min(b.left, r.right + 1f))
+                if (r.left >= b.right - 1f) right = min(right, max(b.right, r.left - 1f))
+            }
+        }
+        return Rect(left, top, right, bottom)
+    }
+
+    /** Whether [l] is a label of the drawing at [fig]: inside it, or small text right next to it. */
+    private fun isLabel(l: TextLine, fig: Rect, bodySize: Float, pageWidth: Float): Boolean {
+        if (l.bounds.coveredBy(fig.outset(2f)) >= 0.6f) return true
+        if (Patterns.caption.containsMatchIn(l.text)) return false
+        if (l.wordCount > 10 || l.bounds.width > pageWidth * 0.45f) return false
+        val em = l.fontSize
+        val small = em <= bodySize * 0.92f
+        val boldShort = l.isBold && em <= bodySize * 1.02f && l.wordCount <= 6
+        if (!small && !boldShort) return false
+        val hGap = max(0f, max(fig.left - l.bounds.right, l.bounds.left - fig.right))
+        val vGap = max(0f, max(fig.top - l.bounds.bottom, l.bounds.top - fig.bottom))
+        if (l.bounds.verticalOverlap(fig) >= l.bounds.height * 0.5f && hGap <= max(em * 3f, 12f)) return true
+        val within = l.bounds.horizontalOverlap(fig) >= l.bounds.width * 0.5f
+        val reach = if (small) max(em * 1.2f, 6f) else em * 0.6f
+        return within && vGap <= reach
+    }
+
+    /** Body text size of the page: the font size carrying the most characters. */
+    private fun typicalSize(lines: List<TextLine>): Float {
+        if (lines.isEmpty()) return 10f
+        val bySize = lines.groupBy { (it.fontSize * 2f).toInt() }
+            .maxByOrNull { (_, ls) -> ls.sumOf { it.text.length } }!!
+        return bySize.value.map { it.fontSize }.average().toFloat()
+    }
+
+    private companion object {
+        const val PAD = 6f
     }
 
     private fun boundsOf(c: List<Item>): Rect = Rect.bounding(c.map { it.bounds })!!
@@ -158,7 +230,7 @@ class FigureDetector {
     private fun findCaption(bounds: Rect, lines: List<TextLine>): List<TextLine>? {
         val near = lines.filter { l ->
             l.bounds.horizontalOverlap(bounds) > 0f &&
-                (l.bounds.top >= bounds.bottom - 2f && l.bounds.top - bounds.bottom < l.fontSize * 2.5f ||
+                (l.bounds.top >= bounds.bottom - 2f && l.bounds.top - bounds.bottom < l.fontSize * 3.5f ||
                     l.bounds.bottom <= bounds.top + 2f && bounds.top - l.bounds.bottom < l.fontSize * 2.5f)
         }.sortedBy { it.bounds.top }
         val first = near.firstOrNull { Patterns.caption.containsMatchIn(it.text) } ?: return null

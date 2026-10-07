@@ -126,6 +126,22 @@ class ReaderViewModel(
 
     suspend fun blockForPage(page: Int): Int? = repo.firstBlockOfPage(bookId, page)
 
+    /**
+     * Where a line of the printed contents (at block [from]) points to: the matching chapter in
+     * the book's table of contents, or else the next place its title appears.
+     */
+    suspend fun contentsTarget(title: String, from: Int, toc: List<TocEntry>): Int? {
+        val key = contentsKey(title)
+        if (key.length < 3) return null
+        toc.firstOrNull { e ->
+            val k = contentsKey(e.title)
+            e.blockIndex > from && (k == key || (minOf(k.length, key.length) >= 4 && (k.startsWith(key) || key.startsWith(k))))
+        }?.let { return it.blockIndex }
+        return repo.search(bookId, title).firstOrNull { it.blockIndex > from }?.blockIndex
+    }
+
+    private fun contentsKey(s: String): String = s.filter { it.isLetterOrDigit() || it.code in 0x0980..0x09FF }.lowercase()
+
     suspend fun pageForBlock(index: Int): Int = repo.pageOfBlock(bookId, index) ?: 0
 
     override fun onCleared() {

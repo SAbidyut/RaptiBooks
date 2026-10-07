@@ -204,7 +204,12 @@ private fun Reader(
                 if (block == null) {
                     BlockPlaceholder(style)
                 } else {
-                    BlockView(block, style, vm.highlight) { path, caption -> viewer = path to caption }
+                    BlockView(
+                        block, style, vm.highlight,
+                        onContentsClick = { title ->
+                            scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
+                        },
+                    ) { path, caption -> viewer = path to caption }
                 }
             }
         }
