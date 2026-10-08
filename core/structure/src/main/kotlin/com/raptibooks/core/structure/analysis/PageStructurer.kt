@@ -470,7 +470,9 @@ class PageStructurer(private val profile: DocumentProfile) {
             return (2 + depth).coerceAtMost(4)
         }
         // A bold line between paragraphs at body size: minor heading.
-        if (bold && ratio >= 0.95f && words <= 12 && isolated && !text.endsWith(',') &&
+        // A worked formula ("I = 0.58 × 30 = 17.4 A") set in bold is a result, not a heading.
+        val formula = text.any { it in "=≈≠<>" } && text.any { it.isDigit() }
+        if (bold && !formula && ratio >= 0.95f && words <= 12 && isolated && !text.endsWith(',') &&
             (!Patterns.endsSentence(text) || text.endsWith(':')) &&
             !(prev != null && prev.src.isBold && gapAbove < leading * 0.6f)
         ) {

@@ -192,4 +192,16 @@ class ConversionTest {
         // "= 160 px/m" is part of the worked formula, not a stray line.
         assertTrue(dump, blocks.none { it.plainText.trim() == "= 160 px/m" || it.plainText.contains("= 160 px/m ⏎") })
     }
+
+    @Test
+    fun keepsBoxesWithRulesAndBoldResultsAsText() {
+        val (id, content) = convert("callout_rules.pdf")
+        val blocks = content.blocks(id, 0, 10_000)
+        val dump = blocks.joinToString("\n") { it.javaClass.simpleName + ": " + it.plainText }
+        assertTrue(dump, blocks.none { it is TableBlock })
+        // A bold worked formula is a result line, not a heading.
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("Iset = 0.58") })
+        assertTrue(dump, blocks.none { it is HeadingBlock && it.text.contains("0.58") })
+        assertTrue(dump, blocks.any { it is HeadingBlock && it.text == "উদাহরণ ১৪.৪" })
+    }
 }

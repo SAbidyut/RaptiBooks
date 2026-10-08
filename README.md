@@ -175,6 +175,8 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
 ## Licenses
 
 App code: see repository. Fonts: Tiro Bangla, Hind Siliguri (SIL Open Font License,
-`core/ui/src/main/assets/licenses`). PdfBox-Android (Apache 2.0), Tesseract and tessdata
+`core/ui/src/main/assets/licenses`); in the Regular and SemiBold weights of Hind Siliguri the
+Bengali digit ১ (U+09E7), which was drawn as a tiny hard-to-read mark, is replaced by a clear
+glyph (from Tiro Bangla, resp. Hind Siliguri Bold). PdfBox-Android (Apache 2.0), Tesseract and tessdata
 (Apache 2.0), JavaCPP presets (Apache 2.0 / GPL with classpath exception), AndroidX
 (Apache 2.0).

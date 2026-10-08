@@ -392,11 +392,16 @@ class TableDetector(private val lineBuilder: LineBuilder) {
         val solid = frags.filter { !it.isSpace }
         if (solid.size < 4) return null
         val em = solid.map { it.fontSize }.sorted()[solid.size / 2]
-        // Ignore rows that span the full width without internal gaps (titles, merged cells).
-        val rows = rowsOf(solid).filter { row ->
+        // Rows that span the full width without internal gaps are titles or merged cells; two or
+        // more of them are paragraphs, and then the short lines between them are only line ends
+        // of running text, not table rows.
+        val allRows = rowsOf(solid)
+        fun fullWidth(row: List<TextFragment>): Boolean {
             val sorted = row.sortedBy { it.left }
-            sorted.zipWithNext().any { (a, b) -> b.left - a.right > em } || (row.maxOf { it.right } - row.minOf { it.left }) < bounds.width * 0.8f
+            return sorted.zipWithNext().none { (a, b) -> b.left - a.right > em } && (row.maxOf { it.right } - row.minOf { it.left }) >= bounds.width * 0.8f
         }
+        if (allRows.count { fullWidth(it) } >= 2) return null
+        val rows = allRows.filter { !fullWidth(it) }
         if (rows.size < 2) return null
         val step = 1f
         val bins = ((bounds.width) / step).toInt() + 1
