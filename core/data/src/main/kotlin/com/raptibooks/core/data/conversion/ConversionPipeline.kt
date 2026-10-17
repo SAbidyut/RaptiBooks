@@ -108,7 +108,7 @@ class ConversionPipeline(
                 // ------------------------------------------------------------- pass 0
                 // Learn the book's body text size first, so every page is judged against the
                 // same reference (labels, formulas and captions are measured against it).
-                val bodySize = documentBodySize(extractor, pageCount, cacheDir) { done, total ->
+                val survey = documentBodySize(extractor, pageCount, cacheDir) { done, total ->
                     onProgress(Progress(0.02f + 0.06f * done / total, context.getString(com.raptibooks.core.data.R.string.progress_scan)))
                 }
 
@@ -125,7 +125,7 @@ class ConversionPipeline(
                         }
                     }
                     onProgress(Progress(0.08f + 0.77f * i / pageCount, msg(com.raptibooks.core.data.R.string.progress_page, i + 1, pageCount)))
-                    val layout = analysePage(i, pageCount, extractor, renderer, book.ocrMode, lowMemory, figuresDir, bodySize, ::ocrEngine) { message ->
+                    val layout = analysePage(i, pageCount, extractor, renderer, book.ocrMode, lowMemory, figuresDir, survey.bodySize, survey.digital, ::ocrEngine) { message ->
                         onProgress(Progress(0.08f + 0.77f * i / pageCount, message))
                     }
                     usedOcr = usedOcr || layout.fromOcr
@@ -156,6 +156,7 @@ class ConversionPipeline(
                 content.insertBlocks(bookId, batch)
                 if (engine.blockCount == 0) throw ConversionException(context.getString(com.raptibooks.core.data.R.string.error_no_content))
                 val outline = extractor.outline().map { OutlineItem(it.title, it.pageIndex, it.level) }
+                content.saveBoxes(bookId, engine.boxes())
                 content.saveToc(bookId, TocBuilder.build(outline, headings, engine.pageStarts(), engine.blockCount, engine.printedContents()))
                 content.notifyContentChanged()
                 books.finishConversion(bookId, engine.blockCount, profile.language, usedOcr, LAYOUT_VERSION)
@@ -182,6 +183,7 @@ class ConversionPipeline(
         lowMemory: Boolean,
         figuresDir: File,
         bodySize: Float?,
+        digital: Boolean,
         ocrEngine: () -> OcrEngine?,
         report: suspend (String) -> Unit,
     ): PageLayout {
@@ -201,8 +203,13 @@ class ConversionPipeline(
         val wantOcr = when (mode) {
             OcrMode.ALWAYS -> true
             OcrMode.NEVER -> false
-            OcrMode.AUTO -> extraction == null ||
-                OcrDecision.evaluate(extraction.page, extraction.glyphsDrawn, extraction.glyphsMapped) != OcrDecision.Reason.NONE
+            OcrMode.AUTO -> extraction == null || when (OcrDecision.evaluate(extraction.page, extraction.glyphsDrawn, extraction.glyphsMapped)) {
+                OcrDecision.Reason.NONE -> false
+                // In a book with a real text layer, a page that is one big picture (the cover, a
+                // poster, a full-page illustration) is shown as that picture, not read by OCR.
+                OcrDecision.Reason.SCANNED, OcrDecision.Reason.OUTLINED_TEXT -> !digital
+                else -> true
+            }
         }
         var raw: RawPage = extraction?.page ?: RawPage(index, w, h, emptyList())
         var pageBitmap: Bitmap? = null
@@ -392,14 +399,23 @@ class ConversionPipeline(
      * Body text size of the whole book: the size that carries the most characters, from up to
      * [SAMPLE_PAGES] pages spread over the book. Cached so a resumed conversion skips it.
      */
+    /** What the survey learns: the body text size, and whether the book has a real text layer. */
+    private class Survey(val bodySize: Float?, val digital: Boolean)
+
     private suspend fun documentBodySize(
         extractor: PdfExtractor,
         pageCount: Int,
         cacheDir: File,
         report: suspend (Int, Int) -> Unit,
-    ): Float? {
+    ): Survey {
         val cache = File(cacheDir, "body-size.txt")
-        cache.takeIf { it.exists() }?.readText()?.toFloatOrNull()?.let { return it.takeIf { v -> v > 0f } }
+        cache.takeIf { it.exists() }?.readText()?.split(' ')?.let { parts ->
+            val size = parts.getOrNull(0)?.toFloatOrNull()
+            val digital = parts.getOrNull(1)?.toBooleanStrictOrNull()
+            if (size != null && digital != null) return Survey(size.takeIf { it > 0f }, digital)
+        }
+        var textPages = 0
+        var sampled = 0
         val pages = if (pageCount <= SAMPLE_PAGES) (0 until pageCount).toList()
         else List(SAMPLE_PAGES) { it * (pageCount - 1) / (SAMPLE_PAGES - 1) }.distinct()
         val chars = HashMap<Int, Long>()
@@ -414,15 +430,21 @@ class ConversionPipeline(
                 System.gc()
                 continue
             }
+            var pageChars = 0
             for (f in page.fragments) {
                 if (f.isSpace) continue
                 val key = (f.fontSize * 2f).roundToInt()
                 chars[key] = (chars[key] ?: 0L) + f.text.length
+                pageChars += f.text.length
             }
+            sampled++
+            if (pageChars >= 200) textPages++
         }
         val body = chars.maxByOrNull { it.value }?.key?.let { it / 2f }
-        runCatching { cache.writeText((body ?: 0f).toString()) }
-        return body
+        // Most pages carry real text: a born-digital book, not a scan.
+        val digital = sampled >= 3 && textPages * 10 >= sampled * 7
+        runCatching { cache.writeText("${body ?: 0f} $digital") }
+        return Survey(body, digital)
     }
 
     private fun image(
@@ -488,7 +510,7 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 3
+        const val LAYOUT_VERSION = 4
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60

@@ -43,7 +43,9 @@ class TableDetector(private val lineBuilder: LineBuilder) {
             val frags = fragmentsIn(page, bounds)
             var columns = xs
             if (xs.size == 2) {
-                // Only an outer box: infer the columns from the text, otherwise it's a frame.
+                // Only an outer box: a frame around running text (a worked example, a note) is a
+                // box, not a table; otherwise infer the columns from the text.
+                if (framesProse(frags, bounds)) continue
                 columns = inferColumns(frags, bounds) ?: continue
             }
             if ((columns.size - 1) * (ys.size - 1) < 2) continue
@@ -348,6 +350,29 @@ class TableDetector(private val lineBuilder: LineBuilder) {
 
     private fun rowBoundaries(rows: List<List<TextFragment>>): List<Float> =
         rows.zipWithNext { a, b -> (a.maxOf { it.bottom } + b.minOf { it.top }) / 2f }
+
+    /**
+     * Whether a frame without inner rules surrounds running text: a line of prose (many words,
+     * no wide gaps, spanning most of the frame) or a sentence. Worked examples, definitions and
+     * notes are printed this way; reading them as a table scrambles their text into columns.
+     */
+    private fun framesProse(frags: List<TextFragment>, bounds: Rect): Boolean {
+        val rows = rowsOf(frags)
+        if (rows.isEmpty()) return false
+        val em = rows.flatten().map { it.fontSize }.sorted().let { it[it.size / 2] }
+        var prose = 0
+        for (row in rows) {
+            val sorted = row.sortedBy { it.left }
+            val gaps = sorted.zipWithNext().count { (a, b) -> b.left - a.right > em * 1.2f }
+            val width = sorted.last().right - sorted.first().left
+            val text = lineBuilder.assembleText(row)
+            // Word gaps (fragments carry no spaces here).
+            val words = 1 + sorted.zipWithNext().count { (a, b) -> b.left - a.right > em * 0.15f }
+            if (gaps == 0 && words >= 6 && width > bounds.width * 0.6f) prose++
+            else if (gaps == 0 && words >= 4 && Patterns.endsSentence(text) && width > bounds.width * 0.4f) prose++
+        }
+        return prose >= 2 || (prose >= 1 && rows.size <= 3)
+    }
 
     /** Column boundaries (including the outer edges) from vertical gaps in the text. */
     private fun inferColumns(frags: List<TextFragment>, bounds: Rect): List<Float>? {

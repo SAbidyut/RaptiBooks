@@ -72,7 +72,16 @@ fun convert(pdf: File) {
     val headings = engine.finish()
     val toc = TocBuilder.build(ex.outline().map { OutlineItem(it.title, it.pageIndex, it.level) }, headings, engine.pageStarts(), engine.blockCount, engine.printedContents())
     println("-".repeat(100))
-    for (b in blocks) println(render(b))
+    val boxes = engine.boxes()
+    for (b in blocks) {
+        val box = boxes.firstOrNull { b.index in it.startIndex..it.endIndex }
+        val mark = when {
+            box == null -> ""
+            b.index == box.startIndex -> "┌%06X ".format(box.accent)
+            else -> "│ "
+        }
+        println(mark + render(b))
+    }
     println("-".repeat(100))
     println("TOC: " + toc.joinToString(" | ") { "${"  ".repeat(it.level - 1)}${it.title} @${it.blockIndex}" })
     println("time: ${System.currentTimeMillis() - t0} ms, blocks=${blocks.size}")

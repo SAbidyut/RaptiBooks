@@ -54,6 +54,8 @@ class VectorPath(
     val lightFill: Boolean = false,
     /** Number of path segments, a rough measure of drawing complexity. */
     val segments: Int = 1,
+    /** Paint colour as 0xRRGGBB (fill colour of filled paths, else stroke colour); -1 if unknown. */
+    val color: Int = -1,
 )
 
 class RawPage(

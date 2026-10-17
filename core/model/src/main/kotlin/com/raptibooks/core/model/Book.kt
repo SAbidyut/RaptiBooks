@@ -51,6 +51,17 @@ data class TocEntry(
     val pageIndex: Int,
 )
 
+/**
+ * Blocks [startIndex]..[endIndex] were printed inside a tinted callout box (worked example,
+ * definition, note, warning); colours are 0xRRGGBB.
+ */
+data class BoxSpan(
+    val startIndex: Int,
+    val endIndex: Int,
+    val fill: Int,
+    val accent: Int,
+)
+
 data class Bookmark(
     val id: Long,
     val bookId: Long,

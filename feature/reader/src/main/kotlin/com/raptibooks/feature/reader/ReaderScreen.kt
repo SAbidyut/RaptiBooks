@@ -204,12 +204,14 @@ private fun Reader(
                 if (block == null) {
                     BlockPlaceholder(style)
                 } else {
-                    BlockView(
-                        block, style, vm.highlight,
-                        onContentsClick = { title ->
-                            scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
-                        },
-                    ) { path, caption, ink -> viewer = Triple(path, caption, ink) }
+                    CalloutBox(ready.boxes.find(index), index, style) {
+                        BlockView(
+                            block, style, vm.highlight,
+                            onContentsClick = { title ->
+                                scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
+                            },
+                        ) { path, caption, ink -> viewer = Triple(path, caption, ink) }
+                    }
                 }
             }
         }

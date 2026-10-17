@@ -15,7 +15,8 @@ object Patterns {
         RegexOption.IGNORE_CASE,
     )
 
-    val tableCaption = Regex("^\\s*(?:table|সারণি|সারণী|টেবিল)\\s*$NUM*", RegexOption.IGNORE_CASE)
+    /** "Table 3", "সারণি ৪.৫:" — a number or a colon must follow ("সারণির শেষ সারি…" is prose). */
+    val tableCaption = Regex("^\\s*(?:table|সারণি|সারণী|টেবিল)\\s*(?:$NUM|[:.।\\-–—])", RegexOption.IGNORE_CASE)
 
     /** Bullet or enumerator at the start of a line, followed by whitespace. */
     val listMarker = Regex(
@@ -44,7 +45,9 @@ object Patterns {
     /** "Chapter 4", "অধ্যায় ৩", "Part II" */
     val chapter = Regex(
         "^\\s*(?:$CHAPTER_WORDS)\\s*(?:$NUM+|[IVXLC]+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|" +
-            "এক|দুই|তিন|চার|পাঁচ|ছয়|সাত|আট|নয়|দশ|প্রথম|দ্বিতীয়|তৃতীয়|চতুর্থ|পঞ্চম)?(?=[\\s:.\\-–—]|$)",
+            "এক|দুই|তিন|চার|পাঁচ|ছয়|সাত|আট|নয়|দশ|প্রথম|দ্বিতীয়|তৃতীয়|চতুর্থ|পঞ্চম)?" +
+            // Not "অধ্যায় ১৬-এর…" or "অধ্যায় ৭.১০-এ…": a reference inside a sentence.
+            "(?=[\\s:–—]|\\.(?![0-9০-৯])|-(?![\\u0980-\\u09FF])|$)",
         RegexOption.IGNORE_CASE,
     )
 

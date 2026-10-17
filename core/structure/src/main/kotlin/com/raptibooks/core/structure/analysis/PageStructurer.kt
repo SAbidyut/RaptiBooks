@@ -3,6 +3,7 @@ package com.raptibooks.core.structure.analysis
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.structure.geometry.Rect
+import com.raptibooks.core.structure.layout.BoxRegion
 import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.layout.TableRegion
@@ -40,6 +41,9 @@ sealed interface StructuredElement {
     data class Figure(override val pageIndex: Int, val region: FigureRegion) : StructuredElement
 
     data class Table(override val pageIndex: Int, val region: TableRegion) : StructuredElement
+
+    /** Start ([start] = true) or end of the content of a callout box. */
+    data class Box(override val pageIndex: Int, val start: Boolean, val region: BoxRegion) : StructuredElement
 }
 
 /**
@@ -108,7 +112,21 @@ class PageStructurer(private val profile: DocumentProfile) {
             emit(b, page, out)
         }
 
+        // Callout boxes: everything printed inside one is marked as its content.
+        var box: BoxRegion? = null
+        fun boxOf(item: Item): BoxRegion? {
+            val b = item.bounds
+            return layout.boxes.firstOrNull { it.bounds.outset(1f).contains(b.centerX, b.centerY) }
+        }
+
         for ((i, p) in placed.withIndex()) {
+            val itemBox = boxOf(p.item)
+            if (itemBox !== box) {
+                flush()
+                box?.let { out += StructuredElement.Box(page, false, it) }
+                itemBox?.let { out += StructuredElement.Box(page, true, it) }
+                box = itemBox
+            }
             when (val item = p.item) {
                 is FigureItem -> {
                     flush(); out += StructuredElement.Figure(page, item.figure)
@@ -136,6 +154,12 @@ class PageStructurer(private val profile: DocumentProfile) {
                     if (options.size >= 2) {
                         flush()
                         options.forEach { (m, t) -> out += StructuredElement.ListItem(page, m, t, emptyList(), 1) }
+                        continue
+                    }
+                    // A formula set on its own line (centred or indented): one block of its own.
+                    if (MathText.isFormula(line.text) && displayed(line, p.column)) {
+                        flush()
+                        out += StructuredElement.Paragraph(page, line.text, line.styles, ParagraphKind.FORMULA, false, line.size)
                         continue
                     }
                     val prevLine = (placed.getOrNull(i - 1)?.item as? LineItem)?.line
@@ -180,6 +204,7 @@ class PageStructurer(private val profile: DocumentProfile) {
             }
         }
         flush()
+        box?.let { out += StructuredElement.Box(page, false, it) }
         return groupOptions(out)
     }
 
@@ -388,7 +413,13 @@ class PageStructurer(private val profile: DocumentProfile) {
         val isolated = gapAbove > leading * 0.6f || gapBelow > leading * 0.6f ||
             (next != null && !next.src.isBold && next.size <= line.size)
 
-        if (Patterns.chapter.containsMatchIn(text) && words <= 10 && (ratio >= 1.05f || bold || words <= 4)) return 1
+        if (MathText.isFormula(text)) return null
+        val chapter = Patterns.chapter.find(text)
+        if (chapter != null && words <= 10 && !(Patterns.endsSentence(text) && !text.endsWith(':'))) {
+            // "অধ্যায় ৩", "Chapter IV" — a bare word ("ভাগ করে…", "Part of…") needs a heading's size.
+            val numbered = chapter.value.trim().split(Regex("\\s+")).size >= 2
+            if ((numbered && (ratio >= 1.05f || bold || words <= 4)) || ratio >= 1.3f) return 1
+        }
         if (Patterns.frontMatter.matches(text) && (ratio >= 1.08f || bold)) return 1
         // "Example 1.4" on its own line (often on a coloured banner): a minor heading.
         if (Patterns.exampleLabel.matches(text) && (bold || ratio >= 1.0f || isolated)) {
@@ -431,8 +462,29 @@ class PageStructurer(private val profile: DocumentProfile) {
         return deltas[deltas.size / 2]
     }
 
+    /** A line set apart from the text column: centred, or indented well past its left edge. */
+    private fun displayed(l: NLine, column: Rect): Boolean =
+        isCentered(l, column) || (l.bounds.left > column.left + l.size * 2f && l.bounds.width < column.width * 0.8f)
+
+    /** "প্রদত্ত :", "উত্তর :", "Note:" printed in bold at the start of a line: a new paragraph. */
+    private fun startsWithLabel(l: NLine): Boolean {
+        val bold = l.styles.firstOrNull { it.bold && it.start == 0 } ?: return false
+        val colon = l.text.indexOfFirst { it == ':' || it == 'ঃ' }
+        if (colon < 0 || colon > 30 || colon > bold.end + 2) return false
+        return l.text.substring(0, colon).trim().split(' ').count { it.isNotBlank() } in 1..4
+    }
+
     private fun continues(b: Builder, cur: NLine, column: Rect, leading: Float): Boolean {
         val prev = b.last
+        if (b.marker == null && startsWithLabel(cur)) return false
+        // A centred line and a line at the left edge are never one paragraph.
+        if (column == b.column) {
+            val em = cur.size
+            if (isCentered(prev, column) && !isCentered(cur, column) && cur.bounds.left < column.left + em) return false
+            if (!isCentered(prev, column) && prev.bounds.left < column.left + em && isCentered(cur, column) &&
+                cur.bounds.left > column.left + em * 2f
+            ) return false
+        }
         if (column != b.column) {
             // A paragraph running from the bottom of one column to the top of the next.
             val first = cur.text.firstOrNull() ?: return false
