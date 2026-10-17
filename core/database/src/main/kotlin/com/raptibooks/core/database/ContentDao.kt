@@ -3,6 +3,7 @@ package com.raptibooks.core.database
 import android.content.ContentValues
 import android.database.Cursor
 import com.raptibooks.core.model.Bookmark
+import com.raptibooks.core.model.BoxSpan
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
@@ -29,8 +30,9 @@ class ContentDao(private val db: RaptiDatabase) {
         db.transaction {
             delete("blocks", "book_id = ?", arrayOf(bookId.toString()))
             delete("toc", "book_id = ?", arrayOf(bookId.toString()))
+            delete("boxes", "book_id = ?", arrayOf(bookId.toString()))
         }
-        db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC)
+        db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC, RaptiDatabase.BOXES)
     }
 
     fun insertBlocks(bookId: Long, blocks: List<ContentBlock>) {
@@ -145,6 +147,37 @@ class ContentDao(private val db: RaptiDatabase) {
         ).use { c ->
             val out = ArrayList<TocEntry>(c.count)
             while (c.moveToNext()) out += TocEntry(c.getString(0), c.getInt(1), c.getInt(2), c.getInt(3))
+            out
+        }
+
+    // ------------------------------------------------------------------ boxes
+
+    fun saveBoxes(bookId: Long, boxes: List<BoxSpan>) {
+        db.transaction {
+            delete("boxes", "book_id = ?", arrayOf(bookId.toString()))
+            for (b in boxes) {
+                insert(
+                    "boxes", null,
+                    ContentValues().apply {
+                        put("book_id", bookId)
+                        put("start_idx", b.startIndex)
+                        put("end_idx", b.endIndex)
+                        put("fill", b.fill)
+                        put("accent", b.accent)
+                    },
+                )
+            }
+        }
+        db.notifyChanged(RaptiDatabase.BOXES)
+    }
+
+    fun boxes(bookId: Long): List<BoxSpan> =
+        db.readableDatabase.rawQuery(
+            "SELECT start_idx, end_idx, fill, accent FROM boxes WHERE book_id = ? ORDER BY start_idx",
+            arrayOf(bookId.toString()),
+        ).use { c ->
+            val out = ArrayList<BoxSpan>(c.count)
+            while (c.moveToNext()) out += BoxSpan(c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3))
             out
         }
 

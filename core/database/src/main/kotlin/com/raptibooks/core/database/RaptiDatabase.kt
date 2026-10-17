@@ -101,6 +101,23 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX bookmarks_book ON bookmarks(book_id, block_idx)")
+        createBoxes(db)
+    }
+
+    /** Callout boxes (worked examples, notes) as ranges of blocks. */
+    private fun createBoxes(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE boxes (
+                book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                start_idx INTEGER NOT NULL,
+                end_idx INTEGER NOT NULL,
+                fill INTEGER NOT NULL,
+                accent INTEGER NOT NULL,
+                PRIMARY KEY (book_id, start_idx)
+            ) WITHOUT ROWID
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -110,6 +127,7 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
             db.execSQL("ALTER TABLE books ADD COLUMN layout_version INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE books ADD COLUMN restore_page INTEGER NOT NULL DEFAULT -1")
         }
+        if (oldVersion < 3) createBoxes(db)
     }
 
     internal fun notifyChanged(vararg tables: String) {
@@ -141,11 +159,12 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
 
     companion object {
         private const val NAME = "raptibooks.db"
-        private const val VERSION = 2
+        private const val VERSION = 3
 
         const val BOOKS = "books"
         const val BLOCKS = "blocks"
         const val TOC = "toc"
         const val BOOKMARKS = "bookmarks"
+        const val BOXES = "boxes"
     }
 }

@@ -31,6 +31,9 @@ enum class ParagraphKind {
 
     /** Answer options of a multiple-choice question; one "marker\ttext" per line. */
     OPTIONS,
+
+    /** A displayed formula or calculation step kept as text ("P = V × I = 230 × 0.43 ≈ 99 W"). */
+    FORMULA,
 }
 
 data class ParagraphBlock(

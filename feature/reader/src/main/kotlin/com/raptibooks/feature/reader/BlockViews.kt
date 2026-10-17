@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +27,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +45,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
@@ -65,6 +71,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.raptibooks.core.model.BoxSpan
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
@@ -158,7 +165,8 @@ private fun HeadingView(block: HeadingBlock, style: ReaderStyle, highlight: Stri
                 fontWeight = if (block.level <= 3) FontWeight.Bold else FontWeight.SemiBold,
                 fontSize = size.sp,
                 lineHeight = (size * 1.3f).sp,
-                color = if (block.level == 1) style.colors.text else style.colors.text.copy(alpha = 0.92f),
+                color = LocalBoxAccent.current?.takeIf { block.level >= 3 }
+                    ?: if (block.level == 1) style.colors.text else style.colors.text.copy(alpha = 0.92f),
                 textDirection = TextDirection.Content,
             ),
         )
@@ -191,10 +199,81 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
             text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing),
         )
+        ParagraphKind.FORMULA -> FormulaView(text, style)
         ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> Text(
             text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2),
         )
+    }
+}
+
+/**
+ * A formula or a step of a calculation printed on its own line: centred, a little larger than
+ * the text, never broken across lines (a long one scrolls sideways).
+ */
+@Composable
+private fun FormulaView(text: AnnotatedString, style: ReaderStyle) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = (style.fontSize.value * 0.3f).dp)) {
+        val width = maxWidth
+        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Text(
+                text,
+                style = style.body.copy(
+                    fontSize = (style.fontSize.value * 1.05f).sp,
+                    textAlign = TextAlign.Center,
+                    hyphens = Hyphens.None,
+                ),
+                softWrap = false,
+                modifier = Modifier.widthIn(min = width).padding(horizontal = 4.dp),
+            )
+        }
+    }
+}
+
+/** Accent colour of the callout box the current block is in (for its headings). */
+internal val LocalBoxAccent = compositionLocalOf<Color?> { null }
+
+/**
+ * Draws a block as part of a callout card — a worked example, definition, note or warning as
+ * the book printed it in a tinted box: the box's colour as a bar on the left and a light tint
+ * behind, rounded at the first and last block of the box.
+ */
+@Composable
+fun CalloutBox(span: BoxSpan?, index: Int, style: ReaderStyle, content: @Composable () -> Unit) {
+    if (span == null) {
+        content()
+        return
+    }
+    val colors = style.colors
+    val accent = remember(span.accent, colors) { boxAccent(span.accent, colors) }
+    val first = index == span.startIndex
+    val last = index == span.endIndex
+    val r = 10.dp
+    val shape = RoundedCornerShape(
+        topStart = if (first) r else 0.dp, topEnd = if (first) r else 0.dp,
+        bottomStart = if (last) r else 0.dp, bottomEnd = if (last) r else 0.dp,
+    )
+    val tint = accent.copy(alpha = if (colors.isDark) 0.16f else 0.075f)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = if (first) 8.dp else 0.dp, bottom = if (last) 14.dp else 0.dp)
+            .clip(shape)
+            .background(tint)
+            .drawBehind { drawRect(accent, size = Size(4.dp.toPx(), size.height)) }
+            .padding(start = 16.dp, end = 12.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 6.dp else 0.dp),
+    ) {
+        CompositionLocalProvider(LocalBoxAccent provides accent) { content() }
+    }
+}
+
+/** The box's printed accent colour, adjusted to stay readable on the current theme. */
+private fun boxAccent(rgb: Int, colors: ReaderColors): Color {
+    val c = Color(0xFF000000.toInt() or rgb)
+    return when {
+        colors.isDark -> lerp(c, Color.White, 0.45f)
+        c.luminance() > 0.45f -> lerp(c, Color.Black, 0.35f)
+        else -> c
     }
 }
 
@@ -285,7 +364,8 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
         val aspect = (if (block.height > 0) block.width.toFloat() / block.height else 1.5f).coerceIn(0.15f, 10f)
         // Diagrams use the full screen width (into the page margins); photos stay in the text column.
-        val bleed = if (block.kind == ImageKind.PHOTO) 0.dp else (style.margin - 8.dp).coerceAtLeast(0.dp)
+        val inBox = LocalBoxAccent.current != null
+        val bleed = if (block.kind == ImageKind.PHOTO || inBox) 0.dp else (style.margin - 8.dp).coerceAtLeast(0.dp)
         val available = maxWidth + bleed * 2
         val fit = remember(block, available, style.fontSize, screenHeight) {
             figureSize(block, available, aspect, style.fontSize.value, screenHeight)

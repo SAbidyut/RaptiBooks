@@ -37,27 +37,21 @@ class EquationDetector {
         val number: Boolean = EQ_NUMBER.matches(text.trim())
 
         init {
-            var w = 0
-            var wordChars = 0
-            for (token in text.split(' ', ' ')) {
-                val t = token.trim { !it.isLetterOrDigit() }
-                if (isWord(t)) {
-                    w++
-                    wordChars += t.length
-                }
-            }
-            words = w
-            rel = text.count { it in RELATIONS }
-            big = text.count { it in BIG_OPERATORS }
-            unknown = text.count { it == TextCleaner.PLACEHOLDER }
-            val solid = text.count { !it.isWhitespace() }
-            nonWordRatio = if (solid == 0) 0f else (solid - wordChars).toFloat() / solid
+            val st = MathText.stats(text)
+            words = st.words
+            rel = st.relations
+            big = st.big
+            unknown = st.unknown
+            nonWordRatio = st.nonWordRatio
         }
+
+        /** "প্রদত্ত : V = 230 V": the data line of a worked example, kept as text. */
+        val labelled: Boolean = MathText.hasLabel(text) || Patterns.listMarker.containsMatchIn(text)
 
         /** Short math piece: a numerator, a limit, a symbol, an equation number. */
         val fragment: Boolean get() = number || (words == 0 && text.length <= 40) || (words <= 1 && text.length <= 12)
 
-        val seed: Boolean get() = !number && words <= 2 && nonWordRatio >= 0.4f && (rel > 0 || unknown > 0 || big > 0)
+        val seed: Boolean get() = !number && !labelled && words <= 2 && nonWordRatio >= 0.4f && (rel > 0 || unknown > 0 || big > 0)
 
         val prose: Boolean get() = words >= 4
     }
@@ -86,7 +80,14 @@ class EquationDetector {
                     o.bounds.left <= b.right + 3f && o.bounds.right >= b.left - 3f }
             ) continue
             val y = b.centerY
-            fun over(l: TextLine) = l.bounds.horizontalOverlap(b) >= min(l.bounds.width, b.width) * 0.5f
+            // Two fractions side by side ("= 250×1000/250+1000 = 250000/1250") share text lines:
+            // judge each bar against the piece of the line above/below it.
+            fun piece(l: TextLine): Rect {
+                if (l.chunks.size < 2) return l.bounds
+                val c = l.chunks.maxByOrNull { min(it.right, b.right) - max(it.left, b.left) }!!
+                return Rect(c.left, l.bounds.top, c.right, l.bounds.bottom)
+            }
+            fun over(l: TextLine) = piece(l).let { it.horizontalOverlap(b) >= min(it.width, b.width) * 0.5f }
             val num = lines.firstOrNull { l ->
                 val em = l.fontSize
                 over(l) && l.baseline in y - em * 1.0f..y - em * 0.05f && feats.getValue(l).fragment
@@ -99,9 +100,11 @@ class EquationDetector {
             // A fraction bar is centred under its numerator and barely wider than the wider
             // part; a table rule runs under a whole row of header cells.
             val em = max(num.fontSize, den.fontSize)
-            val widest = max(num.bounds.width, den.bounds.width)
-            if (b.width > widest * 1.6f + em || abs(num.bounds.centerX - b.centerX) > b.width * 0.3f + 2f ||
-                abs(den.bounds.centerX - b.centerX) > b.width * 0.3f + 2f
+            val numPiece = piece(num)
+            val denPiece = piece(den)
+            val widest = max(numPiece.width, denPiece.width)
+            if (b.width > widest * 1.6f + em || abs(numPiece.centerX - b.centerX) > b.width * 0.3f + 2f ||
+                abs(denPiece.centerX - b.centerX) > b.width * 0.3f + 2f
             ) continue
             val r = Region(b.union(num.bounds).union(den.bounds))
             r.lines += num
@@ -153,6 +156,8 @@ class EquationDetector {
                 }
             }
         }
+
+        mergeDerivations(regions, lines, feats, bodySize)
 
         val out = mutableListOf<FigureRegion>()
         val absorbed = HashSet<TextLine>()
@@ -215,6 +220,54 @@ class EquationDetector {
         return Result(out, absorbed, usedPaths)
     }
 
+    /**
+     * The steps of a calculation are printed as a centred column of lines ("I = V/R",
+     * "= 230/460", "= 0.5 A"). Stacked display formulas with little space between them are one
+     * derivation and become one picture, so its steps keep their alignment and sizes, and a
+     * last step without a fraction ("= 0.5 A") does not end up in the text that follows.
+     * Formulas aligned with the prose (data lines, inline formulas) are left alone.
+     */
+    private fun mergeDerivations(regions: MutableList<Region>, lines: List<TextLine>, feats: Map<TextLine, Feat>, bodySize: Float) {
+        if (regions.size < 2) return
+        val prose = lines.filter { feats.getValue(it).prose }
+        val textLeft = (prose.ifEmpty { lines }).minOf { it.bounds.left }
+        fun display(r: Region): Boolean {
+            val em = emOf(r, bodySize)
+            if (r.bounds.left < textLeft + em * 2f) return false
+            if (r.lines.any { feats.getValue(it).let { f -> f.prose || f.labelled } }) return false
+            // A formula sharing its rows with prose is inline math.
+            return prose.none { l -> l.bounds.verticalOverlap(r.bounds) > l.bounds.height * 0.5f }
+        }
+        var merged = true
+        while (merged) {
+            merged = false
+            val sorted = regions.sortedBy { it.bounds.top }
+            outer@ for (i in sorted.indices) {
+                val a = sorted[i]
+                if (!display(a)) continue
+                for (j in i + 1 until sorted.size) {
+                    val b = sorted[j]
+                    val em = max(emOf(a, bodySize), emOf(b, bodySize))
+                    val gap = b.bounds.top - a.bounds.bottom
+                    if (gap > em * 1.6f) break
+                    if (gap < -em * 0.3f || !display(b)) continue
+                    val centred = abs(a.bounds.centerX - b.bounds.centerX) < max(a.bounds.width, b.bounds.width) * 0.75f + em * 2f
+                    if (a.bounds.horizontalOverlap(b.bounds) <= 0f && !centred) continue
+                    // Nothing else printed between the two.
+                    val between = Rect(min(a.bounds.left, b.bounds.left), a.bounds.bottom, max(a.bounds.right, b.bounds.right), b.bounds.top)
+                    if (gap > 0f && lines.any { l -> l !in a.lines && l !in b.lines && l !== a.number && l !== b.number && between.intersects(l.bounds, -0.5f) }) continue
+                    a.lines += b.lines
+                    a.bars += b.bars
+                    if (a.number == null) a.number = b.number
+                    a.bounds = a.bounds.union(b.bounds)
+                    regions.remove(b)
+                    merged = true
+                    break@outer
+                }
+            }
+        }
+    }
+
     private fun emOf(r: Region, bodySize: Float): Float =
         r.lines.map { it.fontSize }.maxOrNull()?.coerceAtMost(bodySize * 1.6f) ?: bodySize
 
@@ -266,29 +319,6 @@ class EquationDetector {
     }
 
     private companion object {
-        const val RELATIONS = "=≈≠≤≥<>≜≡∝→⇒⟹↔≅∼≃"
-        const val BIG_OPERATORS = "∫∬∭∮∑∏√∂∇∞"
         val EQ_NUMBER = Regex("\\(\\s*[0-9০-৯]{1,3}(?:[.\\-][0-9০-৯]{1,3}){0,2}[a-z]?\\s*\\)")
-        val MATH_FUNCTIONS = setOf("sin", "cos", "tan", "cot", "sec", "csc", "log", "exp", "lim", "max", "min", "det",
-            "sinh", "cosh", "tanh", "arg", "mod", "rms", "avg")
-
-        /** A word of prose: three Latin letters in a row (not a function name), or a Bangla word. */
-        fun isWord(t: String): Boolean {
-            if (t.length < 2) return false
-            var latin = 0
-            var maxLatin = 0
-            var bangla = 0
-            for (c in t) {
-                if (c in 'a'..'z' || c in 'A'..'Z') {
-                    latin++
-                    maxLatin = max(maxLatin, latin)
-                } else {
-                    latin = 0
-                }
-                if (c in 'অ'..'হ' || c in 'ড়'..'য়') bangla++
-            }
-            if (bangla >= 2) return true
-            return maxLatin >= 3 && t.lowercase() !in MATH_FUNCTIONS
-        }
     }
 }

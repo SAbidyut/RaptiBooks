@@ -8,6 +8,7 @@ import com.raptibooks.core.model.Bookmark
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SearchHit
+import com.raptibooks.core.model.BoxSpan
 import com.raptibooks.core.model.TocEntry
 import com.raptibooks.core.pdf.PageRenderer
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +27,8 @@ class ReaderRepository(
     suspend fun book(id: Long): Book? = withContext(Dispatchers.IO) { books.get(id) }
 
     suspend fun toc(id: Long): List<TocEntry> = withContext(Dispatchers.IO) { content.toc(id) }
+
+    suspend fun boxes(id: Long): List<BoxSpan> = withContext(Dispatchers.IO) { content.boxes(id) }
 
     suspend fun blocks(id: Long, from: Int, to: Int): List<ContentBlock> =
         withContext(Dispatchers.IO) { content.blocks(id, from, to) }

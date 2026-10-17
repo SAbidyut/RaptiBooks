@@ -32,12 +32,25 @@ screen. Bangla and English are both first-class, and everything runs offline.
     become one picture of the formula (an ink mask drawn in the theme's text colour, at the
     size of the body text, scrolling sideways when wider than the screen) with the equation
     number beside it; stacked formulas are never mistaken for tables;
+  - **worked examples**: the steps of a calculation printed as a centred column ("I = V/R",
+    "= 230/460", "= 0.5 A") become one picture of the whole derivation; the question,
+    "প্রদত্ত/Given", "নির্ণেয়", "সমাধান" and "উত্তর/Answer" lines stay separate paragraphs; a
+    one-line formula stays text, centred, and is never mistaken for a heading;
+  - **callout boxes** (worked examples, definitions, notes, warnings printed in a tinted
+    panel) are kept as boxes and shown as cards in the box's own accent colour, also when a
+    box runs over a page break; a frame around running text is never read as a table;
+  - **diagrams split into pieces** (thin-line circuits whose wires look like a table, loose
+    labels) are put back together above their caption, with the drawing's own title;
   - **math symbols without Unicode mapping** (the "=", "×", "+" of Mathematical-Pi-style fonts,
     which otherwise vanish from the text) are identified from their printed shape; "Δ"
     printed with a "¢" code is repaired;
   - printed **contents pages** with or without dot leaders (also as tables) become tappable
     contents entries, and the reader's Contents panel follows the book's own contents when
     it can be tied to the pages;
+  - hidden 1-pt text (bookmark markers) is ignored; "ভাগ করে…"/"অধ্যায় ১৬-এর…" inside a
+    sentence is not a chapter title; answer options split by a page break are joined;
+  - in a book with a real text layer, a page that is one big picture (cover, poster) is kept
+    as that picture instead of being OCR'd;
   - margin columns (side notes) are read after the main text next to them;
   - multi-column reading order;
   - **Bangla**: visual→logical glyph order repair (ি ে ৈ, reph), ActualText clusters,
@@ -170,7 +183,8 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
 
 ## Licenses
 
-App code: see repository. Fonts: Tiro Bangla, Hind Siliguri (SIL Open Font License,
+App code: see repository. Fonts: Tiro Bangla, Hind Siliguri (its Regular and SemiBold carry
+the Bangla digit ১ of Noto Sans Bengali, as their own glyph is malformed) (SIL Open Font License,
 `core/ui/src/main/assets/licenses`). PdfBox-Android (Apache 2.0), Tesseract and tessdata
 (Apache 2.0), JavaCPP presets (Apache 2.0 / GPL with classpath exception), AndroidX
 (Apache 2.0).

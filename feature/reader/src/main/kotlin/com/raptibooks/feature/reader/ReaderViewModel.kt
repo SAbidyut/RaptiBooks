@@ -37,6 +37,8 @@ class ReaderViewModel(
             val toc: List<TocEntry>,
             val source: BlockSource,
             val initial: ReadingPosition,
+            /** Callout boxes (worked examples, notes) drawn as cards around their blocks. */
+            val boxes: BoxLookup = BoxLookup(emptyList()),
         ) : Load
     }
 
@@ -70,8 +72,9 @@ class ReaderViewModel(
             val start = ReadingPosition(book.position.blockIndex.coerceIn(0, maxOf(0, book.blockCount - 1)), book.position.offset)
             source.preload(start.blockIndex)
             val toc = repo.toc(bookId)
+            val boxes = BoxLookup(runCatching { repo.boxes(bookId) }.getOrDefault(emptyList()))
             repo.markOpened(bookId)
-            load = Load.Ready(book, toc, source, start)
+            load = Load.Ready(book, toc, source, start, boxes)
         }
     }
 

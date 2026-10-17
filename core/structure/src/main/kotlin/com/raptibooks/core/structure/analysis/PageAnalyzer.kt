@@ -25,7 +25,13 @@ class PageAnalyzer(
     private val figureDetector = FigureDetector()
     private val equationDetector = EquationDetector()
 
-    fun analyze(page: RawPage): PageLayout {
+    fun analyze(input: RawPage): PageLayout {
+        // Text set at 1-2 pt is invisible (bookmark targets, hidden running-header markers);
+        // it must not be read as content.
+        val page = if (input.fromOcr || input.fragments.none { it.fontSize < MIN_VISIBLE_SIZE }) input else RawPage(
+            input.index, input.width, input.height, input.fragments.filter { it.fontSize >= MIN_VISIBLE_SIZE },
+            input.images, input.paths, input.rotatedText, input.fromOcr, input.ocrPictures,
+        )
         val spaces = page.fragments.count { it.isSpace }
         val solid = page.fragments.size - spaces
         lineBuilder.explicitSpacesHint = if (solid < 20) null else spaces * 30 >= solid
@@ -68,13 +74,22 @@ class PageAnalyzer(
         )
         val equationRegions = equations?.equations ?: emptyList()
         val figures = figureDetector.detect(figurePage, lines, tables, equationRegions.map { it.bounds }, bodySize)
-        val body = lines.filter { it !in figures.absorbed }
+        val pieces = lines.filter { it !in figures.absorbed }
+        // Diagrams split into pieces are put back together above their captions.
+        val whole = FigureConsolidator().consolidate(figurePage, pieces, figures.figures + equationRegions, tables, bodySize, allLines)
+        val body = pieces.filter { it !in whole.absorbed }
         val chars = allLines.sumOf { TextQuality.letterCount(it.text) } +
             ruled.sumOf { t -> t.rows.sumOf { r -> r.sumOf { TextQuality.letterCount(it) } } }
-        return PageLayout(page.index, page.width, page.height, body, figures.figures + equationRegions, tables, page.fromOcr, chars)
+        return PageLayout(
+            page.index, page.width, page.height, body, whole.figures, whole.tables, page.fromOcr, chars,
+            if (page.fromOcr) emptyList() else BoxDetector().detect(page, allLines, whole.tables),
+        )
     }
 
     companion object {
+        /** Smaller text is not meant to be read (hidden markers). */
+        const val MIN_VISIBLE_SIZE = 2.5f
+
         /**
          * Body text size of a page: the font size carrying the most characters in wide lines
          * (paragraph text), so that many small labels or big formula symbols don't count.
