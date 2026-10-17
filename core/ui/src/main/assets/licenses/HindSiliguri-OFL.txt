@@ -1,3 +1,8 @@
+Note (RaptiBooks): in hind_siliguri_regular.ttf and hind_siliguri_semibold.ttf the glyph of the
+Bangla digit one (U+09E7) is replaced by the one of Noto Sans Bengali (same weight, scaled to
+Hind Siliguri's digits), because the original glyph in these two weights is malformed. Noto Sans
+Bengali is licensed under the SIL Open Font License 1.1 (see NotoSansBengali-OFL.txt).
+
 Copyright (c) 2015 Indian Type Foundry (info@indiantypefoundry.com)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.

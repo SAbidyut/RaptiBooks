@@ -183,7 +183,8 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
 
 ## Licenses
 
-App code: see repository. Fonts: Tiro Bangla, Hind Siliguri (SIL Open Font License,
+App code: see repository. Fonts: Tiro Bangla, Hind Siliguri (its Regular and SemiBold carry
+the Bangla digit ১ of Noto Sans Bengali, as their own glyph is malformed) (SIL Open Font License,
 `core/ui/src/main/assets/licenses`). PdfBox-Android (Apache 2.0), Tesseract and tessdata
 (Apache 2.0), JavaCPP presets (Apache 2.0 / GPL with classpath exception), AndroidX
 (Apache 2.0).
