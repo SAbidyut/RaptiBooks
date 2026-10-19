@@ -40,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -138,13 +140,16 @@ fun OriginalPdfRoute(bookId: Long, initialPage: Int, onBack: () -> Unit, onReflo
                 else -> {
                     var scale by remember { mutableFloatStateOf(1f) }
                     var offset by remember { mutableStateOf(Offset.Zero) }
+                    var viewport by remember { mutableStateOf(Size.Zero) }
                     val zoom = rememberTransformableState { z, pan, _ ->
                         scale = (scale * z).coerceIn(1f, 4f)
-                        offset = if (scale == 1f) Offset.Zero else Offset(offset.x + pan.x, offset.y + pan.y)
+                        // The pages never slide off the screen sideways or out of the top/bottom.
+                        offset = if (scale == 1f) Offset.Zero else clampOffset(offset + pan, viewport, viewport, scale)
                     }
                     BoxWithConstraints(
                         Modifier
                             .fillMaxSize()
+                            .onSizeChanged { viewport = Size(it.width.toFloat(), it.height.toFloat()) }
                             .pointerInput(Unit) {
                                 detectTapGestures(onDoubleTap = {
                                     if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2f
