@@ -1,0 +1,158 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!--
+  Test book in the style of an engineering textbook (wide margin column for figure captions and
+  notes, boxed and numbered display equations, stacked fractions, integrals with limits, an SI
+  prefix table with superscripts, a small labelled circuit figure, definition boxes and example
+  banners). "=" and "×" in solutions are set in the "SymPi" font whose ToUnicode map is removed
+  afterwards (make_pdfs.py), like the Mathematical Pi fonts of real books.
+  Print with: chromium --headless --print-to-pdf
+-->
+<style>
+@font-face { font-family: SymPi; src: url(/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf); }
+@page { size: 612pt 792pt; margin: 0; }
+body { margin: 0; font-family: "DejaVu Serif"; font-size: 10pt; line-height: 13pt; color: #111; }
+.page { width: 612pt; height: 792pt; position: relative; page-break-after: always; overflow: hidden; }
+.main { position: absolute; left: 200pt; top: 60pt; width: 360pt; }
+.side { position: absolute; left: 40pt; width: 140pt; font-size: 8.5pt; line-height: 11pt; }
+.fullw { position: absolute; left: 40pt; top: 60pt; width: 520pt; }
+p { margin: 0 0 6pt 0; text-align: justify; }
+h1 { font-family: "DejaVu Sans"; font-size: 24pt; line-height: 28pt; margin: 0 0 14pt 0; }
+h2 { font-family: "DejaVu Sans"; font-size: 14pt; margin: 14pt 0 8pt 0; }
+.it { font-style: italic; }
+.sym { font-family: SymPi; font-style: normal; }
+.eq { display: flex; align-items: center; margin: 8pt 0 10pt 0; }
+.eq .body { flex: 1; text-align: center; font-style: italic; font-size: 11pt; }
+.eq .no { width: 40pt; text-align: right; font-weight: bold; font-style: normal; }
+.boxed { border: 0.8pt solid #2a6db0; padding: 4pt 10pt; display: inline-block; }
+.frac { display: inline-flex; flex-direction: column; vertical-align: middle; text-align: center; margin: 0 2pt; }
+.frac > span { padding: 0 2pt; line-height: 13pt; }
+.frac > span + span { border-top: 0.6pt solid #111; }
+.int { font-size: 20pt; font-style: normal; vertical-align: middle; }
+.lims { display: inline-flex; flex-direction: column; vertical-align: middle; font-size: 7pt; line-height: 14pt; margin-right: 2pt; }
+.def { background: #dce8f3; padding: 6pt 10pt; margin: 8pt 0; font-family: "DejaVu Sans"; font-size: 9.5pt; }
+.def b { color: #1d5d99; }
+.banner { position: relative; height: 18pt; margin: 14pt 0 6pt -160pt; width: 150pt; }
+.banner img { position: absolute; left: 0; top: 0; width: 150pt; height: 18pt; }
+.banner span { position: relative; font-family: "DejaVu Sans"; font-size: 11pt; padding-left: 6pt; line-height: 18pt; color: #1d5d99; }
+.toc { position: absolute; left: 60pt; top: 60pt; width: 480pt; font-size: 11pt; line-height: 20pt; }
+.toc div { display: flex; }
+.toc .t { flex: 1; }
+.toc .ch { font-weight: bold; margin-top: 10pt; }
+.toc .sec { padding-left: 30pt; }
+table.si { border-collapse: collapse; font-size: 9.5pt; }
+table.si td, table.si th { padding: 1pt 10pt; text-align: left; }
+table.si thead tr { border-top: 1pt solid #000; border-bottom: 0.6pt solid #000; }
+table.si tbody tr:last-child { border-bottom: 1pt solid #000; }
+.fig { position: relative; height: 110pt; }
+.footer { position: absolute; top: 750pt; left: 40pt; width: 520pt; font-size: 8pt; display: flex; justify-content: space-between; }
+</style></head><body>
+
+<!-- ======================================================= contents (no dot leaders) -->
+<div class="page">
+ <div class="toc">
+  <h1>Contents</h1>
+  <div class="ch"><span class="t">Chapter 1&nbsp;&nbsp;Basic Concepts</span><span>3</span></div>
+  <div class="sec"><span class="t">1.1&nbsp;&nbsp;Introduction</span><span>4</span></div>
+  <div class="sec"><span class="t">1.2&nbsp;&nbsp;Systems of Units</span><span>4</span></div>
+  <div class="sec"><span class="t">1.3&nbsp;&nbsp;Charge and Current</span><span>6</span></div>
+  <div class="sec"><span class="t">1.4&nbsp;&nbsp;Voltage</span><span>9</span></div>
+  <div class="sec"><span class="t">1.5&nbsp;&nbsp;Power and Energy</span><span>10</span></div>
+  <div class="ch"><span class="t">Chapter 2&nbsp;&nbsp;Basic Laws</span><span>29</span></div>
+  <div class="sec"><span class="t">2.1&nbsp;&nbsp;Introduction</span><span>30</span></div>
+  <div class="sec"><span class="t">2.2&nbsp;&nbsp;Ohm's Law</span><span>30</span></div>
+  <div class="sec"><span class="t">2.3&nbsp;&nbsp;Nodes, Branches, and Loops</span><span>35</span></div>
+  <div class="sec"><span class="t">2.4&nbsp;&nbsp;Kirchhoff's Laws</span><span>37</span></div>
+ </div>
+ <div class="footer"><span></span><span>v</span><span></span></div>
+</div>
+
+<!-- ======================================================= chapter opening + SI table -->
+<div class="page">
+ <div class="main">
+  <h1>Chapter 1<br>Basic Concepts</h1>
+  <h2>1.1 Introduction</h2>
+  <p>Electric circuit theory and electromagnetic theory are the two fundamental theories upon which all branches of electrical engineering are built. Many branches of electrical engineering, such as power, electric machines, control, electronics, communications, and instrumentation, are based on electric circuit theory.</p>
+  <p>In electrical engineering, we are often interested in communicating or transferring energy from one point to another. To do this requires an interconnection of electrical devices, which we refer to as an electric circuit.</p>
+  <h2>1.2 Systems of Units</h2>
+  <p>As electrical engineers, we deal with measurable quantities. Our measurement, however, must be communicated in a standard language that virtually all professionals can understand, irrespective of the country where the measurement is conducted.</p>
+  <p>One great advantage of the SI unit is that it uses prefixes based on the power of 10 to relate larger and smaller units to the basic unit. Table 1.1 shows the SI prefixes and their symbols.</p>
+  <p style="font-family:'DejaVu Sans';font-size:9pt;font-weight:bold;margin-top:10pt">TABLE 1.1&nbsp;&nbsp;The SI prefixes.</p>
+  <table class="si">
+   <thead><tr><th>Multiplier</th><th>Prefix</th><th>Symbol</th></tr></thead>
+   <tbody>
+    <tr><td>10<sup>18</sup></td><td>exa</td><td>E</td></tr>
+    <tr><td>10<sup>15</sup></td><td>peta</td><td>P</td></tr>
+    <tr><td>10<sup>12</sup></td><td>tera</td><td>T</td></tr>
+    <tr><td>10<sup>9</sup></td><td>giga</td><td>G</td></tr>
+    <tr><td>10<sup>6</sup></td><td>mega</td><td>M</td></tr>
+    <tr><td>10<sup>3</sup></td><td>kilo</td><td>k</td></tr>
+    <tr><td>10<sup>2</sup></td><td>hecto</td><td>h</td></tr>
+    <tr><td>10<sup>−3</sup></td><td>milli</td><td>m</td></tr>
+    <tr><td>10<sup>−6</sup></td><td>micro</td><td>μ</td></tr>
+   </tbody>
+  </table>
+  <p style="margin-top:10pt">By using the SI units consistently, we can express any quantity in a compact form. For example, the following are expressions of the same distance in meters.</p>
+ </div>
+ <div class="footer"><span>Chapter 1 Basic Concepts</span><span>4</span><span></span></div>
+</div>
+
+<!-- ======================================================= power: boxed/stacked equations, figure -->
+<div class="page">
+ <div class="main">
+  <h2>1.5 Power and Energy</h2>
+  <p>Although current and voltage are the two basic variables in an electric circuit, they are not sufficient by themselves. For practical purposes, we need to know how much power an electric device can handle. We all know from experience that a 100-watt bulb gives more light than a 60-watt bulb.</p>
+  <div class="def"><b>Power</b> is the time rate of expending or absorbing energy, measured in watts (W).</div>
+  <p>We write this relationship as</p>
+  <div class="eq"><span class="body"><span class="boxed">p <span class="sym">≜</span> <span class="frac"><span>dw</span><span>dt</span></span></span></span><span class="no">(1.5)</span></div>
+  <p>where <span class="it">p</span> is power in watts (W), <span class="it">w</span> is energy in joules (J), and <span class="it">t</span> is time in seconds (s). From Eqs. (1.1), (1.3), and (1.5), it follows that</p>
+  <div class="eq"><span class="body">p <span class="sym">=</span> <span class="frac"><span>dw</span><span>dt</span></span> <span class="sym">=</span> <span class="frac"><span>dw</span><span>dq</span></span> · <span class="frac"><span>dq</span><span>dt</span></span> <span class="sym">=</span> vi</span><span class="no">(1.6)</span></div>
+  <p>or</p>
+  <div class="eq"><span class="body"><span class="boxed">p <span class="sym">=</span> vi</span></span><span class="no">(1.7)</span></div>
+  <p>The power <span class="it">p</span> in Eq. (1.7) is a time-varying quantity and is called the instantaneous power. Thus, the power absorbed or supplied by an element is the product of the voltage across the element and the current through it. If the power has a + sign, power is being delivered to or absorbed by the element.</p>
+  <div class="fig">
+   <svg width="360pt" height="110pt" viewBox="0 0 360 110" style="position:absolute;left:0;top:0">
+    <g stroke="#000" stroke-width="1" fill="none">
+     <line x1="80" y1="5" x2="80" y2="30"/><rect x="68" y="30" width="24" height="40"/><line x1="80" y1="70" x2="80" y2="95"/>
+     <line x1="220" y1="5" x2="220" y2="30"/><rect x="208" y="30" width="24" height="40"/><line x1="220" y1="70" x2="220" y2="95"/>
+    </g>
+    <path d="M86 14 L92 20 L98 14 Z" fill="#c00"/><line x1="92" y1="6" x2="92" y2="16" stroke="#c00"/>
+    <path d="M226 14 L232 8 L238 14 Z" fill="#c00"/><line x1="232" y1="12" x2="232" y2="24" stroke="#c00"/>
+    <g font-family="DejaVu Serif" font-size="10" font-style="italic">
+     <text x="100" y="20">i</text><text x="58" y="40">+</text><text x="54" y="54">v</text><text x="58" y="68">−</text>
+     <text x="240" y="20">i</text><text x="198" y="40">+</text><text x="194" y="54">v</text><text x="198" y="68">−</text>
+     <text x="72" y="108" font-style="normal">(a)</text><text x="212" y="108" font-style="normal">(b)</text>
+    </g>
+   </svg>
+  </div>
+  <p style="margin-top:8pt">When the voltage and current directions conform to Fig. 1.8(b), we have the active sign convention and p = −vi. Unless otherwise stated, we will follow the passive sign convention throughout this text.</p>
+ </div>
+ <div class="side" style="top:520pt"><b style="font-family:'DejaVu Sans'">Figure 1.8</b> Reference polarities for power using the passive sign convention: (a) absorbing power, (b) supplying power.</div>
+ <div class="side" style="top:120pt">Passive sign convention is satisfied when the current enters through the positive terminal of an element.</div>
+ <div class="footer"><span>Chapter 1 Basic Concepts</span><span>10</span><span></span></div>
+</div>
+
+<!-- ======================================================= energy: integral, example, solution -->
+<div class="page">
+ <div class="main">
+  <p>In fact, the law of conservation of energy must be obeyed in any electric circuit. For this reason, the algebraic sum of power in a circuit, at any instant of time, must be zero:</p>
+  <div class="eq"><span class="body"><span class="boxed">∑ p <span class="sym">=</span> 0</span></span><span class="no">(1.8)</span></div>
+  <p>This again confirms the fact that the total power supplied to the circuit must balance the total power absorbed. From Eq. (1.6), the energy absorbed or supplied by an element from time t<sub>0</sub> to time t is</p>
+  <div class="eq"><span class="body">w <span class="sym">=</span> <span class="int">∫</span><span class="lims"><span>t</span><span>t<sub>0</sub></span></span> p dt <span class="sym">=</span> <span class="int">∫</span><span class="lims"><span>t</span><span>t<sub>0</sub></span></span> vi dt</span><span class="no">(1.9)</span></div>
+  <div class="def"><b>Energy</b> is the capacity to do work, measured in joules (J).</div>
+  <p>The electric power utility companies measure energy in watt-hours (Wh), where 1 Wh = 3,600 J.</p>
+  <div class="banner"><img src="banner.png"><span>Example 1.4</span></div>
+  <p>An energy source forces a constant current of 2 A for 10 s to flow through a lightbulb. If 2.3 kJ is given off in the form of light and heat energy, calculate the voltage drop across the bulb.</p>
+  <p style="font-family:'DejaVu Sans';font-weight:bold">Solution:</p>
+  <p>The total charge is</p>
+  <div class="eq"><span class="body">¢q <span class="sym">=</span> i ¢t <span class="sym">=</span> 2 <span class="sym">×</span> 10 <span class="sym">=</span> 20 C</span><span class="no"></span></div>
+  <p>The voltage drop is</p>
+  <div class="eq"><span class="body">v <span class="sym">=</span> <span class="frac"><span>¢w</span><span>¢q</span></span> <span class="sym">=</span> <span class="frac"><span>2.3 <span class="sym">×</span> 10<sup>3</sup></span><span>20</span></span> <span class="sym">=</span> 115 V</span><span class="no"></span></div>
+  <div class="banner"><img src="banner.png"><span>Practice Problem 1.4</span></div>
+  <p>To move charge <span class="it">q</span> from point <span class="it">a</span> to point <span class="it">b</span> requires 30 J. Find the voltage drop v<sub>ab</sub> if: (a) <span class="it">q</span> <span class="sym">=</span> 2 C, (b) <span class="it">q</span> <span class="sym">=</span> 6 C.</p>
+  <p><b>Answer:</b> (a) 15 V, (b) 5 V.</p>
+ </div>
+ <div class="footer"><span>Chapter 1 Basic Concepts</span><span>11</span><span></span></div>
+</div>
+
+</body></html>

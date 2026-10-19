@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +27,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,9 +39,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
@@ -62,12 +71,14 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.raptibooks.core.model.BoxSpan
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ImageKind
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
+import com.raptibooks.core.model.MarkKey
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.model.SeparatorBlock
@@ -109,7 +120,7 @@ fun BlockView(
     style: ReaderStyle,
     highlight: String?,
     onContentsClick: (title: String) -> Unit = {},
-    onImageClick: (path: String, caption: String?) -> Unit,
+    onImageClick: (path: String, caption: String?, ink: Boolean, block: Int) -> Unit,
 ) {
     when (block) {
         is HeadingBlock -> HeadingView(block, style, highlight)
@@ -119,7 +130,7 @@ fun BlockView(
             else -> ParagraphView(block, style, highlight)
         }
         is ListItemBlock -> ListItemView(block, style, highlight)
-        is ImageBlock -> ImageView(block, style, onImageClick)
+        is ImageBlock -> if (block.kind == ImageKind.EQUATION) EquationView(block, style, onImageClick) else ImageView(block, style, onImageClick)
         is TableBlock -> TableView(block, style, onImageClick)
         is SeparatorBlock -> Text(
             "⁂", style = style.body.copy(textAlign = TextAlign.Center, color = style.colors.secondary),
@@ -148,14 +159,16 @@ private fun HeadingView(block: HeadingBlock, style: ReaderStyle, highlight: Stri
             Box(Modifier.width(40.dp).height(3.dp).background(style.colors.accent, RoundedCornerShape(2.dp)))
             Spacer(Modifier.height(14.dp))
         }
-        Text(
+        MarkableText(
+            blockIndex = block.index,
             text = styled(block.text, emptyList(), highlight, style.colors),
             style = TextStyle(
                 fontFamily = style.headingFont,
                 fontWeight = if (block.level <= 3) FontWeight.Bold else FontWeight.SemiBold,
                 fontSize = size.sp,
                 lineHeight = (size * 1.3f).sp,
-                color = if (block.level == 1) style.colors.text else style.colors.text.copy(alpha = 0.92f),
+                color = LocalBoxAccent.current?.takeIf { block.level >= 3 }
+                    ?: if (block.level == 1) style.colors.text else style.colors.text.copy(alpha = 0.92f),
                 textDirection = TextDirection.Content,
             ),
         )
@@ -168,15 +181,15 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
     val base = style.body
     val spacing = (style.fontSize.value * 0.75f).dp
     when (block.kind) {
-        ParagraphKind.BODY -> Text(text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing))
-        ParagraphKind.CENTERED -> Text(
-            text, style = base.copy(textAlign = TextAlign.Center),
+        ParagraphKind.BODY -> MarkableText(block.index, text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing))
+        ParagraphKind.CENTERED -> MarkableText(
+            block.index, text, style = base.copy(textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(vertical = spacing / 2).padding(bottom = spacing / 2),
         )
         ParagraphKind.QUOTE -> {
             val bar = style.colors.accent.copy(alpha = 0.6f)
-            Text(
-                text, style = base.copy(fontStyle = FontStyle.Italic),
+            MarkableText(
+                block.index, text, style = base.copy(fontStyle = FontStyle.Italic),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = spacing)
@@ -184,14 +197,85 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
                     .padding(start = 16.dp),
             )
         }
-        ParagraphKind.CAPTION -> Text(
-            text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
+        ParagraphKind.CAPTION -> MarkableText(
+            block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing),
         )
-        ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> Text(
-            text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
+        ParagraphKind.FORMULA -> FormulaView(text, style)
+        ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> MarkableText(
+            block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2),
         )
+    }
+}
+
+/**
+ * A formula or a step of a calculation printed on its own line: centred, a little larger than
+ * the text, never broken across lines (a long one scrolls sideways).
+ */
+@Composable
+private fun FormulaView(text: AnnotatedString, style: ReaderStyle) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = (style.fontSize.value * 0.3f).dp)) {
+        val width = maxWidth
+        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Text(
+                text,
+                style = style.body.copy(
+                    fontSize = (style.fontSize.value * 1.05f).sp,
+                    textAlign = TextAlign.Center,
+                    hyphens = Hyphens.None,
+                ),
+                softWrap = false,
+                modifier = Modifier.widthIn(min = width).padding(horizontal = 4.dp),
+            )
+        }
+    }
+}
+
+/** Accent colour of the callout box the current block is in (for its headings). */
+internal val LocalBoxAccent = compositionLocalOf<Color?> { null }
+
+/**
+ * Draws a block as part of a callout card — a worked example, definition, note or warning as
+ * the book printed it in a tinted box: the box's colour as a bar on the left and a light tint
+ * behind, rounded at the first and last block of the box.
+ */
+@Composable
+fun CalloutBox(span: BoxSpan?, index: Int, style: ReaderStyle, content: @Composable () -> Unit) {
+    if (span == null) {
+        content()
+        return
+    }
+    val colors = style.colors
+    val accent = remember(span.accent, colors) { boxAccent(span.accent, colors) }
+    val first = index == span.startIndex
+    val last = index == span.endIndex
+    val r = 10.dp
+    val shape = RoundedCornerShape(
+        topStart = if (first) r else 0.dp, topEnd = if (first) r else 0.dp,
+        bottomStart = if (last) r else 0.dp, bottomEnd = if (last) r else 0.dp,
+    )
+    val tint = accent.copy(alpha = if (colors.isDark) 0.16f else 0.075f)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = if (first) 8.dp else 0.dp, bottom = if (last) 14.dp else 0.dp)
+            .clip(shape)
+            .background(tint)
+            .drawBehind { drawRect(accent, size = Size(4.dp.toPx(), size.height)) }
+            .padding(start = 16.dp, end = 12.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 6.dp else 0.dp),
+    ) {
+        CompositionLocalProvider(LocalBoxAccent provides accent) { content() }
+    }
+}
+
+/** The box's printed accent colour, adjusted to stay readable on the current theme. */
+private fun boxAccent(rgb: Int, colors: ReaderColors): Color {
+    val c = Color(0xFF000000.toInt() or rgb)
+    return when {
+        colors.isDark -> lerp(c, Color.White, 0.45f)
+        c.luminance() > 0.45f -> lerp(c, Color.Black, 0.35f)
+        else -> c
     }
 }
 
@@ -207,19 +291,23 @@ private fun OptionsView(block: ParagraphBlock, style: ReaderStyle, highlight: St
     val size = (style.fontSize.value * 0.95f).sp
     val twoColumns = options.size % 2 == 0 && options.all { it.second.length <= 16 }
     Column(Modifier.fillMaxWidth().padding(start = 20.dp, bottom = (style.fontSize.value * 0.7f).dp)) {
-        for (row in options.chunked(if (twoColumns) 2 else 1)) {
+        for ((rowNumber, row) in options.chunked(if (twoColumns) 2 else 1).withIndex()) {
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                for ((marker, text) in row) {
+                for ((column, option) in row.withIndex()) {
+                    val (marker, text) = option
+                    val optionNumber = rowNumber * (if (twoColumns) 2 else 1) + column
                     Row(Modifier.weight(1f)) {
                         Text(
                             marker,
                             style = style.body.copy(fontSize = size, color = style.colors.accent, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Start),
                             modifier = Modifier.padding(end = 6.dp),
                         )
-                        Text(
+                        MarkableText(
+                            block.index,
                             remember(text, highlight, style.colors) { styled(text, emptyList(), highlight, style.colors) },
                             style = style.body.copy(fontSize = size, textAlign = TextAlign.Start),
                             modifier = Modifier.weight(1f, fill = false),
+                            part = MarkKey.option(optionNumber),
                         )
                     }
                 }
@@ -271,18 +359,19 @@ private fun ListItemView(block: ListItemBlock, style: ReaderStyle, highlight: St
             style = style.body.copy(textAlign = TextAlign.End, color = style.colors.accent),
             modifier = Modifier.width(markerWidth).padding(end = 8.dp),
         )
-        Text(text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f))
+        MarkableText(block.index, text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?) -> Unit) {
+private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean, Int) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
         val density = LocalDensity.current
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
         val aspect = (if (block.height > 0) block.width.toFloat() / block.height else 1.5f).coerceIn(0.15f, 10f)
         // Diagrams use the full screen width (into the page margins); photos stay in the text column.
-        val bleed = if (block.kind == ImageKind.PHOTO) 0.dp else (style.margin - 8.dp).coerceAtLeast(0.dp)
+        val inBox = LocalBoxAccent.current != null
+        val bleed = if (block.kind == ImageKind.PHOTO || inBox) 0.dp else (style.margin - 8.dp).coerceAtLeast(0.dp)
         val available = maxWidth + bleed * 2
         val fit = remember(block, available, style.fontSize, screenHeight) {
             figureSize(block, available, aspect, style.fontSize.value, screenHeight)
@@ -297,7 +386,7 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                         .aspectRatio(aspect)
                         .clip(RoundedCornerShape(6.dp))
                         .background(style.colors.surface)
-                        .clickable { onClick(block.path, block.caption) },
+                        .clickable { onClick(block.path, block.caption, false, block.index) },
                     contentAlignment = Alignment.Center,
                 ) {
                     val img = image
@@ -310,6 +399,7 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                     } else {
                         CircularProgressIndicator(Modifier.size(24.dp), color = style.colors.accent, strokeWidth = 2.dp)
                     }
+                    InkLayer(block.index)
                 }
             }
             if (fit.scroll) {
@@ -331,6 +421,74 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                         color = style.colors.secondary, textAlign = TextAlign.Center,
                     ),
                     modifier = Modifier.padding(top = 8.dp, start = 8.dp + bleed, end = 8.dp + bleed),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A display equation, drawn from its ink mask in the text colour so it reads like the text
+ * around it: its symbols are shown at the size of the body text. A formula too wide for the
+ * screen keeps a readable size and scrolls sideways. The equation number sits at the right.
+ */
+@Composable
+private fun EquationView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean, Int) -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = (style.fontSize.value * 0.5f).dp)) {
+        val density = LocalDensity.current
+        val number = block.caption
+        val numberWidth = if (number != null) (style.fontSize.value * 0.82f * (number.length * 0.6f) + 12f).dp else 0.dp
+        val available = maxWidth - numberWidth
+        val aspect = (if (block.height > 0) block.width.toFloat() / block.height else 4f).coerceIn(0.2f, 40f)
+        // Size in the book (pt) scaled so that the formula's text matches the reader's text size.
+        val natural = if (block.sourceWidth > 0f && block.textSize > 0f) {
+            (block.sourceWidth * style.fontSize.value / block.textSize).dp
+        } else {
+            (block.width / 3f).dp
+        }
+        val scroll = natural * 0.8f > available
+        val width = when {
+            !scroll -> minOf(natural, available)
+            else -> natural * 0.85f
+        }
+        val widthPx = with(density) { width.toPx().roundToInt() }
+        val image by rememberLocalImage(block.path, widthPx)
+        val ink = style.colors.text
+        val picture = @Composable {
+            Box(
+                Modifier.width(width).aspectRatio(aspect).clickable { onClick(block.path, number, true, block.index) },
+                contentAlignment = Alignment.Center,
+            ) {
+                val img = image
+                if (img != null) {
+                    Image(
+                        img, contentDescription = block.altText, contentScale = ContentScale.Fit,
+                        colorFilter = ColorFilter.tint(ink), modifier = Modifier.fillMaxWidth().aspectRatio(aspect),
+                    )
+                }
+            }
+        }
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (scroll) {
+                    Box(Modifier.weight(1f).horizontalScroll(rememberScrollState())) { picture() }
+                } else {
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { picture() }
+                }
+                if (number != null) {
+                    Text(
+                        number,
+                        style = style.body.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.End),
+                        modifier = Modifier.width(numberWidth),
+                        maxLines = 1,
+                    )
+                }
+            }
+            if (scroll) {
+                Text(
+                    stringResource(R.string.equation_scroll_hint),
+                    style = style.body.copy(fontSize = 12.sp, color = style.colors.secondary, textAlign = TextAlign.Center),
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                 )
             }
         }
@@ -379,7 +537,7 @@ private fun Modifier.bleed(extra: Dp): Modifier = if (extra <= 0.dp) this else l
 }
 
 @Composable
-private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (String, String?) -> Unit) {
+private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (String, String?, Boolean, Int) -> Unit) {
     var printed by rememberSaveable(block.index) { mutableStateOf(false) }
     val colors = style.colors
     val cellSize = (style.fontSize.value * 0.82f).sp
@@ -395,14 +553,35 @@ private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (Stri
             ImageView(ImageBlock(block.index, block.pageIndex, path, block.imageWidth, block.imageHeight, null, ImageKind.DIAGRAM), style, onImageClick)
         } else {
             val columns = block.rows.maxOfOrNull { it.size } ?: 0
-            val widths = remember(block, style.fontSize) { columnWidths(block.rows, columns, style.fontSize.value) }
+            val natural = remember(block, style.fontSize) { columnWidths(block.rows, columns, style.fontSize.value) }
             val border = colors.secondary.copy(alpha = 0.35f)
+            val scrollState = rememberScrollState()
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val total = natural.fold(0.dp) { a, b -> a + b }
+            val wide = total > maxWidth
+            // Narrow tables use the whole width; wide ones keep readable columns and scroll.
+            val widths = if (wide || total <= 0.dp) natural else natural.map { it * (maxWidth / total) }
+            Column {
             Box(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
                     .border(1.dp, border, RoundedCornerShape(8.dp))
-                    .horizontalScroll(rememberScrollState()),
+                    .then(
+                        if (wide && scrollState.canScrollForward) {
+                            Modifier.drawWithContent {
+                                drawContent()
+                                val fade = 28.dp.toPx()
+                                drawRect(
+                                    Brush.horizontalGradient(listOf(Color.Transparent, colors.background), startX = size.width - fade, endX = size.width),
+                                    topLeft = Offset(size.width - fade, 0f),
+                                )
+                            }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .horizontalScroll(scrollState),
             ) {
                 Column {
                     block.rows.forEachIndexed { r, row ->
@@ -419,8 +598,9 @@ private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (Stri
                                 ),
                         ) {
                             for (c in 0 until columns) {
-                                Text(
-                                    row.getOrElse(c) { "" },
+                                MarkableText(
+                                    block.index,
+                                    AnnotatedString(row.getOrElse(c) { "" }),
                                     style = TextStyle(
                                         fontFamily = style.bodyFont,
                                         fontSize = cellSize,
@@ -434,11 +614,21 @@ private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (Stri
                                         .fillMaxHeight()
                                         .border(0.5.dp, border)
                                         .padding(horizontal = 10.dp, vertical = 7.dp),
+                                    part = MarkKey.cell(r, c),
                                 )
                             }
                         }
                     }
                 }
+            }
+            if (wide) {
+                Text(
+                    stringResource(R.string.table_scroll_hint),
+                    style = style.body.copy(fontSize = 12.sp, color = style.colors.secondary, textAlign = TextAlign.Center),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            }
+            }
             }
         }
         if (path != null) {

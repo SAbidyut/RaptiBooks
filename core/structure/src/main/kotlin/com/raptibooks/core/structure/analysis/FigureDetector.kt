@@ -7,6 +7,7 @@ import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.PathShape
 import com.raptibooks.core.structure.raw.RawPage
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -22,10 +23,37 @@ class FigureDetector {
 
     private class Item(var bounds: Rect, val strong: Boolean, val raster: Boolean, val complex: Boolean, val rect: Boolean)
 
-    fun detect(page: RawPage, lines: List<TextLine>, tables: List<TableRegion>): Result {
+    /**
+     * A box is often painted as several shapes on top of each other: a rounded outline (curves),
+     * one rectangle per side or fill. They are one box, not a drawing: identical rectangles count
+     * once, and a rounded outline that coincides with a rectangle is dropped.
+     */
+    private fun collapseBoxes(items: MutableList<Item>) {
+        fun same(a: Rect, b: Rect, tol: Float) =
+            abs(a.left - b.left) <= tol && abs(a.top - b.top) <= tol && abs(a.right - b.right) <= tol && abs(a.bottom - b.bottom) <= tol
+        val rects = items.filter { it.rect }
+        val drop = HashSet<Item>()
+        for ((i, r) in rects.withIndex()) {
+            if (r in drop) continue
+            for (j in i + 1 until rects.size) if (same(r.bounds, rects[j].bounds, 1.5f)) drop += rects[j]
+        }
+        for (c in items) {
+            if (!c.complex || c.bounds.width < 40f || c.bounds.height < 20f) continue
+            if (rects.any { r -> same(c.bounds, r.bounds, 3f) }) drop += c
+        }
+        items.removeAll(drop)
+    }
+
+    fun detect(
+        page: RawPage,
+        lines: List<TextLine>,
+        tables: List<TableRegion>,
+        equations: List<Rect> = emptyList(),
+        bodySizeHint: Float? = null,
+    ): Result {
         val pageArea = page.width * page.height
         val items = mutableListOf<Item>()
-        val inTable = { r: Rect -> tables.any { it.bounds.outset(2f).contains(r) } }
+        val inTable = { r: Rect -> tables.any { it.bounds.outset(2f).contains(r) } || equations.any { it.outset(2f).contains(r) } }
 
         if (page.fromOcr) {
             for (r in page.ocrPictures) items += Item(r, strong = true, raster = true, complex = false, rect = false)
@@ -60,28 +88,36 @@ class FigureDetector {
             }
         }
         for (r in page.rotatedText) items += Item(r, strong = false, raster = false, complex = false, rect = false)
+        collapseBoxes(items)
+        val bodySize = bodySizeHint ?: PageAnalyzer.typicalSize(lines, page.width)
+        // Banners: a thin strip of colour behind a heading ("Example 1.4") is decoration.
+        items.removeAll { it.raster && isBanner(it.bounds, lines, bodySize) }
         if (items.none { it.strong }) return Result(emptyList(), emptySet())
+
+        // Running text separates figures: nothing is merged across a paragraph line.
+        val prose = lines.filter { isProse(it, bodySize, page.width) }
 
         // Cluster strong items, then let weak items (lines, labels) join nearby clusters.
         val clusters = mutableListOf<MutableList<Item>>()
         for (it in items.filter { it.strong }) clusters += mutableListOf(it)
-        mergeClusters(clusters, slack = 14f)
+        mergeClusters(clusters, slack = 14f, prose)
         val weak = items.filter { !it.strong }
         var grew = true
         while (grew) {
             grew = false
             for (w in weak) {
                 if (clusters.any { c -> w in c }) continue
-                val target = clusters.firstOrNull { c -> boundsOf(c).intersects(w.bounds, 6f) } ?: continue
+                val target = clusters.firstOrNull { c -> boundsOf(c).intersects(w.bounds, 6f) && !separated(boundsOf(c), w.bounds, prose) }
+                    ?: continue
                 target += w
                 grew = true
             }
-            if (grew) mergeClusters(clusters, slack = 4f)
+            if (grew) mergeClusters(clusters, slack = 4f, prose)
         }
 
-        val figures = mutableListOf<FigureRegion>()
+        class Candidate(var bounds: Rect, val items: MutableList<Item>, val members: MutableSet<TextLine>)
+        val candidates = mutableListOf<Candidate>()
         val absorbed = HashSet<TextLine>()
-        val bodySize = typicalSize(lines, page.width)
         for (c in clusters) {
             var bounds = boundsOf(c)
             val hasRaster = c.any { it.raster }
@@ -89,8 +125,7 @@ class FigureDetector {
             // Tiny shapes (an emoji/icon in a callout title, arrowheads) don't make a drawing.
             val drawnShapes = c.count { it.complex && it.bounds.area > 500f }
             val rectCount = c.count { it.rect }
-            if (bounds.width < 36f || bounds.height < 24f) continue
-            if (!hasRaster && bounds.area < pageArea * 0.012f) continue
+            if (bounds.width < 6f || bounds.height < 6f) continue
             val inside = lines.filter { it.bounds.coveredBy(bounds.outset(2f)) >= 0.6f }
             val textArea = inside.sumOf { (it.bounds.area).toDouble() }.toFloat()
             if (!hasRaster) {
@@ -100,10 +135,10 @@ class FigureDetector {
                 if (drawnShapes == 0 && rectCount <= 3 && inside.size >= 2 && textArea > bounds.area * 0.12f &&
                     inside.any { it.wordCount >= 6 }
                 ) continue
-                if (complexCount == 0 && rectCount <= 1 && c.size <= 2) continue
-                if (complexCount + rectCount < 2 && c.size < 3) continue
+                if (complexCount == 0 && rectCount <= 1 && c.size <= 2) continue // a lone box or rule
                 // A big drawing that is mostly text paragraphs (e.g. a page border with content).
                 if (inside.size > 12 && textArea > bounds.area * 0.35f) continue
+                if (inside.count { it in prose } >= 2 && rectCount <= 3 && drawnShapes <= 1) continue
             } else if (inside.size > 15 && textArea > bounds.area * 0.4f) {
                 continue // decorative background image behind text
             }
@@ -123,13 +158,62 @@ class FigureDetector {
                 }
             }
             absorbed += members
+            candidates += Candidate(bounds, c.toMutableList(), members)
+        }
+        // Panels of one figure ("(a)", "(b)") printed side by side or stacked closely.
+        var joined = true
+        while (joined) {
+            joined = false
+            loop@ for (i in candidates.indices) for (j in i + 1 until candidates.size) {
+                val a = candidates[i]
+                val b = candidates[j]
+                val rowOverlap = a.bounds.verticalOverlap(b.bounds) / min(a.bounds.height, b.bounds.height)
+                val gap = max(a.bounds.left - b.bounds.right, b.bounds.left - a.bounds.right)
+                val sideBySide = (rowOverlap >= 0.5f && gap <= bodySize * 8f) ||
+                    (rowOverlap >= 0.75f && gap <= max(bodySize * 10f, page.width * 0.25f))
+                val stacked = a.bounds.horizontalOverlap(b.bounds) >= min(a.bounds.width, b.bounds.width) * 0.3f &&
+                    max(a.bounds.top - b.bounds.bottom, b.bounds.top - a.bounds.bottom) <= bodySize * 1.5f
+                val small = min(a.bounds.area, b.bounds.area) < pageArea * 0.05f
+                if ((sideBySide || (stacked && small)) && !separated(a.bounds, b.bounds, prose)) {
+                    a.bounds = a.bounds.union(b.bounds)
+                    a.items += b.items
+                    a.members += b.members
+                    candidates.removeAt(j)
+                    joined = true
+                    break@loop
+                }
+            }
+        }
+
+        val figures = mutableListOf<FigureRegion>()
+        for (cand in candidates) {
+            val bounds = cand.bounds
+            val c = cand.items
+            val hasRaster = c.any { it.raster }
+            val complexCount = c.count { it.complex }
+            val rectCount = c.count { it.rect }
+            if (bounds.width < 30f || bounds.height < 20f) {
+                absorbed -= cand.members
+                continue
+            }
+            // Small drawings count when they are labelled (a circuit element with its i, +, v, −).
+            val labels = cand.members.count { it.text.length <= 12 }
+            val minArea = if (labels >= 2 && (complexCount + rectCount) >= 1) pageArea * 0.003f else pageArea * 0.012f
+            if (!hasRaster && bounds.area < minArea) {
+                absorbed -= cand.members
+                continue
+            }
+            if (!hasRaster && complexCount + rectCount < 2 && c.size < 3 && labels < 2) {
+                absorbed -= cand.members
+                continue
+            }
             val kind = when {
                 page.fromOcr -> FigureKind.SCAN
                 hasRaster && complexCount == 0 -> FigureKind.RASTER
                 hasRaster -> FigureKind.MIXED
                 else -> FigureKind.VECTOR
             }
-            val textSize = members.map { it.fontSize }.sorted().let { if (it.isEmpty()) 0f else it[it.size / 2] }
+            val textSize = cand.members.map { it.fontSize }.sorted().let { if (it.isEmpty()) 0f else it[it.size / 2] }
             figures += FigureRegion(bounds.clamp(page.width, page.height), kind, textSize = textSize)
         }
 
@@ -167,10 +251,15 @@ class FigureDetector {
                 FigureRegion(b, f.kind, caption.joinToString(" ") { it.text }, textSize = f.textSize)
             } else {
                 val above = findCaptionAbove(f.bounds, free)
+                val beside = if (above == null) findCaptionBeside(f.bounds, free, page.width) else null
                 if (above != null) {
                     absorbed += above
                     captionLines += above
                     FigureRegion(f.bounds, f.kind, above.text, textSize = f.textSize)
+                } else if (beside != null) {
+                    absorbed += beside
+                    captionLines += beside
+                    FigureRegion(f.bounds, f.kind, beside.joinToString(" ") { it.text }, textSize = f.textSize)
                 } else {
                     f
                 }
@@ -212,32 +301,26 @@ class FigureDetector {
     private fun isLabel(l: TextLine, fig: Rect, bodySize: Float, pageWidth: Float): Boolean {
         if (l.bounds.coveredBy(fig.outset(2f)) >= 0.6f) return true
         if (Patterns.caption.containsMatchIn(l.text)) return false
+        val em = l.fontSize
+        val hGap = max(0f, max(fig.left - l.bounds.right, l.bounds.left - fig.right))
+        val vGap = max(0f, max(fig.top - l.bounds.bottom, l.bounds.top - fig.bottom))
+        // Symbols and short names next to the drawing ("i", "+", "v", "(a)", "R1", "10 Ω").
+        if (l.text.length <= 6 && l.wordCount <= 2) {
+            val beside = l.bounds.verticalOverlap(fig) >= l.bounds.height * 0.5f && hGap <= max(em * 1.6f, 10f)
+            val under = l.bounds.horizontalOverlap(fig) >= l.bounds.width * 0.5f && vGap <= em * 1.3f
+            if (beside || under) return true
+        }
         // A row of separate short labels (one under each photo) is printed as one line with gaps.
         val pieces = if (l.chunks.size >= 2) l.chunks.map { it.right - it.left } else listOf(l.bounds.width)
         val words = l.wordCount.toFloat() / pieces.size
         if (words > 10f || pieces.any { it > pageWidth * 0.45f }) return false
-        val em = l.fontSize
         val small = em <= bodySize * 0.92f
         val boldShort = l.isBold && em <= bodySize * 1.02f && l.wordCount <= 6
         if (!small && !boldShort) return false
-        val hGap = max(0f, max(fig.left - l.bounds.right, l.bounds.left - fig.right))
-        val vGap = max(0f, max(fig.top - l.bounds.bottom, l.bounds.top - fig.bottom))
         if (l.bounds.verticalOverlap(fig) >= l.bounds.height * 0.5f && hGap <= max(em * 3f, 12f)) return true
         val within = l.bounds.horizontalOverlap(fig) >= l.bounds.width * 0.5f
         val reach = if (small) max(em * 1.2f, 6f) else em * 0.6f
         return within && vGap <= reach
-    }
-
-    /**
-     * Body text size of the page: the font size carrying the most characters in wide lines
-     * (paragraph text), so that many small diagram labels don't count as the body.
-     */
-    private fun typicalSize(lines: List<TextLine>, pageWidth: Float): Float {
-        if (lines.isEmpty()) return 10f
-        val wide = lines.filter { it.bounds.width > pageWidth * 0.4f }
-        val bySize = (wide.ifEmpty { lines }).groupBy { (it.fontSize * 2f).toInt() }
-            .maxByOrNull { (_, ls) -> ls.sumOf { it.text.length } }!!
-        return bySize.value.map { it.fontSize }.average().toFloat()
     }
 
     private companion object {
@@ -246,14 +329,34 @@ class FigureDetector {
 
     private fun boundsOf(c: List<Item>): Rect = Rect.bounding(c.map { it.bounds })!!
 
-    private fun mergeClusters(clusters: MutableList<MutableList<Item>>, slack: Float) {
+    /** A line of running text: a figure never extends across one. */
+    private fun isProse(l: TextLine, bodySize: Float, pageWidth: Float): Boolean =
+        l.wordCount >= 5 && l.fontSize >= bodySize * 0.88f && l.bounds.width >= pageWidth * 0.25f &&
+            !Patterns.caption.containsMatchIn(l.text)
+
+    /** Whether a prose line lies between [a] and [b] (inside their union but outside both). */
+    private fun separated(a: Rect, b: Rect, prose: List<TextLine>): Boolean {
+        val u = a.union(b)
+        return prose.any { l ->
+            val r = l.bounds
+            r.intersects(u, -1f) && !r.intersects(a, -1f) && !r.intersects(b, -1f) && r.coveredBy(u) >= 0.5f
+        }
+    }
+
+    /** A strip of colour behind a line of text (heading bars, example banners). */
+    private fun isBanner(r: Rect, lines: List<TextLine>, bodySize: Float): Boolean =
+        r.height <= bodySize * 3.2f && r.width >= r.height * 3.5f &&
+            lines.any { l -> l.bounds.coveredBy(r.outset(2f)) >= 0.7f }
+
+    private fun mergeClusters(clusters: MutableList<MutableList<Item>>, slack: Float, prose: List<TextLine>) {
         var changed = true
         while (changed) {
             changed = false
             outer@ for (i in clusters.indices) {
                 val bi = boundsOf(clusters[i])
                 for (j in i + 1 until clusters.size) {
-                    if (bi.intersects(boundsOf(clusters[j]), slack)) {
+                    val bj = boundsOf(clusters[j])
+                    if (bi.intersects(bj, slack) && !separated(bi, bj, prose)) {
                         clusters[i].addAll(clusters[j])
                         clusters.removeAt(j)
                         changed = true
@@ -289,6 +392,16 @@ class FigureDetector {
             lastBottom = l.bounds.bottom
         }
         return null
+    }
+
+    /** A caption printed in the margin column next to the figure (common in textbooks). */
+    private fun findCaptionBeside(bounds: Rect, lines: List<TextLine>, pageWidth: Float): List<TextLine>? {
+        val first = lines.filter { l ->
+            Patterns.caption.containsMatchIn(l.text) && l.bounds.horizontalOverlap(bounds) <= 0f &&
+                max(bounds.left - l.bounds.right, l.bounds.left - bounds.right) <= pageWidth * 0.3f &&
+                l.bounds.top >= bounds.top - l.fontSize * 2f && l.bounds.top <= bounds.bottom
+        }.minByOrNull { abs(it.bounds.top - bounds.top) } ?: return null
+        return captionLines(first, lines)
     }
 
     private fun findCaptionAbove(bounds: Rect, lines: List<TextLine>): TextLine? =

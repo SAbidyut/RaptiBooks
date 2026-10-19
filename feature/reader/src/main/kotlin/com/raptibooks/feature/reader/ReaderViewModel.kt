@@ -9,6 +9,12 @@ import com.raptibooks.core.data.ReaderRepository
 import com.raptibooks.core.data.SettingsRepository
 import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
+import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.MarkKey
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
+import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SearchHit
@@ -20,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -37,6 +44,8 @@ class ReaderViewModel(
             val toc: List<TocEntry>,
             val source: BlockSource,
             val initial: ReadingPosition,
+            /** Callout boxes (worked examples, notes) drawn as cards around their blocks. */
+            val boxes: BoxLookup = BoxLookup(emptyList()),
         ) : Load
     }
 
@@ -47,6 +56,48 @@ class ReaderViewModel(
 
     val bookmarks: StateFlow<List<Bookmark>> =
         repo.bookmarks(bookId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The user's underlined passages, by text (see [MarkKey]). */
+    val highlights: StateFlow<Map<Long, List<Highlight>>> =
+        repo.highlights(bookId).map { all -> all.groupBy { MarkKey.of(it.blockIndex, it.part) } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Underlines [edits] (character ranges per text) in [color]; a null colour erases them. */
+    fun mark(edits: Map<Long, List<IntRange>>, color: MarkColor?) {
+        viewModelScope.launch { repo.mark(bookId, edits, color) }
+    }
+
+    /** The user's freehand lines on pictures, by block. */
+    val ink: StateFlow<Map<Int, List<InkStroke>>> =
+        repo.ink(bookId).map { all -> all.groupBy { it.blockIndex } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun addInk(block: Int, color: MarkColor, points: FloatArray) {
+        viewModelScope.launch { repo.addInk(bookId, block, color, points) }
+    }
+
+    fun eraseInk(ids: List<Long>) {
+        viewModelScope.launch { repo.eraseInk(ids) }
+    }
+
+    /** The user's pinned notes, by block. */
+    val notes: StateFlow<Map<Int, List<Note>>> =
+        repo.notes(bookId).map { all -> all.groupBy { it.blockIndex } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun newVoiceFile() = repo.newVoiceFile(bookId)
+
+    fun addNote(block: Int, page: Int, x: Float, y: Float, kind: NoteKind, text: String, audioPath: String?, durationMs: Long) {
+        viewModelScope.launch { repo.addNote(bookId, block, page, x, y, kind, text, audioPath, durationMs) }
+    }
+
+    fun updateNoteText(noteId: Long, text: String) {
+        viewModelScope.launch { repo.updateNoteText(noteId, text) }
+    }
+
+    fun deleteNote(note: Note) {
+        viewModelScope.launch { repo.deleteNote(note) }
+    }
 
     /** Search term highlighted in the text after jumping to a search result. */
     var highlight by mutableStateOf<String?>(null)
@@ -70,8 +121,9 @@ class ReaderViewModel(
             val start = ReadingPosition(book.position.blockIndex.coerceIn(0, maxOf(0, book.blockCount - 1)), book.position.offset)
             source.preload(start.blockIndex)
             val toc = repo.toc(bookId)
+            val boxes = BoxLookup(runCatching { repo.boxes(bookId) }.getOrDefault(emptyList()))
             repo.markOpened(bookId)
-            load = Load.Ready(book, toc, source, start)
+            load = Load.Ready(book, toc, source, start, boxes)
         }
     }
 

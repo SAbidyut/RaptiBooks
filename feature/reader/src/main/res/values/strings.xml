@@ -10,6 +10,30 @@
     <string name="reader_text_settings">Text settings</string>
     <string name="reader_more">More</string>
     <string name="reader_original">Original PDF page</string>
+    <string name="reader_marker">Highlighter pen</string>
+    <string name="mark_red">Red pen</string>
+    <string name="mark_blue">Blue pen</string>
+    <string name="mark_yellow">Yellow pen</string>
+    <string name="mark_green">Green pen</string>
+    <string name="mark_eraser">Eraser</string>
+    <string name="mark_close">Close pen menu</string>
+    <string name="mark_note">Note</string>
+    <string name="note_tap_hint">Tap where you want to leave a note</string>
+    <string name="note_cancel">Cancel</string>
+    <string name="note_save">Save</string>
+    <string name="note_delete">Delete</string>
+    <string name="note_choose_title">Add to this place</string>
+    <string name="note_choose_voice">Voice</string>
+    <string name="note_choose_text">Note</string>
+    <string name="note_text_hint">Write your note…</string>
+    <string name="note_title">Note</string>
+    <string name="voice_title">Voice note</string>
+    <string name="voice_recording">Recording…</string>
+    <string name="voice_stop_save">Stop &amp; save</string>
+    <string name="voice_play">Play</string>
+    <string name="voice_stop">Stop</string>
+    <string name="voice_no_permission">The microphone permission is needed to record.</string>
+    <string name="voice_failed">Could not record.</string>
     <string name="reader_info">Book info</string>
     <string name="reader_page">Page %1$d of %2$d</string>
     <string name="reader_page_short">p. %1$d</string>
@@ -36,7 +60,6 @@
     <string name="settings_line_spacing">Line spacing</string>
     <string name="settings_margins">Margins</string>
     <string name="settings_justify">Justify text</string>
-    <string name="settings_tap_turn">Tap screen edges to turn pages</string>
     <string name="settings_keep_on">Keep screen on</string>
     <string name="table_show_original">Show as printed</string>
     <string name="table_show_text">Show as table</string>
@@ -57,5 +80,7 @@
     <string name="original_reflow">Back to reflowed text</string>
     <string name="original_error">The original PDF could not be opened.</string>
     <string name="action_close">Close</string>
+    <string name="equation_scroll_hint">← Swipe to see the whole formula →</string>
+    <string name="table_scroll_hint">← Swipe sideways to see all columns →</string>
     <string name="figure_scroll_hint">← Swipe sideways to see all · tap to zoom →</string>
 </resources>

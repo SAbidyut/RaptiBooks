@@ -1,5 +1,6 @@
 package com.raptibooks.core.reflow
 
+import com.raptibooks.core.model.BoxSpan
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
@@ -35,18 +36,59 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     private var pendingTable: TableBlock? = null
     private val deferred = mutableListOf<StructuredElement>()
     private val headings = mutableListOf<TocEntry>()
+    private val printed = mutableListOf<PrintedEntry>()
     private val firstBlockOfPage = sortedMapOf<Int, Int>()
+
+    /** Callout boxes: the open one, one that may continue on the next page, and finished ones. */
+    private class OpenBox(val start: Int, val fill: Int, val accent: Int)
+    private var openBox: OpenBox? = null
+    private var continuingBox: OpenBox? = null
+    private val boxes = mutableListOf<BoxSpan>()
 
     val blockCount: Int get() = nextIndex
 
-    fun addPage(elements: List<StructuredElement>) {
+    fun addPage(pageElements: List<StructuredElement>) {
+        var elements = pageElements
         if (elements.isEmpty()) return
+        // A box running on from the previous page: its end and new start are one box, so a
+        // paragraph split by the page break can still be joined.
+        val first = elements.first()
+        val pendingEnd = deferred.singleOrNull() as? StructuredElement.Box
+        if (held != null && pendingEnd != null && !pendingEnd.start && pendingEnd.region.openBottom &&
+            first is StructuredElement.Box && first.start && first.region.openTop && sameColours(pendingEnd, first)
+        ) {
+            deferred.clear()
+            elements = elements.drop(1)
+            if (elements.isEmpty()) return
+        }
+        // Answer options split by the page break: (ক) (খ) at the foot, (গ) (ঘ) on the next page.
+        val heldOptions = held?.takeIf { it.kind == ParagraphKind.OPTIONS }
+        if (heldOptions != null) {
+            var text = heldOptions.text
+            var k = 0
+            while (k < elements.size) {
+                val el = elements[k]
+                val more = when {
+                    el is StructuredElement.ListItem && nextOption(text, el.marker) -> el.marker + "\t" + el.text.replace('\n', ' ')
+                    el is StructuredElement.Paragraph && el.kind == ParagraphKind.OPTIONS && nextOption(text, el.text.substringBefore('\t')) -> el.text
+                    else -> null
+                } ?: break
+                text += "\n" + more
+                k++
+            }
+            if (k > 0) {
+                held = heldOptions.copy(text = text)
+                elements = elements.drop(k)
+                if (elements.isEmpty()) return
+            }
+        }
         // The last body paragraph may continue on the next page; trailing footnotes are deferred.
         var holdIndex = -1
         for (i in elements.indices.reversed()) {
             val el = elements[i]
             if (el is StructuredElement.Paragraph && el.kind == ParagraphKind.NOTE) continue
-            if (el is StructuredElement.Paragraph && el.kind == ParagraphKind.BODY) holdIndex = i
+            if (el is StructuredElement.Box) continue
+            if (el is StructuredElement.Paragraph && (el.kind == ParagraphKind.BODY || el.kind == ParagraphKind.OPTIONS)) holdIndex = i
             break
         }
 
@@ -85,8 +127,46 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     fun finish(): List<TocEntry> {
         flushHeld()
         flushTable()
+        closeContinuing()
+        openBox?.let { closeBox(it) }
+        openBox = null
         return headings.toList()
     }
+
+    /** Ranges of blocks printed inside callout boxes, in order. Valid after [finish]. */
+    fun boxes(): List<BoxSpan> = boxes.toList()
+
+    private fun sameColours(a: StructuredElement.Box, b: StructuredElement.Box) =
+        a.region.fill == b.region.fill && a.region.accent == b.region.accent
+
+    private fun closeBox(b: OpenBox) {
+        val end = nextIndex - 1
+        if (end >= b.start) boxes += BoxSpan(b.start, end, b.fill, b.accent)
+    }
+
+    private fun closeContinuing() {
+        continuingBox?.let { closeBox(it) }
+        continuingBox = null
+    }
+
+    private fun boxMarker(el: StructuredElement.Box) {
+        flushTable()
+        val r = el.region
+        if (el.start) {
+            val cont = continuingBox
+            continuingBox = null
+            openBox?.let { closeBox(it) }
+            openBox = if (cont != null && r.openTop && cont.fill == r.fill && cont.accent == r.accent) cont else OpenBox(nextIndex, r.fill, r.accent)
+            if (openBox !== cont) cont?.let { closeBox(it) }
+        } else {
+            val b = openBox ?: return
+            openBox = null
+            if (r.openBottom) continuingBox = b else closeBox(b)
+        }
+    }
+
+    /** Lines of the book's own printed table of contents, in order. */
+    fun printedContents(): List<PrintedEntry> = printed.toList()
 
     /** First block index for each page that produced blocks. */
     fun pageStarts(): Map<Int, Int> = firstBlockOfPage.toMap()
@@ -108,6 +188,7 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     /** Emits elements[i] (and possibly a following caption); returns how many were consumed. */
     private fun emitElement(elements: List<StructuredElement>, i: Int): Int {
         when (val el = elements[i]) {
+            is StructuredElement.Box -> boxMarker(el)
             is StructuredElement.Heading -> {
                 val idx = emit { HeadingBlock(it, el.pageIndex, el.level, el.text) }
                 if (el.level <= 3) headings += TocEntry(el.text, el.level, idx, el.pageIndex)
@@ -119,7 +200,7 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                 var caption = region.caption
                 var consumed = 1
                 val next = elements.getOrNull(i + 1)
-                if (caption == null && next is StructuredElement.Paragraph && next.text.length < 400 &&
+                if (caption == null && region.kind != FigureKind.EQUATION && next is StructuredElement.Paragraph && next.text.length < 400 &&
                     Patterns.caption.containsMatchIn(next.text)
                 ) {
                     caption = next.text
@@ -132,11 +213,16 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                         FigureKind.RASTER -> ImageKind.PHOTO
                         FigureKind.SCAN -> ImageKind.PAGE
                         FigureKind.MIXED -> ImageKind.FIGURE
+                        FigureKind.EQUATION -> ImageKind.EQUATION
                     }
                     emit {
                         ImageBlock(it, el.pageIndex, path, region.imageWidth, region.imageHeight, caption, kind,
-                            region.bounds.width, region.textSize)
+                            region.bounds.width, region.textSize, region.text)
                     }
+                } else if (region.kind == FigureKind.EQUATION) {
+                    // Not rendered (no renderer): the formula's text is better than nothing.
+                    val text = listOfNotNull(region.text, caption).joinToString("   ")
+                    if (text.isNotBlank()) emit { ParagraphBlock(it, el.pageIndex, text, kind = ParagraphKind.CENTERED) }
                 } else if (caption != null) {
                     emit { ParagraphBlock(it, el.pageIndex, caption, kind = ParagraphKind.CAPTION) }
                 }
@@ -173,7 +259,31 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     private fun emitParagraph(p: StructuredElement.Paragraph) {
         val text = p.text.trim()
         if (text.isEmpty()) return
-        emit { ParagraphBlock(it, p.pageIndex, text, p.styles, p.kind) }
+        val idx = emit { ParagraphBlock(it, p.pageIndex, text, p.styles, p.kind) }
+        if (p.kind == ParagraphKind.TOC) {
+            val tab = text.indexOf('\t')
+            val title = if (tab >= 0) text.substring(0, tab) else text
+            val page = if (tab >= 0) text.substring(tab + 1) else ""
+            printed += PrintedEntry(title.trim(), page.trim(), p.styles.any { it.bold }, idx)
+        }
+    }
+
+    /** Whether [marker] is the option letter after the last one in [options] ("(খ)" → "(গ)"). */
+    private fun nextOption(options: String, marker: String): Boolean {
+        val last = options.substringAfterLast('\n').substringBefore('\t')
+        val a = optionLetter(last) ?: return false
+        val b = optionLetter(marker) ?: return false
+        return a.first == b.first && b.second == a.second + 1
+    }
+
+    private fun optionLetter(marker: String): Pair<String, Int>? {
+        val core = marker.trim().removePrefix("(").removeSuffix(")").removeSuffix(".")
+        if (core.length != 1) return null
+        for (alphabet in listOf("কখগঘঙচ", "abcdef", "ABCDEF")) {
+            val k = alphabet.indexOf(core[0])
+            if (k >= 0) return alphabet to k
+        }
+        return null
     }
 
     private fun continuesTable(prev: TableBlock, next: StructuredElement.Table): Boolean {
@@ -191,6 +301,8 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
 
     private inline fun emit(make: (Int) -> ContentBlock): Int {
         if (pendingTable != null) flushTable()
+        // Something printed between a box at the foot of a page and the next page: the box ended.
+        if (continuingBox != null) closeContinuing()
         val idx = nextIndex++
         val block = make(idx)
         firstBlockOfPage.putIfAbsent(block.pageIndex, idx)

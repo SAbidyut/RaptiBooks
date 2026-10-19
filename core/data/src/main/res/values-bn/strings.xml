@@ -7,6 +7,7 @@
     <string name="progress_opening">পিডিএফ খোলা হচ্ছে…</string>
     <string name="progress_page">পৃষ্ঠা %1$d / %2$d বিশ্লেষণ হচ্ছে</string>
     <string name="progress_ocr">স্ক্যান করা পৃষ্ঠা %1$d / %2$d পড়া হচ্ছে (OCR)</string>
+    <string name="progress_scan">বইয়ের গঠন দেখা হচ্ছে…</string>
     <string name="progress_layout">বইয়ের বিন্যাস তৈরি হচ্ছে…</string>
     <string name="status_cancelled">রূপান্তর বাতিল করা হয়েছে</string>
     <string name="error_missing_file">পিডিএফ ফাইলটি পাওয়া যাচ্ছে না। আবার ইমপোর্ট করুন।</string>

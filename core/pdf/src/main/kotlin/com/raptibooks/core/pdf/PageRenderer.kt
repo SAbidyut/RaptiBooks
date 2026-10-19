@@ -29,6 +29,9 @@ interface PageRenderer : Closeable {
     /** Renders [region] (display points) at [scale] pixels per point. */
     fun renderRegion(index: Int, region: Rect, scale: Float): Bitmap
 
+    /** Whether [renderRegion] renders only the region (cheap for many small regions). */
+    val rendersRegionsDirectly: Boolean
+
     companion object {
         /**
          * Opens the fastest available renderer, falling back to PdfBox when pdfium refuses the file
@@ -64,6 +67,7 @@ private class AndroidPageRenderer(file: File) : PageRenderer {
     }
 
     override val pageCount: Int = renderer.pageCount
+    override val rendersRegionsDirectly: Boolean get() = true
 
     @Synchronized
     override fun pageSize(index: Int): Pair<Float, Float> {
@@ -127,6 +131,7 @@ private class PdfBoxPageRenderer(file: File, scratchDir: File) : PageRenderer {
     private val renderer = PDFRenderer(document).apply { isSubsamplingAllowed = true }
 
     override val pageCount: Int = document.numberOfPages
+    override val rendersRegionsDirectly: Boolean get() = false
 
     override fun pageSize(index: Int): Pair<Float, Float> {
         val t = DisplayTransform(document.getPage(index))

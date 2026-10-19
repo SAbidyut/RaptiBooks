@@ -2,6 +2,7 @@ package com.raptibooks.core.pdf
 
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.raw.TextFragment
+import com.raptibooks.core.structure.text.TextCleaner
 import com.tom_roush.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequence
 import com.tom_roush.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequenceWithProperties
 import com.tom_roush.pdfbox.contentstream.operator.markedcontent.EndMarkedContentSequence
@@ -10,6 +11,7 @@ import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.font.PDFont
+import com.tom_roush.pdfbox.pdmodel.font.PDSimpleFont
 import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
@@ -49,6 +51,35 @@ internal class TextCollector : PDFTextStripper() {
 
     private val markedStack = ArrayDeque<ActualTextSpan?>()
 
+    /** Set while PdfBox processes a glyph that was already recorded as a placeholder. */
+    private var suppressText = false
+
+    /**
+     * Whether the glyph yields real text: a mapping, or (for simple fonts, as PdfBox does) a
+     * printable character code. Control characters, private-use code points and missing
+     * mappings mean the font does not say what the glyph is.
+     */
+    private fun hasText(font: PDFont, code: Int, unicode: String?): Boolean {
+        val text = unicode ?: if (font is PDSimpleFont && code in 0x20..0x7E) code.toChar().toString() else return false
+        if (text.isBlank()) return true
+        return TextCleaner.clean(text).any { !it.isWhitespace() }
+    }
+
+    private fun addPlaceholder(m: Matrix, font: PDFont, displacement: Vector) {
+        if (!transform.isUpright(m.scaleX, m.shearY)) return
+        val size = m.scalingFactorY
+        if (size !in 0.5f..500f) return
+        val tx = m.translateX
+        val ty = m.translateY
+        val x0 = transform.mapAbsoluteX(tx, ty)
+        val baseline = transform.mapAbsoluteY(tx, ty)
+        val advance = (displacement.x * m.scalingFactorX).takeIf { it.isFinite() && it > 0f } ?: (size * 0.5f)
+        fragments += TextFragment(
+            TextCleaner.PLACEHOLDER.toString(), x0, baseline - size * 0.82f, x0 + advance, baseline + size * 0.22f,
+            baseline, size, font.name ?: "", false, false,
+        )
+    }
+
     init {
         addOperator(BeginMarkedContentSequenceWithProperties())
         addOperator(BeginMarkedContentSequence())
@@ -80,6 +111,18 @@ internal class TextCollector : PDFTextStripper() {
     override fun showGlyph(textRenderingMatrix: Matrix, font: PDFont, code: Int, unicode: String?, displacement: Vector) {
         glyphsDrawn++
         val span = markedStack.lastOrNull { it != null }
+        if (span == null && !hasText(font, code, unicode)) {
+            // A symbol without a usable Unicode mapping (e.g. "=" or "×" of a math font): keep its
+            // place so that equations are recognised and the symbol can be identified by shape.
+            addPlaceholder(textRenderingMatrix, font, displacement)
+            suppressText = true
+            try {
+                super.showGlyph(textRenderingMatrix, font, code, unicode, displacement)
+            } finally {
+                suppressText = false
+            }
+            return
+        }
         if (span != null) {
             val tx = textRenderingMatrix.translateX
             val ty = textRenderingMatrix.translateY
@@ -99,6 +142,7 @@ internal class TextCollector : PDFTextStripper() {
 
     override fun processTextPosition(text: TextPosition) {
         glyphsMapped++
+        if (suppressText) return
         val span = markedStack.lastOrNull { it != null }
         if (span != null) {
             span.positions += text
@@ -130,7 +174,9 @@ internal class TextCollector : PDFTextStripper() {
         super.endMarkedContentSequence()
     }
 
-    private fun add(t: TextPosition, unicode: String, group: List<TextPosition>? = null) {
+    private fun add(t: TextPosition, mapped: String, group: List<TextPosition>? = null) {
+        // Greek/math fonts of typeset books put "Δ" on the code of "¢".
+        val unicode = if (mapped == "¢" && MATH_FONT.containsMatchIn(t.font?.name ?: "")) "Δ" else mapped
         val m = t.textMatrix
         val a = m.scaleX
         val b = m.shearY
@@ -208,5 +254,6 @@ internal class TextCollector : PDFTextStripper() {
         private val ACTUAL_TEXT: COSName = COSName.getPDFName("ActualText")
         private val BOLD = Regex("bold|black|heavy|semibold|demi|extrabold|ultrabold|-bd|,bd")
         private val ITALIC = Regex("italic|oblique|-it\\b|,it\\b")
+        private val MATH_FONT = Regex("greek|math|symbol|pi\\b|pione|pitwo|euclid", RegexOption.IGNORE_CASE)
     }
 }

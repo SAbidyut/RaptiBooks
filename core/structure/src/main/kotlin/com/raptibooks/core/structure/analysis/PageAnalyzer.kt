@@ -16,12 +16,22 @@ import com.raptibooks.core.structure.text.TextQuality
  * First pass, one page at a time: raw fragments/graphics -> lines, tables and figures.
  * Cross-page decisions (headers, headings, paragraphs) happen later in [PageStructurer].
  */
-class PageAnalyzer {
+class PageAnalyzer(
+    /** Body text size of the document, when known from a first scan of all pages. */
+    private val bodySizeHint: Float? = null,
+) {
     private val lineBuilder = LineBuilder()
     private val tableDetector = TableDetector(lineBuilder)
     private val figureDetector = FigureDetector()
+    private val equationDetector = EquationDetector()
 
-    fun analyze(page: RawPage): PageLayout {
+    fun analyze(input: RawPage): PageLayout {
+        // Text set at 1-2 pt is invisible (bookmark targets, hidden running-header markers);
+        // it must not be read as content.
+        val page = if (input.fromOcr || input.fragments.none { it.fontSize < MIN_VISIBLE_SIZE }) input else RawPage(
+            input.index, input.width, input.height, input.fragments.filter { it.fontSize >= MIN_VISIBLE_SIZE },
+            input.images, input.paths, input.rotatedText, input.fromOcr, input.ocrPictures,
+        )
         val spaces = page.fragments.count { it.isSpace }
         val solid = page.fragments.size - spaces
         lineBuilder.explicitSpacesHint = if (solid < 20) null else spaces * 30 >= solid
@@ -32,8 +42,12 @@ class PageAnalyzer {
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
         }
         val (allLines, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining), page)
-        val (aligned, consumed) = tableDetector.detectAligned(allLines, page)
-        var lines = allLines.filter { it !in consumed }
+        val bodySize = bodySizeHint ?: typicalSize(allLines, page.width)
+        // Display equations first: their stacked rows would otherwise look like table rows.
+        val equations = if (page.fromOcr) null else equationDetector.detect(page, allLines, bodySize, ruled.map { it.bounds })
+        val textLines = if (equations == null) allLines else allLines.filter { it !in equations.absorbed }
+        val (aligned, consumed) = tableDetector.detectAligned(textLines, page)
+        var lines = textLines.filter { it !in consumed }
 
         // Table captions ("Table 2: ...") directly above or below a table.
         val captionLines = HashSet<TextLine>()
@@ -53,15 +67,40 @@ class PageAnalyzer {
         }
         lines = lines.filter { it !in captionLines }
 
-        val figurePage = if (bulletPaths.isEmpty()) page else RawPage(
+        val equationPaths = equations?.paths ?: emptySet()
+        val figurePage = if (bulletPaths.isEmpty() && equationPaths.isEmpty()) page else RawPage(
             page.index, page.width, page.height, page.fragments, page.images,
-            page.paths.filter { it !in bulletPaths }, page.rotatedText, page.fromOcr, page.ocrPictures,
+            page.paths.filter { it !in bulletPaths && it !in equationPaths }, page.rotatedText, page.fromOcr, page.ocrPictures,
         )
-        val figures = figureDetector.detect(figurePage, lines, tables)
-        val body = lines.filter { it !in figures.absorbed }
+        val equationRegions = equations?.equations ?: emptyList()
+        val figures = figureDetector.detect(figurePage, lines, tables, equationRegions.map { it.bounds }, bodySize)
+        val pieces = lines.filter { it !in figures.absorbed }
+        // Diagrams split into pieces are put back together above their captions.
+        val whole = FigureConsolidator().consolidate(figurePage, pieces, figures.figures + equationRegions, tables, bodySize, allLines)
+        val body = pieces.filter { it !in whole.absorbed }
         val chars = allLines.sumOf { TextQuality.letterCount(it.text) } +
             ruled.sumOf { t -> t.rows.sumOf { r -> r.sumOf { TextQuality.letterCount(it) } } }
-        return PageLayout(page.index, page.width, page.height, body, figures.figures, tables, page.fromOcr, chars)
+        return PageLayout(
+            page.index, page.width, page.height, body, whole.figures, whole.tables, page.fromOcr, chars,
+            if (page.fromOcr) emptyList() else BoxDetector().detect(page, allLines, whole.tables),
+        )
+    }
+
+    companion object {
+        /** Smaller text is not meant to be read (hidden markers). */
+        const val MIN_VISIBLE_SIZE = 2.5f
+
+        /**
+         * Body text size of a page: the font size carrying the most characters in wide lines
+         * (paragraph text), so that many small labels or big formula symbols don't count.
+         */
+        fun typicalSize(lines: List<TextLine>, pageWidth: Float): Float {
+            if (lines.isEmpty()) return 10f
+            val wide = lines.filter { it.bounds.width > pageWidth * 0.4f }
+            val bySize = (wide.ifEmpty { lines }).groupBy { (it.fontSize * 2f).toInt() }
+                .maxByOrNull { (_, ls) -> ls.sumOf { it.text.length } }!!
+            return bySize.value.map { it.fontSize }.average().toFloat()
+        }
     }
 }
 

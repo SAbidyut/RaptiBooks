@@ -32,10 +32,16 @@ class TextLine(
     override fun toString(): String = "Line('$text' size=$fontSize @${bounds.left},${bounds.top})"
 }
 
-enum class FigureKind { RASTER, VECTOR, MIXED, SCAN }
+enum class FigureKind {
+    RASTER, VECTOR, MIXED, SCAN,
+
+    /** A display equation; [FigureRegion.caption] is its number, [FigureRegion.text] its text. */
+    EQUATION,
+}
 
 class FigureRegion(
-    val bounds: Rect,
+    /** Region on the page; narrowed to the printed content when the image is cropped. */
+    var bounds: Rect,
     val kind: FigureKind,
     val caption: String? = null,
     var imagePath: String? = null,
@@ -43,6 +49,8 @@ class FigureRegion(
     var imageHeight: Int = 0,
     /** Typical size (pt) of the text printed inside the figure, 0 if it has none. */
     val textSize: Float = 0f,
+    /** Text content (an equation's text, for search), if any. */
+    val text: String? = null,
 )
 
 class TableRegion(
@@ -58,6 +66,18 @@ class TableRegion(
     val columnCount: Int get() = rows.maxOfOrNull { it.size } ?: 0
 }
 
+/**
+ * A tinted callout box around text (worked example, definition, note). Colours are 0xRRGGBB.
+ * [openTop]/[openBottom]: the box runs on from the previous page / onto the next one.
+ */
+class BoxRegion(
+    val bounds: Rect,
+    val fill: Int,
+    val accent: Int,
+    val openTop: Boolean = false,
+    val openBottom: Boolean = false,
+)
+
 class PageLayout(
     val index: Int,
     val width: Float,
@@ -68,9 +88,10 @@ class PageLayout(
     val fromOcr: Boolean,
     /** Number of meaningful characters on the page (all lines, including figure labels). */
     val charCount: Int,
+    val boxes: List<BoxRegion> = emptyList(),
 ) {
     companion object {
-        private const val MAGIC = 0x52424C32 // "RBL2"
+        private const val MAGIC = 0x52424C34 // "RBL4"
 
         fun write(layout: PageLayout, file: File) {
             val tmp = File(file.parentFile, file.name + ".tmp")
@@ -92,6 +113,7 @@ class PageLayout(
                     out.writeInt(f.imageWidth)
                     out.writeInt(f.imageHeight)
                     out.writeFloat(f.textSize)
+                    writeNullable(out, f.text)
                 }
                 out.writeInt(layout.tables.size)
                 for (t in layout.tables) {
@@ -107,6 +129,14 @@ class PageLayout(
                         out.writeInt(row.size)
                         for (cell in row) writeString(out, cell)
                     }
+                }
+                out.writeInt(layout.boxes.size)
+                for (b in layout.boxes) {
+                    writeRect(out, b.bounds)
+                    out.writeInt(b.fill)
+                    out.writeInt(b.accent)
+                    out.writeBoolean(b.openTop)
+                    out.writeBoolean(b.openBottom)
                 }
             }
             if (!tmp.renameTo(file)) {
@@ -129,7 +159,7 @@ class PageLayout(
                     val kind = FigureKind.entries[inp.readByte().toInt()]
                     val caption = readNullable(inp)
                     val path = readNullable(inp)
-                    FigureRegion(b, kind, caption, path, inp.readInt(), inp.readInt(), inp.readFloat())
+                    FigureRegion(b, kind, caption, path, inp.readInt(), inp.readInt(), inp.readFloat(), readNullable(inp))
                 }
                 val tables = List(inp.readInt()) {
                     val b = readRect(inp)
@@ -142,7 +172,10 @@ class PageLayout(
                     val rows = List(inp.readInt()) { List(inp.readInt()) { readString(inp) } }
                     TableRegion(b, rows, header, ruled, caption, path, w, h)
                 }
-                PageLayout(index, width, height, lines, figures, tables, ocr, chars)
+                val boxes = List(inp.readInt()) {
+                    BoxRegion(readRect(inp), inp.readInt(), inp.readInt(), inp.readBoolean(), inp.readBoolean())
+                }
+                PageLayout(index, width, height, lines, figures, tables, ocr, chars, boxes)
             }
 
         private fun writeLine(out: DataOutputStream, l: TextLine) {

@@ -157,6 +157,22 @@ object BanglaText {
 
 /** General text cleanup shared by all extracted text. */
 object TextCleaner {
+    /**
+     * Stands for a glyph that has no usable Unicode mapping (typically a math symbol). It keeps
+     * the glyph's place during layout analysis and is dropped from the final text.
+     */
+    const val PLACEHOLDER = '\uFFFC'
+
+    private val deltaAsCent = Regex("¢(?=\\p{L})")
+
+    /** Final text: placeholders removed, "¢q"-style Δ from Greek/math fonts repaired. */
+    fun finish(text: String): String {
+        var t = text
+        if (t.indexOf(PLACEHOLDER) >= 0) t = t.replace(PLACEHOLDER.toString(), "")
+        if (t.indexOf('¢') >= 0) t = deltaAsCent.replace(t, "Δ")
+        return t
+    }
+
     private val ligatures = mapOf(
         'ﬀ' to "ff", 'ﬁ' to "fi", 'ﬂ' to "fl", 'ﬃ' to "ffi",
         'ﬄ' to "ffl", 'ﬅ' to "st", 'ﬆ' to "st",

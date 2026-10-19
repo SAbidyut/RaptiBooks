@@ -15,7 +15,8 @@ object Patterns {
         RegexOption.IGNORE_CASE,
     )
 
-    val tableCaption = Regex("^\\s*(?:table|সারণি|সারণী|টেবিল)\\s*$NUM*", RegexOption.IGNORE_CASE)
+    /** "Table 3", "সারণি ৪.৫:" — a number or a colon must follow ("সারণির শেষ সারি…" is prose). */
+    val tableCaption = Regex("^\\s*(?:table|সারণি|সারণী|টেবিল)\\s*(?:$NUM|[:.।\\-–—])", RegexOption.IGNORE_CASE)
 
     /** Bullet or enumerator at the start of a line, followed by whitespace. */
     val listMarker = Regex(
@@ -44,7 +45,9 @@ object Patterns {
     /** "Chapter 4", "অধ্যায় ৩", "Part II" */
     val chapter = Regex(
         "^\\s*(?:$CHAPTER_WORDS)\\s*(?:$NUM+|[IVXLC]+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|" +
-            "এক|দুই|তিন|চার|পাঁচ|ছয়|সাত|আট|নয়|দশ|প্রথম|দ্বিতীয়|তৃতীয়|চতুর্থ|পঞ্চম)?(?=[\\s:.\\-–—]|$)",
+            "এক|দুই|তিন|চার|পাঁচ|ছয়|সাত|আট|নয়|দশ|প্রথম|দ্বিতীয়|তৃতীয়|চতুর্থ|পঞ্চম)?" +
+            // Not "অধ্যায় ১৬-এর…" or "অধ্যায় ৭.১০-এ…": a reference inside a sentence.
+            "(?=[\\s:–—]|\\.(?![0-9০-৯])|-(?![\\u0980-\\u09FF])|$)",
         RegexOption.IGNORE_CASE,
     )
 
@@ -55,6 +58,22 @@ object Patterns {
      * ("অধ্যায় ০২ টুলস.........13"). Group 1 = title, group 2 = page.
      */
     val tocEntry = Regex("^\\s*(.*?\\S)\\s*(?:[.·…‥_]\\s?){4,}\\s*($NUM{1,4}|[ivxlcdm]{1,6})\\s*$", RegexOption.IGNORE_CASE)
+
+    /** Title of a printed table of contents ("Contents", "সূচিপত্র", "Index" as Bangla books call it). */
+    val contentsTitle = Regex(
+        "^\\s*(?:contents|table of contents|content|index|সূচিপত্র|সূচীপত্র|সূচি|সূচী|বিষয়সূচি|বিষয়সূচী|বিষয়সূচি|পাঠসূচি)\\s*[:ঃ]?\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** Labels of worked examples and exercises ("Example 1.4", "Practice Problem 2.1", "উদাহরণ ৭.৬"). */
+    val exampleLabel = Regex(
+        "^\\s*(?:example|practice problem|problem|exercise|solution|answer|উদাহরণ|অনুশীলনী|সমাধান|সমস্যা|প্রশ্ন)" +
+            "\\s*(?:$NUM+(?:[.\\-]$NUM+)*)?\\s*[:ঃ]?\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** A page number printed in a table of contents. */
+    val contentsPage = Regex("^\\s*($NUM{1,4}|[ivxlc]{1,6})\\s*$", RegexOption.IGNORE_CASE)
 
     /** An enumerator inside a line, e.g. the "(খ)" of "(ক) তিন   (খ) চার" (multiple-choice options). */
     val inlineEnumerator = Regex("(?<=\\s)(\\(?(?:[ক-হ]|[a-hA-H]|$NUM{1,2})\\))\\s+")

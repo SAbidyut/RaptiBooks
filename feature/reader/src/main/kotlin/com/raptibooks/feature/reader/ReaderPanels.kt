@@ -5,8 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -68,7 +67,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -87,6 +88,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
+import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.ReaderFont
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.model.ReaderTheme
@@ -241,7 +244,6 @@ internal fun SettingsSheet(settings: ReaderSettings, onChange: ((ReaderSettings)
                 valueRange = ReaderSettings.MIN_MARGIN.toFloat()..ReaderSettings.MAX_MARGIN.toFloat(),
             )
             SwitchRow(stringResource(R.string.settings_justify), settings.justify) { v -> onChange { it.copy(justify = v) } }
-            SwitchRow(stringResource(R.string.settings_tap_turn), settings.tapToTurn) { v -> onChange { it.copy(tapToTurn = v) } }
             SwitchRow(stringResource(R.string.settings_keep_on), settings.keepScreenOn) { v -> onChange { it.copy(keepScreenOn = v) } }
         }
     }
@@ -369,33 +371,102 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
-/** Full-screen image viewer with pinch-zoom, pan and double-tap zoom. */
+/**
+ * Keeps a picture of size [picture] (at scale 1, centred) that is shown [scale] times larger on
+ * the screen: it may move only as far as its edges reach past the screen's edges.
+ */
+internal fun clampOffset(offset: Offset, picture: Size, viewport: Size, scale: Float): Offset {
+    val maxX = ((picture.width * scale - viewport.width) / 2f).coerceAtLeast(0f)
+    val maxY = ((picture.height * scale - viewport.height) / 2f).coerceAtLeast(0f)
+    return Offset(offset.x.coerceIn(-maxX, maxX), offset.y.coerceIn(-maxY, maxY))
+}
+
+/**
+ * Full-screen image viewer with pinch-zoom, pan and double-tap zoom. For pictures of the book
+ * (not equations) the colour menu is there too: pick a colour and draw anywhere on the picture;
+ * the lines stay where they were drawn. With no colour chosen, one finger pans and zooms.
+ */
 @Composable
-internal fun ImageViewer(path: String, caption: String?, onClose: () -> Unit) {
+internal fun ImageViewer(
+    path: String,
+    caption: String?,
+    equation: Boolean,
+    strokes: List<InkStroke>,
+    colors: ReaderColors,
+    penOnStart: Boolean,
+    onDraw: (MarkColor, FloatArray) -> Unit,
+    onErase: (List<Long>) -> Unit,
+    onClose: () -> Unit,
+) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
-        val state = rememberTransformableState { zoom, pan, _ ->
-            scale = (scale * zoom).coerceIn(1f, 6f)
-            offset = if (scale == 1f) Offset.Zero else offset + pan
-        }
+        var tool by remember { mutableStateOf(MarkTool.NONE) }
+        var penOpen by remember { mutableStateOf(penOnStart) }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-            val widthPx = with(LocalDensity.current) { (maxWidth.toPx() * 2).roundToInt() }
+            val density = LocalDensity.current
+            val widthPx = with(density) { (maxWidth.toPx() * 2).roundToInt() }
             val image by rememberLocalImage(path, widthPx)
             val img = image
             if (img != null) {
-                Image(
-                    img, caption, contentScale = ContentScale.Fit,
-                    modifier = Modifier
+                val aspect = img.width.toFloat() / maxOf(1, img.height)
+                val fitWidth = minOf(constraints.maxWidth.toFloat(), constraints.maxHeight * aspect)
+                val picture = Size(fitWidth, fitWidth / aspect)
+                val viewport = Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
+                // Zoom around a point (the fingers, a double tap) so that it stays where it is, and
+                // never let the picture be dragged off the screen.
+                fun zoomTo(newScale: Float, focus: Offset, pan: Offset = Offset.Zero) {
+                    val target = newScale.coerceIn(1f, 6f)
+                    val center = Offset(viewport.width / 2f, viewport.height / 2f)
+                    val point = (focus - center - offset) / scale
+                    offset = clampOffset(focus - center - point * target + pan, picture, viewport, target)
+                    scale = target
+                }
+                Box(
+                    Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTapGestures(onDoubleTap = {
-                                if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2.5f
+                        .pointerInput(picture, viewport) {
+                            detectTapGestures(onDoubleTap = { tap ->
+                                if (scale > 1.05f) { scale = 1f; offset = Offset.Zero } else zoomTo(2.5f, tap)
                             })
                         }
-                        .transformable(state)
-                        .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
-                )
+                        .pointerInput(picture, viewport) {
+                            detectTransformGestures { centroid, pan, zoom, _ -> zoomTo(scale * zoom, centroid, pan) }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier
+                            .size(with(density) { picture.width.toDp() }, with(density) { picture.height.toDp() })
+                            // Figures with a transparent background must not vanish on the black viewer.
+                            .then(if (equation) Modifier else Modifier.background(Color.White))
+                            .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
+                    ) {
+                        Image(
+                            img, caption, contentScale = ContentScale.Fit,
+                            // Equations are ink masks: white on the black viewer.
+                            colorFilter = if (equation) ColorFilter.tint(Color.White) else null,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (!equation) {
+                            InkCanvas(strokes, Modifier.fillMaxSize())
+                            if (tool != MarkTool.NONE) {
+                                MarkOverlay(
+                                    tool = tool,
+                                    onStroke = { points, _ ->
+                                        val color = tool.color
+                                        if (color != null) {
+                                            val line = normalizedInk(points, picture, 2.5f * density.density)
+                                            if (line.size >= 2) onDraw(color, line)
+                                        } else {
+                                            onErase(inkHitIds(strokes, points, picture, 14f * density.density))
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             } else {
                 CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             }
@@ -406,6 +477,15 @@ internal fun ImageViewer(path: String, caption: String?, onClose: () -> Unit) {
                 Text(
                     caption, color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.5f)).padding(16.dp),
+                )
+            }
+            // The colour menu is only here when the pen was switched on while reading.
+            if (!equation && img != null && penOpen) {
+                MarkPalette(
+                    tool = tool, colors = colors, onSelect = { tool = it },
+                    onClose = { penOpen = false; tool = MarkTool.NONE },
+                    withNote = false,
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
                 )
             }
         }

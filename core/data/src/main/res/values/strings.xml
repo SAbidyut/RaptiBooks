@@ -7,6 +7,7 @@
     <string name="progress_opening">Opening PDF…</string>
     <string name="progress_page">Analyzing page %1$d of %2$d</string>
     <string name="progress_ocr">Reading scanned page %1$d of %2$d (OCR)</string>
+    <string name="progress_scan">Studying the book’s layout…</string>
     <string name="progress_layout">Building the book layout…</string>
     <string name="status_cancelled">Conversion cancelled</string>
     <string name="error_missing_file">The PDF file is missing. Please import it again.</string>

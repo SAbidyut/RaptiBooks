@@ -8,6 +8,10 @@ import com.raptibooks.core.structure.analysis.DocumentStats
 import com.raptibooks.core.structure.analysis.PageAnalyzer
 import com.raptibooks.core.structure.analysis.PageStructurer
 import com.raptibooks.core.structure.layout.PageLayout
+import com.raptibooks.core.structure.layout.BoxRegion
+import com.raptibooks.core.structure.analysis.StructuredElement
+import com.raptibooks.core.structure.geometry.Rect
+import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.raw.TextFragment
 import org.junit.Assert.assertEquals
@@ -130,5 +134,84 @@ class ReflowEngineTest {
         )
         assertEquals(listOf(3, 10, 20), toc.map { it.blockIndex })
         assertEquals(2, toc[2].level)
+    }
+
+    @Test
+    fun printedContentsBecomesTheTableOfContents() {
+        // Contents on page 1 (blocks 1-6); the book's page "1" is PDF page 3.
+        val printed = listOf(
+            PrintedEntry("Chapter 1 Basics", "1", true, 1),
+            PrintedEntry("1.1 Units", "2", false, 2),
+            PrintedEntry("1.2 Charge", "4", false, 3),
+            PrintedEntry("Chapter 2 Laws", "9", true, 4),
+            PrintedEntry("2.1 Ohm's law", "10", false, 5),
+        )
+        // Only some of them were detected as headings.
+        val headings = listOf(
+            com.raptibooks.core.model.TocEntry("Contents", 1, 0, 1),
+            com.raptibooks.core.model.TocEntry("Chapter 1 Basics", 1, 10, 3),
+            com.raptibooks.core.model.TocEntry("Chapter 2 Laws", 1, 60, 11),
+        )
+        val starts = (1..13).associateWith { (it - 1) * 6 }
+        val toc = TocBuilder.build(emptyList(), headings, starts, 80, printed)
+        assertEquals(listOf("Chapter 1 Basics", "1.1 Units", "1.2 Charge", "Chapter 2 Laws", "2.1 Ohm's law"), toc.map { it.title })
+        assertEquals(listOf(1, 2, 2, 1, 2), toc.map { it.level })
+        assertEquals(listOf(3, 4, 6, 11, 12), toc.map { it.pageIndex })
+        assertEquals(10, toc[0].blockIndex)
+        assertEquals(starts[4], toc[1].blockIndex)
+    }
+
+    @Test
+    fun unrelatedPrintedContentsIsIgnored() {
+        val printed = (1..5).map { PrintedEntry("Topic $it", "${it * 100}", false, it) }
+        val headings = listOf(com.raptibooks.core.model.TocEntry("Real chapter", 1, 10, 2))
+        val toc = TocBuilder.build(emptyList(), headings, mapOf(0 to 0, 2 to 9), 30, printed)
+        assertEquals(listOf("Real chapter"), toc.map { it.title })
+    }
+
+    @Test
+    fun boxRunningOverAPageBreakIsOneBox() {
+        val blocks = mutableListOf<ContentBlock>()
+        val engine = ReflowEngine { blocks += it }
+        val bottom = BoxRegion(Rect(70f, 600f, 525f, 780f), 0xF7F9FB, 0x1D5B8F, openBottom = true)
+        val top = BoxRegion(Rect(70f, 60f, 525f, 200f), 0xF7F9FB, 0x1D5B8F, openTop = true)
+        fun para(p: Int, t: String, kind: ParagraphKind = ParagraphKind.BODY) = StructuredElement.Paragraph(p, t, emptyList(), kind, false, 11f)
+        engine.addPage(
+            listOf(
+                para(0, "Before the box."),
+                StructuredElement.Box(0, true, bottom),
+                StructuredElement.Heading(0, 4, "উদাহরণ ৪.১"),
+                para(0, "The question runs"),
+                StructuredElement.Box(0, false, bottom),
+            ),
+        )
+        engine.addPage(
+            listOf(
+                StructuredElement.Box(1, true, top),
+                para(1, "onto the next page."),
+                para(1, "(ক)\tএক\n(খ)\tদুই", ParagraphKind.OPTIONS),
+                StructuredElement.Box(1, false, top),
+            ),
+        )
+        engine.addPage(
+            listOf(
+                StructuredElement.ListItem(2, "(গ)", "তিন", emptyList(), 1),
+                StructuredElement.ListItem(2, "(ঘ)", "চার", emptyList(), 1),
+                para(2, "After the box."),
+            ),
+        )
+        engine.finish()
+        val texts = blocks.map { it.plainText }
+        assertTrue(texts.toString(), texts.contains("The question runs onto the next page."))
+        val box = engine.boxes().single()
+        assertEquals(1, box.startIndex)
+        assertEquals("উদাহরণ ৪.১", blocks[box.startIndex].plainText)
+        assertEquals(0x1D5B8F, box.accent)
+        // Answer options split by the page break are one block again.
+        val options = blocks.filterIsInstance<ParagraphBlock>().single { it.kind == ParagraphKind.OPTIONS }
+        assertEquals("(ক)\tএক\n(খ)\tদুই\n(গ)\tতিন\n(ঘ)\tচার", options.text)
+        assertTrue(blocks.indexOf(options) <= box.endIndex)
+        assertEquals("After the box.", blocks.last().plainText)
+        assertTrue(box.endIndex < blocks.size - 1)
     }
 }

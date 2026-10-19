@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.onStart
  * SQLite storage for the library. Converted books are fully stored here (plus extracted
  * images on disk), so reading works offline and does not touch the PDF again.
  */
-class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, null, VERSION) {
+class RaptiDatabase(context: Context, name: String = NAME) : SQLiteOpenHelper(context.applicationContext, name, null, VERSION) {
 
     private val changes = MutableSharedFlow<Set<String>>(
         extraBufferCapacity = 64,
@@ -101,6 +101,82 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX bookmarks_book ON bookmarks(book_id, block_idx)")
+        createHighlights(db)
+        createInk(db)
+        createNotes(db)
+        createBoxes(db)
+    }
+
+    /** Underlined passages: a colour on a character range of one block's text. */
+    private fun createHighlights(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS highlights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                block_idx INTEGER NOT NULL,
+                start_pos INTEGER NOT NULL,
+                end_pos INTEGER NOT NULL,
+                color INTEGER NOT NULL,
+                part INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS highlights_book ON highlights(book_id, block_idx)")
+    }
+
+    /** Freehand lines on pictures. */
+    private fun createInk(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS ink (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                block_idx INTEGER NOT NULL,
+                color INTEGER NOT NULL,
+                points TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS ink_book ON ink(book_id, block_idx)")
+    }
+
+    /** Written and voice notes pinned to a place in the book. */
+    private fun createNotes(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                block_idx INTEGER NOT NULL,
+                page INTEGER NOT NULL,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                kind INTEGER NOT NULL,
+                text TEXT NOT NULL DEFAULT '',
+                audio_path TEXT,
+                duration INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS notes_book ON notes(book_id, block_idx)")
+    }
+
+    /** Callout boxes (worked examples, notes) as ranges of blocks. */
+    private fun createBoxes(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS boxes (
+                book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                start_idx INTEGER NOT NULL,
+                end_idx INTEGER NOT NULL,
+                fill INTEGER NOT NULL,
+                accent INTEGER NOT NULL,
+                PRIMARY KEY (book_id, start_idx)
+            ) WITHOUT ROWID
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -110,7 +186,27 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
             db.execSQL("ALTER TABLE books ADD COLUMN layout_version INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE books ADD COLUMN restore_page INTEGER NOT NULL DEFAULT -1")
         }
+        // Two earlier builds numbered their schema changes differently (3 = callout boxes in one,
+        // 3-5 = highlights, ink, notes in the other), so every table is checked, not assumed.
+        if (oldVersion < 6) {
+            if (!hasTable(db, "highlights")) createHighlights(db)
+            else if (!hasColumn(db, "highlights", "part")) db.execSQL("ALTER TABLE highlights ADD COLUMN part INTEGER NOT NULL DEFAULT 0")
+            createInk(db)
+            createNotes(db)
+            createBoxes(db)
+        }
     }
+
+    private fun hasTable(db: SQLiteDatabase, name: String): Boolean =
+        db.rawQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", arrayOf(name)).use { it.moveToFirst() }
+
+    private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
+        db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+            val nameIdx = c.getColumnIndex("name")
+            var found = false
+            while (c.moveToNext()) if (c.getString(nameIdx) == column) found = true
+            found
+        }
 
     internal fun notifyChanged(vararg tables: String) {
         changes.tryEmit(tables.toSet())
@@ -141,11 +237,15 @@ class RaptiDatabase(context: Context) : SQLiteOpenHelper(context.applicationCont
 
     companion object {
         private const val NAME = "raptibooks.db"
-        private const val VERSION = 2
+        private const val VERSION = 6
 
         const val BOOKS = "books"
         const val BLOCKS = "blocks"
         const val TOC = "toc"
         const val BOOKMARKS = "bookmarks"
+        const val BOXES = "boxes"
+        const val HIGHLIGHTS = "highlights"
+        const val INK = "ink"
+        const val NOTES = "notes"
     }
 }

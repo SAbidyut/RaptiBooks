@@ -6,14 +6,21 @@ import com.raptibooks.core.database.ContentDao
 import com.raptibooks.core.model.Book
 import com.raptibooks.core.model.Bookmark
 import com.raptibooks.core.model.ContentBlock
+import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ReadingPosition
 import com.raptibooks.core.model.SearchHit
+import com.raptibooks.core.model.BoxSpan
 import com.raptibooks.core.model.TocEntry
 import com.raptibooks.core.pdf.PageRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import java.io.File
 
 /** Read access to a converted book. Everything comes from the local database. */
 class ReaderRepository(
@@ -27,6 +34,8 @@ class ReaderRepository(
 
     suspend fun toc(id: Long): List<TocEntry> = withContext(Dispatchers.IO) { content.toc(id) }
 
+    suspend fun boxes(id: Long): List<BoxSpan> = withContext(Dispatchers.IO) { content.boxes(id) }
+
     suspend fun blocks(id: Long, from: Int, to: Int): List<ContentBlock> =
         withContext(Dispatchers.IO) { content.blocks(id, from, to) }
 
@@ -38,6 +47,36 @@ class ReaderRepository(
         withContext(Dispatchers.IO) { content.addBookmark(id, blockIndex, page, snippet) }
 
     suspend fun removeBookmark(bookmarkId: Long) = withContext(Dispatchers.IO) { content.deleteBookmark(bookmarkId) }
+
+    fun highlights(id: Long): Flow<List<Highlight>> = content.observeHighlights(id)
+
+    /** Underlines [edits] (character ranges per text, see MarkKey) in [color]; a null colour erases them. */
+    suspend fun mark(id: Long, edits: Map<Long, List<IntRange>>, color: MarkColor?) =
+        withContext(Dispatchers.IO) { content.markRanges(id, edits, color) }
+
+    fun ink(id: Long): Flow<List<InkStroke>> = content.observeInk(id)
+
+    suspend fun addInk(id: Long, blockIndex: Int, color: MarkColor, points: FloatArray) =
+        withContext(Dispatchers.IO) { content.addInk(id, blockIndex, color, points) }
+
+    suspend fun eraseInk(ids: List<Long>) = withContext(Dispatchers.IO) { content.deleteInk(ids) }
+
+    fun notes(id: Long): Flow<List<Note>> = content.observeNotes(id)
+
+    /** Where the next voice note of the book is recorded to. */
+    fun newVoiceFile(id: Long): File = File(files.notes(id), "voice-${System.currentTimeMillis()}.m4a")
+
+    suspend fun addNote(
+        id: Long, blockIndex: Int, page: Int, x: Float, y: Float,
+        kind: NoteKind, text: String, audioPath: String?, durationMs: Long,
+    ) = withContext(Dispatchers.IO) { content.addNote(id, blockIndex, page, x, y, kind, text, audioPath, durationMs) }
+
+    suspend fun updateNoteText(noteId: Long, text: String) = withContext(Dispatchers.IO) { content.updateNoteText(noteId, text) }
+
+    suspend fun deleteNote(note: Note) = withContext(Dispatchers.IO) {
+        content.deleteNote(note.id)
+        note.audioPath?.let { File(it).delete() }
+    }
 
     suspend fun savePosition(id: Long, position: ReadingPosition, progress: Float) =
         withContext(Dispatchers.IO) { books.updatePosition(id, position, progress) }

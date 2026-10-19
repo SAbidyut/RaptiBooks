@@ -125,11 +125,83 @@ class ConversionTest {
         assertTrue(dump, blocks.filterIsInstance<ListItemBlock>().any { it.text.startsWith("কনসিল্ড পাইপে") })
     }
 
+    /**
+     * Textbook with display equations (fractions, integrals, symbols without Unicode mapping),
+     * a margin column, a small labelled figure, an SI table and a contents page without leaders.
+     */
+    @Test
+    fun convertsMathTextbook() {
+        val (id, content) = convert("math_textbook.pdf")
+        val blocks = content.blocks(id, 0, 10_000)
+        val dump = blocks.joinToString("\n") { it.javaClass.simpleName + ": " + it.plainText }
+
+        val contents = blocks.filterIsInstance<ParagraphBlock>().filter { it.kind == ParagraphKind.TOC }
+        assertEquals(dump, 11, contents.size)
+        assertEquals("Chapter 1 Basic Concepts\t3", contents[0].text)
+        assertTrue(contents[0].styles.single().bold)
+        assertEquals("1.2 Systems of Units\t4", contents[2].text)
+
+        // Formulas are never tables; their stacked parts don't leak into the text.
+        val tables = blocks.filterIsInstance<TableBlock>()
+        assertEquals(dump, 1, tables.size)
+        assertEquals(listOf("10¹⁸", "exa", "E"), tables[0].rows[1])
+        assertEquals(listOf("10⁻⁶", "micro", "μ"), tables[0].rows.last())
+        assertTrue(dump, blocks.none { it is ParagraphBlock && it.text in setOf("dw", "dt", "i", "+", "v", "−", "(1.5)", "(a)") })
+        // The margin note follows the paragraph it stands next to instead of splitting it.
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.contains("we need to know how much power an electric device can handle. We all know") })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("Passive sign convention is satisfied") })
+        // The figure in the margin layout keeps its caption.
+        assertTrue(dump, blocks.any { it.plainText.startsWith("Figure 1.8 Reference polarities") })
+        // Greek delta printed with a "cent" code is repaired.
+        assertTrue(dump, blocks.none { it.plainText.contains("¢") })
+    }
+
+    @Test
+    fun convertsBanglaWorkedExample() {
+        val (id, content) = convert("bangla_math.pdf")
+        val blocks = content.blocks(id, 0, 10_000)
+        val dump = blocks.joinToString("\n") { it.javaClass.simpleName + ": " + it.plainText }
+        assertTrue(dump, blocks.none { it is TableBlock })
+        assertTrue(dump, blocks.none { it is ParagraphBlock && it.text.trim() in setOf("1", "11", "60", "T") })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("উত্তর : সিরিজে মোট রোধ 60 Ω") })
+    }
+
     @Test
     fun convertsTwoColumnArticle() {
         val (id, content) = convert("two_column.pdf")
         val paragraphs = content.blocks(id, 0, 10_000).filterIsInstance<ParagraphBlock>().map { it.text }
         assertTrue(paragraphs.none { it == "printer." })
         assertTrue(content.blocks(id, 0, 100).filterIsInstance<HeadingBlock>().any { it.text == "Method" })
+    }
+
+    @Test
+    fun keepsWorkedExampleBoxesAsText() {
+        val (id, content) = convert("callout_book.pdf")
+        val blocks = content.blocks(id, 0, 10_000)
+        val dump = blocks.joinToString("\n") { it.javaClass.simpleName + ": " + it.plainText }
+        // A shaded callout box is running text with equations, not a table or one big picture.
+        assertTrue(dump, blocks.none { it is TableBlock })
+        assertTrue(dump, blocks.filterIsInstance<ImageBlock>().all { it.kind == com.raptibooks.core.model.ImageKind.EQUATION })
+        assertEquals(dump, 4, blocks.count { it is ImageBlock })
+        assertTrue(dump, blocks.any { it is HeadingBlock && it.text == "সমাধান :" })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("উত্তর : পিক্সেল ঘনত্ব 160") })
+        // Short pieces printed on one row with wide gaps stay one line, each label starts a paragraph.
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("প্রদত্ত : N(H) = 1920 পিক্সেল") && it.text.contains("W = 12 মিটার") && !it.text.contains('\n') })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text == "নির্ণেয় : D = ?" })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("প্রদত্ত : 2 MP এ N(H) = 1920") && it.text.contains("D = 250 px/m") })
+        // "= 160 px/m" is part of the worked formula, not a stray line.
+        assertTrue(dump, blocks.none { it.plainText.trim() == "= 160 px/m" || it.plainText.contains("= 160 px/m ⏎") })
+    }
+
+    @Test
+    fun keepsBoxesWithRulesAndBoldResultsAsText() {
+        val (id, content) = convert("callout_rules.pdf")
+        val blocks = content.blocks(id, 0, 10_000)
+        val dump = blocks.joinToString("\n") { it.javaClass.simpleName + ": " + it.plainText }
+        assertTrue(dump, blocks.none { it is TableBlock })
+        // A bold worked formula is a result line, not a heading.
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("Iset = 0.58") })
+        assertTrue(dump, blocks.none { it is HeadingBlock && it.text.contains("0.58") })
+        assertTrue(dump, blocks.any { it is HeadingBlock && it.text == "উদাহরণ ১৪.৪" })
     }
 }

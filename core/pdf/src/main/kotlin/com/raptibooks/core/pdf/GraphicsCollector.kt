@@ -137,6 +137,7 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
             reset(); return
         }
         val lightFill = filled && isLight()
+        val color = paintColor(filled)
         // A filled polygon made of line segments (e.g. a chart bar) is one shape, not edges.
         val filledPolygon = filled && pieces.none { it.rect }
         if (!complex && pieces.isNotEmpty() && pieces.size <= 400 && !filledPolygon) {
@@ -149,11 +150,11 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
                 else if (r.width < lw) Rect(r.left - lw / 2, r.top, r.right + lw / 2, r.bottom) else r
                 if (!filled && !stroked) continue
                 if (!stroked && (r.width < 0.2f || r.height < 0.2f)) continue
-                paths += VectorPath(bounds, shape, stroked, filled, lightFill, if (p.rect) 4 else 1)
+                paths += VectorPath(bounds, shape, stroked, filled, lightFill, if (p.rect) 4 else 1, color)
             }
         } else {
             val r = transform.mapAbsoluteRect(minX, minY, maxX, maxY)
-            paths += VectorPath(r, if (complex) PathShape.COMPLEX else PathShape.RECTANGLE, stroked, filled, lightFill, segments)
+            paths += VectorPath(r, if (complex) PathShape.COMPLEX else PathShape.RECTANGLE, stroked, filled, lightFill, segments, color)
         }
         reset()
     }
@@ -172,6 +173,13 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
     private fun lineWidth(): Float {
         val ctm = graphicsState.currentTransformationMatrix
         return graphicsState.lineWidth * max(abs(ctm.scalingFactorX), abs(ctm.scalingFactorY))
+    }
+
+    private fun paintColor(filled: Boolean): Int = try {
+        val c = if (filled) graphicsState.nonStrokingColor else graphicsState.strokingColor
+        c.toRGB() and 0xFFFFFF
+    } catch (_: Exception) {
+        -1
     }
 
     private fun isLight(): Boolean = try {
