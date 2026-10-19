@@ -78,6 +78,7 @@ import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ImageKind
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
+import com.raptibooks.core.model.MarkKey
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.model.SeparatorBlock
@@ -119,7 +120,7 @@ fun BlockView(
     style: ReaderStyle,
     highlight: String?,
     onContentsClick: (title: String) -> Unit = {},
-    onImageClick: (path: String, caption: String?, ink: Boolean) -> Unit,
+    onImageClick: (path: String, caption: String?, ink: Boolean, block: Int) -> Unit,
 ) {
     when (block) {
         is HeadingBlock -> HeadingView(block, style, highlight)
@@ -158,7 +159,8 @@ private fun HeadingView(block: HeadingBlock, style: ReaderStyle, highlight: Stri
             Box(Modifier.width(40.dp).height(3.dp).background(style.colors.accent, RoundedCornerShape(2.dp)))
             Spacer(Modifier.height(14.dp))
         }
-        Text(
+        MarkableText(
+            blockIndex = block.index,
             text = styled(block.text, emptyList(), highlight, style.colors),
             style = TextStyle(
                 fontFamily = style.headingFont,
@@ -179,15 +181,15 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
     val base = style.body
     val spacing = (style.fontSize.value * 0.75f).dp
     when (block.kind) {
-        ParagraphKind.BODY -> Text(text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing))
-        ParagraphKind.CENTERED -> Text(
-            text, style = base.copy(textAlign = TextAlign.Center),
+        ParagraphKind.BODY -> MarkableText(block.index, text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing))
+        ParagraphKind.CENTERED -> MarkableText(
+            block.index, text, style = base.copy(textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(vertical = spacing / 2).padding(bottom = spacing / 2),
         )
         ParagraphKind.QUOTE -> {
             val bar = style.colors.accent.copy(alpha = 0.6f)
-            Text(
-                text, style = base.copy(fontStyle = FontStyle.Italic),
+            MarkableText(
+                block.index, text, style = base.copy(fontStyle = FontStyle.Italic),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = spacing)
@@ -195,13 +197,13 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
                     .padding(start = 16.dp),
             )
         }
-        ParagraphKind.CAPTION -> Text(
-            text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
+        ParagraphKind.CAPTION -> MarkableText(
+            block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.85f).sp, fontStyle = FontStyle.Italic, color = style.colors.secondary, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing),
         )
         ParagraphKind.FORMULA -> FormulaView(text, style)
-        ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> Text(
-            text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
+        ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> MarkableText(
+            block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2),
         )
     }
@@ -289,19 +291,23 @@ private fun OptionsView(block: ParagraphBlock, style: ReaderStyle, highlight: St
     val size = (style.fontSize.value * 0.95f).sp
     val twoColumns = options.size % 2 == 0 && options.all { it.second.length <= 16 }
     Column(Modifier.fillMaxWidth().padding(start = 20.dp, bottom = (style.fontSize.value * 0.7f).dp)) {
-        for (row in options.chunked(if (twoColumns) 2 else 1)) {
+        for ((rowNumber, row) in options.chunked(if (twoColumns) 2 else 1).withIndex()) {
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                for ((marker, text) in row) {
+                for ((column, option) in row.withIndex()) {
+                    val (marker, text) = option
+                    val optionNumber = rowNumber * (if (twoColumns) 2 else 1) + column
                     Row(Modifier.weight(1f)) {
                         Text(
                             marker,
                             style = style.body.copy(fontSize = size, color = style.colors.accent, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Start),
                             modifier = Modifier.padding(end = 6.dp),
                         )
-                        Text(
+                        MarkableText(
+                            block.index,
                             remember(text, highlight, style.colors) { styled(text, emptyList(), highlight, style.colors) },
                             style = style.body.copy(fontSize = size, textAlign = TextAlign.Start),
                             modifier = Modifier.weight(1f, fill = false),
+                            part = MarkKey.option(optionNumber),
                         )
                     }
                 }
@@ -353,12 +359,12 @@ private fun ListItemView(block: ListItemBlock, style: ReaderStyle, highlight: St
             style = style.body.copy(textAlign = TextAlign.End, color = style.colors.accent),
             modifier = Modifier.width(markerWidth).padding(end = 8.dp),
         )
-        Text(text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f))
+        MarkableText(block.index, text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean) -> Unit) {
+private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean, Int) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
         val density = LocalDensity.current
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
@@ -380,7 +386,7 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                         .aspectRatio(aspect)
                         .clip(RoundedCornerShape(6.dp))
                         .background(style.colors.surface)
-                        .clickable { onClick(block.path, block.caption, false) },
+                        .clickable { onClick(block.path, block.caption, false, block.index) },
                     contentAlignment = Alignment.Center,
                 ) {
                     val img = image
@@ -393,6 +399,7 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
                     } else {
                         CircularProgressIndicator(Modifier.size(24.dp), color = style.colors.accent, strokeWidth = 2.dp)
                     }
+                    InkLayer(block.index)
                 }
             }
             if (fit.scroll) {
@@ -426,7 +433,7 @@ private fun ImageView(block: ImageBlock, style: ReaderStyle, onClick: (String, S
  * screen keeps a readable size and scrolls sideways. The equation number sits at the right.
  */
 @Composable
-private fun EquationView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean) -> Unit) {
+private fun EquationView(block: ImageBlock, style: ReaderStyle, onClick: (String, String?, Boolean, Int) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = (style.fontSize.value * 0.5f).dp)) {
         val density = LocalDensity.current
         val number = block.caption
@@ -449,7 +456,7 @@ private fun EquationView(block: ImageBlock, style: ReaderStyle, onClick: (String
         val ink = style.colors.text
         val picture = @Composable {
             Box(
-                Modifier.width(width).aspectRatio(aspect).clickable { onClick(block.path, number, true) },
+                Modifier.width(width).aspectRatio(aspect).clickable { onClick(block.path, number, true, block.index) },
                 contentAlignment = Alignment.Center,
             ) {
                 val img = image
@@ -530,7 +537,7 @@ private fun Modifier.bleed(extra: Dp): Modifier = if (extra <= 0.dp) this else l
 }
 
 @Composable
-private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (String, String?, Boolean) -> Unit) {
+private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (String, String?, Boolean, Int) -> Unit) {
     var printed by rememberSaveable(block.index) { mutableStateOf(false) }
     val colors = style.colors
     val cellSize = (style.fontSize.value * 0.82f).sp
@@ -591,8 +598,9 @@ private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (Stri
                                 ),
                         ) {
                             for (c in 0 until columns) {
-                                Text(
-                                    row.getOrElse(c) { "" },
+                                MarkableText(
+                                    block.index,
+                                    AnnotatedString(row.getOrElse(c) { "" }),
                                     style = TextStyle(
                                         fontFamily = style.bodyFont,
                                         fontSize = cellSize,
@@ -606,6 +614,7 @@ private fun TableView(block: TableBlock, style: ReaderStyle, onImageClick: (Stri
                                         .fillMaxHeight()
                                         .border(0.5.dp, border)
                                         .padding(horizontal = 10.dp, vertical = 7.dp),
+                                    part = MarkKey.cell(r, c),
                                 )
                             }
                         }

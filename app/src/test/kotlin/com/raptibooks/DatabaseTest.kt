@@ -1,12 +1,17 @@
 package com.raptibooks
 
+import android.database.sqlite.SQLiteDatabase
 import com.raptibooks.core.data.LibraryRepository
+import com.raptibooks.core.database.RaptiDatabase
 import com.raptibooks.core.database.NewBook
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ImageKind
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
+import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.MarkKey
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.OcrMode
 import com.raptibooks.core.model.ReadingPosition
@@ -89,5 +94,98 @@ class DatabaseTest {
         assertNull(LibraryRepository.cleanTitle("Untitled"))
         assertEquals("Thesis", LibraryRepository.cleanTitle("Microsoft Word - Thesis.docx"))
         assertEquals("বাংলা বই", LibraryRepository.cleanTitle("বাংলা বই"))
+    }
+
+    @Test
+    fun storesUnderlinedPassages() {
+        val books = TestSupport.app.container.bookDao
+        val content = TestSupport.app.container.contentDao
+        val id = books.insert(NewBook("Marks", null, "m.pdf", "/m.pdf", null, 1, 10))
+        content.markRanges(id, mapOf(MarkKey.of(3) to listOf(0..4, 10..12)), MarkColor.RED)
+        content.markRanges(id, mapOf(MarkKey.of(3) to listOf(2..3), MarkKey.of(5, MarkKey.cell(1, 2)) to listOf(1..1)), MarkColor.BLUE)
+        content.markRanges(id, mapOf(MarkKey.of(3) to listOf(10..12)), null)
+        val marks = runBlocking { content.observeHighlights(id).first() }
+        assertEquals(
+            listOf(Triple(3, 0, 2) to MarkColor.RED, Triple(3, 2, 4) to MarkColor.BLUE, Triple(3, 4, 5) to MarkColor.RED, Triple(5, 1, 2) to MarkColor.BLUE),
+            marks.map { Triple(it.blockIndex, it.start, it.end) to it.color },
+        )
+        assertEquals(MarkKey.cell(1, 2), marks.last().part)
+
+        content.addInk(id, 4, MarkColor.GREEN, floatArrayOf(0.1f, 0.2f, 0.3f, 0.4f))
+        content.addInk(id, 4, MarkColor.RED, floatArrayOf(0.5f, 0.5f))
+        val ink = runBlocking { content.observeInk(id).first() }
+        assertEquals(2, ink.size)
+        assertEquals(MarkColor.GREEN, ink[0].color)
+        assertEquals(0.3f, ink[0].points[2], 0.0001f)
+        content.deleteInk(listOf(ink[0].id))
+        assertEquals(1, runBlocking { content.observeInk(id).first() }.size)
+
+        books.delete(id)
+        assertTrue(runBlocking { content.observeHighlights(id).first() }.isEmpty())
+        assertTrue(runBlocking { content.observeInk(id).first() }.isEmpty())
+    }
+
+    @Test
+    fun storesNotes() {
+        val books = TestSupport.app.container.bookDao
+        val content = TestSupport.app.container.contentDao
+        val id = books.insert(NewBook("Notes", null, "n.pdf", "/n.pdf", null, 3, 10))
+        content.insertBlocks(id, listOf(HeadingBlock(0, 0, 1, "A"), ParagraphBlock(1, 1, "B"), ParagraphBlock(2, 2, "C")))
+        val text = content.addNote(id, 1, 1, 0.25f, 0.5f, NoteKind.TEXT, "remember this", null, 0L)
+        content.addNote(id, 2, 2, 0.9f, 0.1f, NoteKind.VOICE, "", "/v.m4a", 4200L)
+        var notes = runBlocking { content.observeNotes(id).first() }
+        assertEquals(2, notes.size)
+        assertEquals("remember this", notes[0].text)
+        assertEquals(0.25f, notes[0].x, 0.0001f)
+        assertEquals(NoteKind.VOICE, notes[1].kind)
+        assertEquals(4200L, notes[1].durationMs)
+
+        content.updateNoteText(text, "changed")
+        content.remapNotes(id)
+        notes = runBlocking { content.observeNotes(id).first() }
+        assertEquals("changed", notes[0].text)
+        assertEquals(1, notes[0].blockIndex)
+        assertEquals(2, notes[1].blockIndex)
+
+        content.deleteNote(text)
+        assertEquals(1, runBlocking { content.observeNotes(id).first() }.size)
+        books.delete(id)
+        assertTrue(runBlocking { content.observeNotes(id).first() }.isEmpty())
+    }
+
+    /**
+     * Two earlier builds numbered their schema changes differently: version 3 with callout boxes,
+     * and versions 3-5 with highlights, ink and notes. Both upgrade to a complete database.
+     */
+    @Test
+    fun upgradesBothEarlierSchemas() {
+        val app = TestSupport.app
+        for ((version, extra) in listOf(
+            3 to listOf("CREATE TABLE boxes (book_id INTEGER, start_idx INTEGER, end_idx INTEGER, fill INTEGER, accent INTEGER)"),
+            4 to listOf("CREATE TABLE highlights (id INTEGER PRIMARY KEY, book_id INTEGER, block_idx INTEGER, start_pos INTEGER, end_pos INTEGER, color INTEGER)"),
+            5 to listOf(
+                "CREATE TABLE highlights (id INTEGER PRIMARY KEY, book_id INTEGER, block_idx INTEGER, start_pos INTEGER, end_pos INTEGER, color INTEGER, part INTEGER NOT NULL DEFAULT 0)",
+                "CREATE TABLE ink (id INTEGER PRIMARY KEY, book_id INTEGER, block_idx INTEGER, color INTEGER, points TEXT)",
+                "CREATE TABLE notes (id INTEGER PRIMARY KEY, book_id INTEGER, block_idx INTEGER, page INTEGER, x REAL, y REAL, kind INTEGER, text TEXT, audio_path TEXT, duration INTEGER, created_at INTEGER)",
+            ),
+        )) {
+            val name = "upgrade-$version.db"
+            val file = app.getDatabasePath(name).apply { parentFile?.mkdirs(); delete() }
+            SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
+                db.execSQL("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT)")
+                extra.forEach { db.execSQL(it) }
+                db.version = version
+            }
+            val upgraded = RaptiDatabase(app, name)
+            val db = upgraded.writableDatabase
+            for (table in listOf("boxes", "highlights", "ink", "notes")) {
+                db.rawQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", arrayOf(table)).use {
+                    assertTrue("v$version: $table missing", it.moveToFirst())
+                }
+            }
+            db.rawQuery("SELECT part FROM highlights", null).use { }
+            assertEquals(6, db.version)
+            upgraded.close()
+        }
     }
 }

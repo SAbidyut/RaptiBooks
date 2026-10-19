@@ -87,9 +87,11 @@ class PageStructurer(private val profile: DocumentProfile) {
     }
 
     fun structure(layout: PageLayout): List<StructuredElement> {
-        val lines = layout.lines
-            .filter { !profile.isRunningHeaderOrFooter(it, layout.height) }
-            .mapNotNull { normalize(it, layout.fromOcr) }
+        val lines = mergeRows(
+            layout.lines
+                .filter { !profile.isRunningHeaderOrFooter(it, layout.height) }
+                .mapNotNull { normalize(it, layout.fromOcr) },
+        )
         val items = mutableListOf<Item>()
         lines.forEach { items += LineItem(it) }
         layout.figures.forEach { items += FigureItem(it) }
@@ -206,6 +208,72 @@ class PageStructurer(private val profile: DocumentProfile) {
         flush()
         box?.let { out += StructuredElement.Box(page, false, it) }
         return groupOptions(out)
+    }
+
+    // ---------------------------------------------------------------- rows of short items
+
+    /**
+     * "প্রদত্ত : N(H) = 1920 পিক্সেল    W = 12 মিটার": a row of short pieces printed with wide
+     * gaps is one line of text, not columns. Pieces are joined (with an em space) when the row
+     * is well inside the text width, no piece looks like a list marker or a page number, and
+     * the gaps are modest. Rows of long pieces (real columns) and contents entries stay apart.
+     */
+    private fun mergeRows(lines: List<NLine>): List<NLine> {
+        if (lines.size < 2) return lines
+        val prose = lines.filter { it.src.wordCount >= 6 }
+        if (prose.isEmpty()) return lines
+        val textWidth = prose.maxOf { it.bounds.width }
+        val bodySize = prose.map { it.size }.sorted()[prose.size / 2]
+        val used = HashSet<NLine>()
+        val out = ArrayList<NLine>(lines.size)
+        for (a in lines) {
+            if (a in used) continue
+            val row = lines.filter { b ->
+                b === a || (b !in used && abs(b.src.baseline - a.src.baseline) <= a.size * 0.25f &&
+                    b.size / a.size in 0.85f..1.18f && b.bounds.horizontalOverlap(a.bounds) <= 0f)
+            }.sortedBy { it.bounds.left }
+            if (row.size !in 2..4 || !isShortRow(row, textWidth, bodySize)) {
+                out += a
+                continue
+            }
+            used += row
+            val text = StringBuilder()
+            val styles = mutableListOf<InlineStyle>()
+            for (piece in row) {
+                if (text.isNotEmpty()) text.append(" \u2003 ")
+                val offset = text.length
+                text.append(piece.text)
+                styles += shiftStyles(piece.styles, 0, piece.text.length, offset)
+            }
+            val first = row.first().src
+            val bounds = Rect.bounding(row.map { it.bounds })!!
+            out += NLine(
+                TextLine(
+                    text.toString(), emptyList(), bounds, first.baseline, first.fontSize, first.boldRatio, first.italicRatio,
+                    first.fontName,
+                ),
+                text.toString(), styles,
+            )
+        }
+        return out.sortedWith(compareBy({ lines.indexOf(it) }))
+    }
+
+    private fun isShortRow(row: List<NLine>, textWidth: Float, bodySize: Float): Boolean {
+        val em = row.first().size
+        // Headings and chapter numbers (larger than the text) are never joined.
+        if (row.any { it.size > bodySize * 1.12f || it.text.none { c -> c.isLetter() } }) return false
+        if (row.last().bounds.right - row.first().bounds.left > textWidth * 0.85f) return false
+        for ((k, piece) in row.withIndex()) {
+            if (piece.bounds.width > textWidth * 0.5f) return false
+            if (k > 0) {
+                val gap = piece.bounds.left - row[k - 1].bounds.right
+                if (gap > em * 8f) return false
+                // a list marker ("(খ) ...") or a page number starts the next item, not a continuation
+                if (Patterns.listMarker.find(piece.text)?.range?.first == 0) return false
+                if (piece.text.none { it.isLetter() }) return false
+            }
+        }
+        return true
     }
 
     // ---------------------------------------------------------------- contents and options
@@ -433,7 +501,9 @@ class PageStructurer(private val profile: DocumentProfile) {
             return (2 + depth).coerceAtMost(4)
         }
         // A bold line between paragraphs at body size: minor heading.
-        if (bold && ratio >= 0.95f && words <= 12 && isolated && !text.endsWith(',') &&
+        // A worked formula ("I = 0.58 × 30 = 17.4 A") set in bold is a result, not a heading.
+        val formula = text.any { it in "=≈≠<>" } && text.any { it.isDigit() }
+        if (bold && !formula && ratio >= 0.95f && words <= 12 && isolated && !text.endsWith(',') &&
             (!Patterns.endsSentence(text) || text.endsWith(':')) &&
             !(prev != null && prev.src.isBold && gapAbove < leading * 0.6f)
         ) {
@@ -495,6 +565,8 @@ class PageStructurer(private val profile: DocumentProfile) {
         }
         val dy = cur.src.baseline - prev.src.baseline
         if (dy <= 0f) return false
+        // A bold run-in label ("উত্তর :", "Solution:") starts a new paragraph.
+        if (cur.styles.any { it.start == 0 && it.bold && it.end <= 16 && cur.text.substring(0, it.end.coerceAtMost(cur.text.length)).trimEnd().endsWith(':') }) return false
         val sizeRatio = cur.size / prev.size
         if (sizeRatio < 0.85f || sizeRatio > 1.18f) return false
         val expected = max(leading, prev.size * 1.05f)

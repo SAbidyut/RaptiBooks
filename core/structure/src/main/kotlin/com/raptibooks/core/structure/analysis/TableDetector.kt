@@ -42,21 +42,30 @@ class TableDetector(private val lineBuilder: LineBuilder) {
             if (bounds.area > page.width * page.height * 0.92f) continue // page border
             val frags = fragmentsIn(page, bounds)
             var columns = xs
-            if (xs.size == 2) {
-                // Only an outer box: a frame around running text (a worked example, a note) is a
-                // box, not a table; otherwise infer the columns from the text.
-                if (framesProse(frags, bounds)) continue
+            var rowEdges = ys
+            if (ys.size == 2) {
+                // No rule between rows. A plain box (worked-example callout, shaded note) is not a
+                // table; neither is a frame around running text. Only keep it when the text splits
+                // into table-like rows.
+                if (xs.size == 2) continue
+                val rows = rowsOf(frags)
+                if (rows.size < 2 || !plausibleRuleDelimited(rows, bounds)) continue
+                rowEdges = listOf(bounds.top) + rowBoundaries(rows) + listOf(bounds.bottom)
+            } else if (xs.size == 2) {
+                // Only an outer box with rules between its rows: infer the columns from the text,
+                // otherwise it's a frame. Prose has gaps between words, not columns.
+                if (proseInside(frags, bounds) || framesProse(frags, bounds)) continue
                 columns = inferColumns(frags, bounds) ?: continue
             }
-            if ((columns.size - 1) * (ys.size - 1) < 2) continue
+            if ((columns.size - 1) * (rowEdges.size - 1) < 2) continue
             // A shaded first row (th background) marks a header.
             val firstRow = Rect(bounds.left, ys[0], bounds.right, ys[1])
             val shadedHeader = page.paths.any { p ->
                 p.filled && !p.lightFill && p.shape == PathShape.RECTANGLE && p.bounds.height > 4f &&
                     firstRow.outset(1f).contains(p.bounds) && p.bounds.width > 8f
             } && ys.size > 2
-            val table = fillGrid(frags, bounds, columns, ys, ruled = true, header = shadedHeader) ?: continue
-            if (looksLikeDiagram(page, table, (columns.size - 1) * (ys.size - 1))) continue
+            val table = fillGrid(frags, bounds, columns, rowEdges, ruled = true, header = shadedHeader) ?: continue
+            if (looksLikeDiagram(page, table, (columns.size - 1) * (rowEdges.size - 1))) continue
             tables += table
             used += component
         }
@@ -257,6 +266,33 @@ class TableDetector(private val lineBuilder: LineBuilder) {
         return split * 10 >= rows.size * 6
     }
 
+    /**
+     * Running text inside a box: at least two rows where words run on, with only word spaces
+     * between them, across most of the box's width.
+     */
+    private fun proseInside(frags: List<TextFragment>, bounds: Rect): Boolean {
+        val rows = rowsOf(frags)
+        if (rows.size < 3) return false
+        var prose = 0
+        for (row in rows) {
+            val sorted = row.sortedBy { it.left }
+            val em = sorted.map { it.fontSize }.sorted()[sorted.size / 2]
+            var start = sorted.first().left
+            var right = sorted.first().right
+            var longest = 0f
+            for (f in sorted.drop(1)) {
+                if (f.left - right > em * 1.2f) {
+                    longest = max(longest, right - start)
+                    start = f.left
+                }
+                right = max(right, f.right)
+            }
+            longest = max(longest, right - start)
+            if (longest >= bounds.width * 0.6f) prose++
+        }
+        return prose >= 2
+    }
+
     private fun collectSegments(page: RawPage): List<Seg> {
         val raw = mutableListOf<Seg>()
         val pageArea = page.width * page.height
@@ -379,11 +415,16 @@ class TableDetector(private val lineBuilder: LineBuilder) {
         val solid = frags.filter { !it.isSpace }
         if (solid.size < 4) return null
         val em = solid.map { it.fontSize }.sorted()[solid.size / 2]
-        // Ignore rows that span the full width without internal gaps (titles, merged cells).
-        val rows = rowsOf(solid).filter { row ->
+        // Rows that span the full width without internal gaps are titles or merged cells; two or
+        // more of them are paragraphs, and then the short lines between them are only line ends
+        // of running text, not table rows.
+        val allRows = rowsOf(solid)
+        fun fullWidth(row: List<TextFragment>): Boolean {
             val sorted = row.sortedBy { it.left }
-            sorted.zipWithNext().any { (a, b) -> b.left - a.right > em } || (row.maxOf { it.right } - row.minOf { it.left }) < bounds.width * 0.8f
+            return sorted.zipWithNext().none { (a, b) -> b.left - a.right > em } && (row.maxOf { it.right } - row.minOf { it.left }) >= bounds.width * 0.8f
         }
+        if (allRows.count { fullWidth(it) } >= 2) return null
+        val rows = allRows.filter { !fullWidth(it) }
         if (rows.size < 2) return null
         val step = 1f
         val bins = ((bounds.width) / step).toInt() + 1
