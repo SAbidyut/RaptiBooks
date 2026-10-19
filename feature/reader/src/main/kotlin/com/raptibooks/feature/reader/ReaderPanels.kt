@@ -5,8 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -373,6 +372,16 @@ private fun InfoRow(label: String, value: String) {
 }
 
 /**
+ * Keeps a picture of size [picture] (at scale 1, centred) that is shown [scale] times larger on
+ * the screen: it may move only as far as its edges reach past the screen's edges.
+ */
+internal fun clampOffset(offset: Offset, picture: Size, viewport: Size, scale: Float): Offset {
+    val maxX = ((picture.width * scale - viewport.width) / 2f).coerceAtLeast(0f)
+    val maxY = ((picture.height * scale - viewport.height) / 2f).coerceAtLeast(0f)
+    return Offset(offset.x.coerceIn(-maxX, maxX), offset.y.coerceIn(-maxY, maxY))
+}
+
+/**
  * Full-screen image viewer with pinch-zoom, pan and double-tap zoom. For pictures of the book
  * (not equations) the colour menu is there too: pick a colour and draw anywhere on the picture;
  * the lines stay where they were drawn. With no colour chosen, one finger pans and zooms.
@@ -394,10 +403,6 @@ internal fun ImageViewer(
         var offset by remember { mutableStateOf(Offset.Zero) }
         var tool by remember { mutableStateOf(MarkTool.NONE) }
         var penOpen by remember { mutableStateOf(penOnStart) }
-        val state = rememberTransformableState { zoom, pan, _ ->
-            scale = (scale * zoom).coerceIn(1f, 6f)
-            offset = if (scale == 1f) Offset.Zero else offset + pan
-        }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
             val density = LocalDensity.current
             val widthPx = with(density) { (maxWidth.toPx() * 2).roundToInt() }
@@ -407,15 +412,27 @@ internal fun ImageViewer(
                 val aspect = img.width.toFloat() / maxOf(1, img.height)
                 val fitWidth = minOf(constraints.maxWidth.toFloat(), constraints.maxHeight * aspect)
                 val picture = Size(fitWidth, fitWidth / aspect)
+                val viewport = Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
+                // Zoom around a point (the fingers, a double tap) so that it stays where it is, and
+                // never let the picture be dragged off the screen.
+                fun zoomTo(newScale: Float, focus: Offset, pan: Offset = Offset.Zero) {
+                    val target = newScale.coerceIn(1f, 6f)
+                    val center = Offset(viewport.width / 2f, viewport.height / 2f)
+                    val point = (focus - center - offset) / scale
+                    offset = clampOffset(focus - center - point * target + pan, picture, viewport, target)
+                    scale = target
+                }
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTapGestures(onDoubleTap = {
-                                if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2.5f
+                        .pointerInput(picture, viewport) {
+                            detectTapGestures(onDoubleTap = { tap ->
+                                if (scale > 1.05f) { scale = 1f; offset = Offset.Zero } else zoomTo(2.5f, tap)
                             })
                         }
-                        .transformable(state),
+                        .pointerInput(picture, viewport) {
+                            detectTransformGestures { centroid, pan, zoom, _ -> zoomTo(scale * zoom, centroid, pan) }
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(
