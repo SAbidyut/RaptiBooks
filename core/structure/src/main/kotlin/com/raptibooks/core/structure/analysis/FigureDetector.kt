@@ -23,6 +23,27 @@ class FigureDetector {
 
     private class Item(var bounds: Rect, val strong: Boolean, val raster: Boolean, val complex: Boolean, val rect: Boolean)
 
+    /**
+     * A box is often painted as several shapes on top of each other: a rounded outline (curves),
+     * one rectangle per side or fill. They are one box, not a drawing: identical rectangles count
+     * once, and a rounded outline that coincides with a rectangle is dropped.
+     */
+    private fun collapseBoxes(items: MutableList<Item>) {
+        fun same(a: Rect, b: Rect, tol: Float) =
+            abs(a.left - b.left) <= tol && abs(a.top - b.top) <= tol && abs(a.right - b.right) <= tol && abs(a.bottom - b.bottom) <= tol
+        val rects = items.filter { it.rect }
+        val drop = HashSet<Item>()
+        for ((i, r) in rects.withIndex()) {
+            if (r in drop) continue
+            for (j in i + 1 until rects.size) if (same(r.bounds, rects[j].bounds, 1.5f)) drop += rects[j]
+        }
+        for (c in items) {
+            if (!c.complex || c.bounds.width < 40f || c.bounds.height < 20f) continue
+            if (rects.any { r -> same(c.bounds, r.bounds, 3f) }) drop += c
+        }
+        items.removeAll(drop)
+    }
+
     fun detect(
         page: RawPage,
         lines: List<TextLine>,
@@ -67,6 +88,7 @@ class FigureDetector {
             }
         }
         for (r in page.rotatedText) items += Item(r, strong = false, raster = false, complex = false, rect = false)
+        collapseBoxes(items)
         val bodySize = bodySizeHint ?: PageAnalyzer.typicalSize(lines, page.width)
         // Banners: a thin strip of colour behind a heading ("Example 1.4") is decoration.
         items.removeAll { it.raster && isBanner(it.bounds, lines, bodySize) }

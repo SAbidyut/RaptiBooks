@@ -7,10 +7,13 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -22,6 +25,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -32,6 +36,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -45,6 +50,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -57,8 +63,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -67,12 +78,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.raptibooks.core.data.appContainer
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.ui.RaptiIcons
 import com.raptibooks.core.ui.ReaderColors
@@ -114,6 +126,14 @@ fun ReaderRoute(
 
 private enum class Panel { NONE, CONTENTS, SETTINGS, SEARCH, INFO }
 
+private enum class NoteStep { CHOOSE, WRITE, RECORD }
+
+/** A picture opened full screen; [block] is where the user's drawing on it is kept. */
+private class ViewerState(val path: String, val caption: String?, val equation: Boolean, val block: Int, val pen: Boolean)
+
+/** A place in the book chosen for a new note. */
+private class NoteSpot(val block: Int, val page: Int, val x: Float, val y: Float)
+
 @OptIn(FlowPreview::class)
 @Composable
 private fun Reader(
@@ -132,11 +152,22 @@ private fun Reader(
     val scope = rememberCoroutineScope()
     var chrome by rememberSaveable { mutableStateOf(true) }
     var panel by rememberSaveable { mutableStateOf(Panel.NONE) }
-    var viewer by remember { mutableStateOf<Triple<String, String?, Boolean>?>(null) }
+    var penMenu by rememberSaveable { mutableStateOf(false) }
+    var tool by rememberSaveable { mutableStateOf(MarkTool.NONE) }
+    var viewer by remember { mutableStateOf<ViewerState?>(null) }
+    var spot by remember { mutableStateOf<NoteSpot?>(null) }
+    var noteStep by remember { mutableStateOf(NoteStep.CHOOSE) }
+    var openNote by remember { mutableStateOf<Note?>(null) }
+    val notes by vm.notes.collectAsStateWithLifecycle()
     val style = remember(colors, settings) { readerStyle(colors, settings) }
     val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
+    val highlights by vm.highlights.collectAsStateWithLifecycle()
+    val registry = remember { MarkRegistry() }
+    val ink by vm.ink.collectAsStateWithLifecycle()
+    val marks = remember(highlights, ink, registry) { ReaderMarks(highlights, ink, registry) }
+    val density = LocalDensity.current.density
 
-    SystemBars(dark = colors.isDark, visible = chrome || panel != Panel.NONE)
+    SystemBars(dark = colors.isDark)
     KeepScreenOn(settings.keepScreenOn)
 
     LaunchedEffect(listState) {
@@ -156,7 +187,16 @@ private fun Reader(
     DisposableEffect(Unit) {
         onDispose { vm.savePosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
     }
-    BackHandler(enabled = panel != Panel.NONE) { panel = Panel.NONE }
+    BackHandler(enabled = panel != Panel.NONE || penMenu) {
+        when {
+            panel != Panel.NONE -> panel = Panel.NONE
+            tool == MarkTool.NOTE -> tool = MarkTool.NONE
+            else -> {
+                penMenu = false
+                tool = MarkTool.NONE
+            }
+        }
+    }
 
     val firstVisible by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     val currentPage = source.peek(firstVisible)?.pageIndex ?: 0
@@ -166,8 +206,8 @@ private fun Reader(
     val bookmarked = bookmarks.any { it.blockIndex in firstVisible..maxOf(firstVisible, lastVisible) }
     val progress = if (book.blockCount <= 1) 1f else firstVisible.toFloat() / (book.blockCount - 1)
 
+    CompositionLocalProvider(LocalMarks provides marks) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val viewportPx = constraints.maxHeight.toFloat()
         val margin = settings.margin.dp
         val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -175,20 +215,15 @@ private fun Reader(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(settings.tapToTurn) {
+                .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = { pos ->
-                            val w = size.width
-                            when {
-                                settings.tapToTurn && pos.x < w * 0.2f -> {
-                                    chrome = false
-                                    scope.launch { listState.animateScrollBy(-viewportPx * 0.88f) }
-                                }
-                                settings.tapToTurn && pos.x > w * 0.8f -> {
-                                    chrome = false
-                                    scope.launch { listState.animateScrollBy(viewportPx * 0.88f) }
-                                }
-                                else -> chrome = !chrome
+                            if (pos.x > size.width * 0.8f) {
+                                // Right edge: the pen menu.
+                                penMenu = !penMenu
+                                if (!penMenu) tool = MarkTool.NONE
+                            } else {
+                                chrome = !chrome
                             }
                         },
                     )
@@ -205,16 +240,77 @@ private fun Reader(
                     BlockPlaceholder(style)
                 } else {
                     CalloutBox(ready.boxes.find(index), index, style) {
-                        BlockView(
-                            block, style, vm.highlight,
-                            onContentsClick = { title ->
-                                scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
-                            },
-                        ) { path, caption, ink -> viewer = Triple(path, caption, ink) }
+                        val pins = notes[index]
+                        // A block with notes keeps a free strip at the right for the pins.
+                        val strip = if (pins.isNullOrEmpty()) 0.dp else NoteStrip
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (tool == MarkTool.NOTE) {
+                                        // Choosing a place for a note: the next tap anywhere in the block
+                                        // (also on a picture or a table) is it; scrolling still works.
+                                        Modifier.pointerInput(index, strip) {
+                                            awaitEachGesture {
+                                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                                while (true) {
+                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                    if (event.changes.size > 1 || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) break
+                                                    if (change.changedToUp()) {
+                                                        change.consume()
+                                                        val textWidth = (size.width - strip.toPx()).coerceAtLeast(1f)
+                                                        spot = NoteSpot(
+                                                            block.index, block.pageIndex,
+                                                            (down.position.x / textWidth).coerceIn(0f, 1f), (down.position.y / size.height).coerceIn(0f, 1f),
+                                                        )
+                                                        noteStep = NoteStep.CHOOSE
+                                                        tool = MarkTool.NONE
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Modifier
+                                    },
+                                ),
+                        ) {
+                            Box(Modifier.fillMaxWidth().padding(end = strip)) {
+                                BlockView(
+                                    block, style, vm.highlight,
+                                    onContentsClick = { title ->
+                                        scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
+                                    },
+                                ) { path, caption, equation, blockIndex -> viewer = ViewerState(path, caption, equation, blockIndex, penMenu) }
+                            }
+                            if (!pins.isNullOrEmpty()) NotesLayer(pins, onOpen = { openNote = it }, modifier = Modifier.matchParentSize())
+                        }
                     }
                 }
             }
         }
+
+        // The status and navigation bars stay on screen. Text scrolls away under a soft cover,
+        // and touches in the strip along the bottom edge are not given to the page, so a swipe
+        // up to go home never scrolls the book.
+        Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(topInset).background(colors.background.copy(alpha = 0.96f)))
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(bottomInset + 14.dp)
+                .background(Brush.verticalGradient(listOf(Color.Transparent, colors.background.copy(alpha = 0.96f))))
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false).consume()
+                        do {
+                            val event = awaitPointerEvent()
+                            event.changes.forEach { it.consume() }
+                        } while (event.changes.any { it.pressed })
+                    }
+                },
+        )
 
         // Minimal progress line while reading without chrome.
         AnimatedVisibility(!chrome, Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
@@ -242,6 +338,7 @@ private fun Reader(
                 onSettings = { panel = Panel.SETTINGS },
                 onOriginal = { onOpenOriginal(currentPage) },
                 onInfo = { panel = Panel.INFO },
+                onMarker = { penMenu = true; chrome = false },
             )
         }
         AnimatedVisibility(
@@ -255,6 +352,88 @@ private fun Reader(
                 pageCount = book.pageCount,
                 progress = progress,
                 onSeek = { f -> scope.launch { listState.scrollToItem(((source.count - 1) * f).roundToInt().coerceIn(0, maxOf(0, source.count - 1))) } },
+            )
+        }
+
+        // Pen: while a colour (or the eraser) is chosen, a finger draws instead of scrolling.
+        if (tool != MarkTool.NONE && tool != MarkTool.NOTE) {
+            MarkOverlay(
+                tool = tool,
+                onStroke = { points, origin ->
+                    val root = points.map { it + origin }
+                    val picture = imageAt(root.first(), registry)
+                    if (picture != null) {
+                        // Started on a picture: freehand line (or erase lines) on it.
+                        val (block, pictureOrigin, size) = picture
+                        val local = root.map { it - pictureOrigin }
+                        val color = tool.color
+                        if (color != null) {
+                            val line = normalizedInk(local, size, 2.5f * density)
+                            if (line.size >= 2) vm.addInk(block, color, line)
+                        } else {
+                            vm.eraseInk(inkHitIds(ink[block].orEmpty(), local, size, 14f * density))
+                        }
+                    } else {
+                        val edits = strokeToRanges(root, registry, density)
+                        if (edits.isNotEmpty()) vm.mark(edits, tool.color)
+                    }
+                },
+            )
+        }
+        AnimatedVisibility(
+            penMenu && tool != MarkTool.NOTE, Modifier.align(Alignment.CenterEnd),
+            enter = slideInHorizontally { it } + fadeIn(), exit = slideOutHorizontally { it } + fadeOut(),
+        ) {
+            MarkPalette(
+                tool = tool, colors = colors,
+                onSelect = { tool = it; if (it != MarkTool.NONE) chrome = false },
+                onClose = { penMenu = false; tool = MarkTool.NONE },
+                modifier = Modifier.padding(end = 10.dp),
+            )
+        }
+        AnimatedVisibility(
+            tool == MarkTool.NOTE, Modifier.align(Alignment.TopCenter),
+            enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut(),
+        ) {
+            NoteHint(colors, onCancel = { tool = MarkTool.NONE })
+        }
+    }
+    }
+
+    // Notes: place chosen -> voice or written note; a pin opens its note.
+    spot?.let { place ->
+        fun done() { spot = null }
+        when (noteStep) {
+            NoteStep.CHOOSE -> NoteChooserDialog(
+                onVoice = { noteStep = NoteStep.RECORD },
+                onText = { noteStep = NoteStep.WRITE },
+                onDismiss = ::done,
+            )
+            NoteStep.WRITE -> NoteEditorDialog(
+                initial = "", onDelete = null, onDismiss = ::done,
+                onSave = { text ->
+                    vm.addNote(place.block, place.page, place.x, place.y, NoteKind.TEXT, text, null, 0L)
+                    done()
+                },
+            )
+            NoteStep.RECORD -> VoiceRecordDialog(
+                newFile = vm::newVoiceFile, onDismiss = ::done,
+                onSaved = { file, duration ->
+                    vm.addNote(place.block, place.page, place.x, place.y, NoteKind.VOICE, "", file.absolutePath, duration)
+                    done()
+                },
+            )
+        }
+    }
+    openNote?.let { note ->
+        if (note.kind == NoteKind.VOICE) {
+            VoiceNoteDialog(note, onDelete = { vm.deleteNote(note); openNote = null }, onDismiss = { openNote = null })
+        } else {
+            NoteEditorDialog(
+                initial = note.text,
+                onSave = { text -> vm.updateNoteText(note.id, text); openNote = null },
+                onDelete = { vm.deleteNote(note); openNote = null },
+                onDismiss = { openNote = null },
             )
         }
     }
@@ -284,7 +463,17 @@ private fun Reader(
         Panel.INFO -> BookInfoDialog(book, onDismiss = { panel = Panel.NONE })
         Panel.NONE -> Unit
     }
-    viewer?.let { (path, caption, ink) -> ImageViewer(path, caption, ink, onClose = { viewer = null }) }
+    viewer?.let { v ->
+        ImageViewer(
+            path = v.path, caption = v.caption, equation = v.equation,
+            strokes = if (v.equation) emptyList() else ink[v.block].orEmpty(),
+            colors = colors,
+            penOnStart = v.pen,
+            onDraw = { color, line -> vm.addInk(v.block, color, line) },
+            onErase = vm::eraseInk,
+            onClose = { viewer = null },
+        )
+    }
 }
 
 @Composable
@@ -300,6 +489,7 @@ private fun TopBar(
     onSettings: () -> Unit,
     onOriginal: () -> Unit,
     onInfo: () -> Unit,
+    onMarker: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     Surface(color = colors.surface, contentColor = colors.text, shadowElevation = 4.dp) {
@@ -322,6 +512,7 @@ private fun TopBar(
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, stringResource(R.string.reader_more)) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.reader_marker)) }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { menu = false; onMarker() })
                     DropdownMenuItem(text = { Text(stringResource(R.string.reader_original)) }, leadingIcon = { Icon(RaptiIcons.Pdf, null) }, onClick = { menu = false; onOriginal() })
                     DropdownMenuItem(text = { Text(stringResource(R.string.reader_info)) }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { menu = false; onInfo() })
                 }
@@ -354,17 +545,17 @@ private fun BottomBar(colors: ReaderColors, chapter: String?, page: Int, pageCou
     }
 }
 
+/** Keeps the status and navigation bars visible (readable on the reading theme) while reading. */
 @Composable
-private fun SystemBars(dark: Boolean, visible: Boolean) {
+private fun SystemBars(dark: Boolean) {
     val view = LocalView.current
     val activity = view.context.findActivity() ?: return
-    DisposableEffect(dark, visible) {
+    DisposableEffect(dark) {
         val controller = WindowCompat.getInsetsController(activity.window, view)
         controller.isAppearanceLightStatusBars = !dark
         controller.isAppearanceLightNavigationBars = !dark
-        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (visible) controller.show(WindowInsetsCompat.Type.systemBars()) else controller.hide(WindowInsetsCompat.Type.systemBars())
-        onDispose { controller.show(WindowInsetsCompat.Type.systemBars()) }
+        controller.show(WindowInsetsCompat.Type.systemBars())
+        onDispose { }
     }
 }
 

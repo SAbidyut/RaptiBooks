@@ -293,6 +293,18 @@ class EquationDetector {
         }
     }
 
+    /**
+     * The next line of a worked formula: "= 160 px/m" under "D = 1920 / 12", starting with the
+     * relation sign, directly below a stacked formula and overlapping it horizontally.
+     */
+    private fun continues(top: Region, next: Region, em: Float): Boolean {
+        if (top.bars.isEmpty() || next.bars.isNotEmpty() || next.lines.size != 1) return false
+        val text = next.lines.first().text.trimStart()
+        if (!(text.startsWith("=") || text.startsWith("≈") || text.startsWith("→"))) return false
+        val gap = next.bounds.top - top.bounds.bottom
+        return gap in -1f..em * 1.6f && next.bounds.horizontalOverlap(top.bounds) > 0f
+    }
+
     private fun mergeOverlapping(regions: MutableList<Region>, bodySize: Float) {
         var merged = true
         while (merged) {
@@ -305,7 +317,7 @@ class EquationDetector {
                     max(a.bounds.left - b.bounds.right, b.bounds.left - a.bounds.right) <= em * 3f
                 val stacked = a.bounds.horizontalOverlap(b.bounds) > 0f &&
                     max(a.bounds.top - b.bounds.bottom, b.bounds.top - a.bounds.bottom) <= em * 0.35f
-                if (sameRows || stacked) {
+                if (sameRows || stacked || continues(a, b, em) || continues(b, a, em)) {
                     a.lines += b.lines
                     a.bars += b.bars
                     if (a.number == null) a.number = b.number

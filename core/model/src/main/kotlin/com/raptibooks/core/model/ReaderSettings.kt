@@ -26,8 +26,6 @@ data class ReaderSettings(
     val margin: Int = 20,
     val theme: ReaderTheme = ReaderTheme.LIGHT,
     val justify: Boolean = true,
-    /** Tap the left/right edge of the page to move one screen back/forward. */
-    val tapToTurn: Boolean = true,
     val keepScreenOn: Boolean = true,
 ) {
     companion object {

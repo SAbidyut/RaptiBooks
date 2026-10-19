@@ -4,6 +4,15 @@ import android.content.ContentValues
 import android.database.Cursor
 import com.raptibooks.core.model.Bookmark
 import com.raptibooks.core.model.BoxSpan
+import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.InkCodec
+import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.MarkSpan
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
+import com.raptibooks.core.model.Marking
+import com.raptibooks.core.model.MarkKey
 import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
@@ -31,8 +40,11 @@ class ContentDao(private val db: RaptiDatabase) {
             delete("blocks", "book_id = ?", arrayOf(bookId.toString()))
             delete("toc", "book_id = ?", arrayOf(bookId.toString()))
             delete("boxes", "book_id = ?", arrayOf(bookId.toString()))
+            // Marks point into the old blocks; they cannot follow a re-conversion.
+            delete("highlights", "book_id = ?", arrayOf(bookId.toString()))
+            delete("ink", "book_id = ?", arrayOf(bookId.toString()))
         }
-        db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC, RaptiDatabase.BOXES)
+        db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC, RaptiDatabase.BOXES, RaptiDatabase.HIGHLIGHTS, RaptiDatabase.INK)
     }
 
     fun insertBlocks(bookId: Long, blocks: List<ContentBlock>) {
@@ -227,6 +239,157 @@ class ContentDao(private val db: RaptiDatabase) {
     fun deleteBookmarks(bookId: Long) {
         db.writableDatabase.delete("bookmarks", "book_id = ?", arrayOf(bookId.toString()))
         db.notifyChanged(RaptiDatabase.BOOKMARKS)
+    }
+
+    // ------------------------------------------------------------------ highlights
+
+    fun observeHighlights(bookId: Long): Flow<List<Highlight>> = db.observe(RaptiDatabase.HIGHLIGHTS) {
+        db.readableDatabase.rawQuery(
+            "SELECT id, book_id, block_idx, start_pos, end_pos, color, part FROM highlights WHERE book_id = ? ORDER BY block_idx, part, start_pos",
+            arrayOf(bookId.toString()),
+        ).use { c ->
+            val out = ArrayList<Highlight>(c.count)
+            while (c.moveToNext()) {
+                val color = MarkColor.fromId(c.getInt(5)) ?: continue
+                out += Highlight(c.getLong(0), c.getLong(1), c.getInt(2), c.getInt(3), c.getInt(4), color, c.getInt(6))
+            }
+            out
+        }
+    }
+
+    /**
+     * Marks (or, with a null [color], un-marks) character [edits] per text (see [MarkKey]),
+     * cutting and joining the marks already there. All texts are written in one transaction.
+     */
+    fun markRanges(bookId: Long, edits: Map<Long, List<IntRange>>, color: MarkColor?) {
+        if (edits.isEmpty()) return
+        db.transaction {
+            for ((key, ranges) in edits) {
+                val block = MarkKey.block(key)
+                val part = MarkKey.part(key)
+                val args = arrayOf(bookId.toString(), block.toString(), part.toString())
+                val existing = ArrayList<MarkSpan>()
+                rawQuery("SELECT start_pos, end_pos, color FROM highlights WHERE book_id = ? AND block_idx = ? AND part = ?", args).use { c ->
+                    while (c.moveToNext()) MarkColor.fromId(c.getInt(2))?.let { existing += MarkSpan(c.getInt(0), c.getInt(1), it) }
+                }
+                val result = Marking.apply(existing, ranges, color)
+                if (result == existing) continue
+                delete("highlights", "book_id = ? AND block_idx = ? AND part = ?", args)
+                for (s in result) {
+                    insert(
+                        "highlights", null,
+                        ContentValues().apply {
+                            put("book_id", bookId)
+                            put("block_idx", block)
+                            put("start_pos", s.start)
+                            put("end_pos", s.end)
+                            put("color", s.color.id)
+                            put("part", part)
+                        },
+                    )
+                }
+            }
+        }
+        db.notifyChanged(RaptiDatabase.HIGHLIGHTS)
+    }
+
+    // ------------------------------------------------------------------ ink
+
+    fun observeInk(bookId: Long): Flow<List<InkStroke>> = db.observe(RaptiDatabase.INK) {
+        db.readableDatabase.rawQuery(
+            "SELECT id, book_id, block_idx, color, points FROM ink WHERE book_id = ? ORDER BY id",
+            arrayOf(bookId.toString()),
+        ).use { c ->
+            val out = ArrayList<InkStroke>(c.count)
+            while (c.moveToNext()) {
+                val color = MarkColor.fromId(c.getInt(3)) ?: continue
+                val points = InkCodec.decode(c.getString(4))
+                if (points.size >= 2) out += InkStroke(c.getLong(0), c.getLong(1), c.getInt(2), color, points)
+            }
+            out
+        }
+    }
+
+    fun addInk(bookId: Long, blockIndex: Int, color: MarkColor, points: FloatArray) {
+        if (points.size < 2) return
+        db.writableDatabase.insert(
+            "ink", null,
+            ContentValues().apply {
+                put("book_id", bookId)
+                put("block_idx", blockIndex)
+                put("color", color.id)
+                put("points", InkCodec.encode(points))
+            },
+        )
+        db.notifyChanged(RaptiDatabase.INK)
+    }
+
+    fun deleteInk(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        db.transaction { for (id in ids) delete("ink", "id = ?", arrayOf(id.toString())) }
+        db.notifyChanged(RaptiDatabase.INK)
+    }
+
+    // ------------------------------------------------------------------ notes
+
+    fun observeNotes(bookId: Long): Flow<List<Note>> = db.observe(RaptiDatabase.NOTES) {
+        db.readableDatabase.rawQuery(
+            "SELECT id, book_id, block_idx, page, x, y, kind, text, audio_path, duration, created_at FROM notes WHERE book_id = ? ORDER BY block_idx, y, id",
+            arrayOf(bookId.toString()),
+        ).use { c ->
+            val out = ArrayList<Note>(c.count)
+            while (c.moveToNext()) {
+                out += Note(
+                    c.getLong(0), c.getLong(1), c.getInt(2), c.getInt(3), c.getFloat(4), c.getFloat(5),
+                    NoteKind.fromId(c.getInt(6)), c.getString(7) ?: "", if (c.isNull(8)) null else c.getString(8),
+                    c.getLong(9), c.getLong(10),
+                )
+            }
+            out
+        }
+    }
+
+    fun addNote(
+        bookId: Long, blockIndex: Int, page: Int, x: Float, y: Float,
+        kind: NoteKind, text: String, audioPath: String?, durationMs: Long,
+    ): Long {
+        val id = db.writableDatabase.insert(
+            "notes", null,
+            ContentValues().apply {
+                put("book_id", bookId)
+                put("block_idx", blockIndex)
+                put("page", page)
+                put("x", x)
+                put("y", y)
+                put("kind", kind.id)
+                put("text", text)
+                put("audio_path", audioPath)
+                put("duration", durationMs)
+                put("created_at", System.currentTimeMillis())
+            },
+        )
+        db.notifyChanged(RaptiDatabase.NOTES)
+        return id
+    }
+
+    fun updateNoteText(id: Long, text: String) {
+        db.writableDatabase.update("notes", ContentValues().apply { put("text", text) }, "id = ?", arrayOf(id.toString()))
+        db.notifyChanged(RaptiDatabase.NOTES)
+    }
+
+    fun deleteNote(id: Long) {
+        db.writableDatabase.delete("notes", "id = ?", arrayOf(id.toString()))
+        db.notifyChanged(RaptiDatabase.NOTES)
+    }
+
+    /** After a re-conversion, puts every note at the top of the first block of its page. */
+    fun remapNotes(bookId: Long) {
+        db.writableDatabase.execSQL(
+            "UPDATE notes SET y = 0.05, block_idx = COALESCE((SELECT MIN(idx) FROM blocks b WHERE b.book_id = notes.book_id " +
+                "AND b.page >= notes.page), 0) WHERE book_id = ?",
+            arrayOf<Any>(bookId),
+        )
+        db.notifyChanged(RaptiDatabase.NOTES)
     }
 }
 
