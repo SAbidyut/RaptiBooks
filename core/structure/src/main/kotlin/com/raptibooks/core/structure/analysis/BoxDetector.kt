@@ -19,6 +19,46 @@ class BoxDetector {
 
     fun detect(page: RawPage, lines: List<TextLine>, tables: List<TableRegion>): List<BoxRegion> {
         if (lines.isEmpty()) return emptyList()
+        val tinted = tintedBoxes(page, lines, tables)
+        return tinted + ruledExamples(page, lines, tinted)
+    }
+
+    /**
+     * Worked examples set between two rules across the column, the "EXAMPLE 1.4" label right
+     * under the first: the rules are the example's box.
+     */
+    private fun ruledExamples(page: RawPage, lines: List<TextLine>, boxes: List<BoxRegion>): List<BoxRegion> {
+        val rules = page.paths.filter { it.shape == PathShape.HORIZONTAL_LINE && it.bounds.width >= page.width * 0.35f }
+            .sortedBy { it.bounds.top }
+        if (rules.isEmpty()) return emptyList()
+        val margin = page.height * 0.07f
+        val body = lines.filter { it.bounds.top > margin && it.bounds.bottom < page.height - margin }
+        val out = mutableListOf<BoxRegion>()
+        for ((k, rule) in rules.withIndex()) {
+            val top = rule.bounds
+            fun under(l: TextLine) = l.bounds.top >= top.bottom - 1f && l.bounds.horizontalOverlap(top) >= l.bounds.width * 0.5f
+            val first = body.filter { under(it) }.minByOrNull { it.bounds.top } ?: continue
+            if (first.bounds.top - top.bottom > first.fontSize * 2.5f || !EXAMPLE_START.containsMatchIn(first.text)) continue
+            // (a label in a margin column, beside the text of the example, is not under the rule's text)
+            if (body.any { it !== first && it.bounds.verticalOverlap(first.bounds) > 0f }) continue
+            val close = rules.drop(k + 1).firstOrNull { abs(it.bounds.left - top.left) <= 4f && abs(it.bounds.right - top.right) <= 4f }
+            // (without a closing rule the example runs on to the next page)
+            val bottom = close?.bounds?.bottom ?: body.filter { under(it) }.maxOf { it.bounds.bottom }
+            val rect = Rect(top.left, top.top, top.right, bottom)
+            if (boxes.any { it.bounds.intersects(rect) } || out.any { it.bounds.intersects(rect) }) continue
+            val accent = rule.color.takeIf { it >= 0 && saturation(it) >= 60 } ?: EXAMPLE_ACCENT
+            out += BoxRegion(rect, if (accent == EXAMPLE_ACCENT) EXAMPLE_FILL else lighten(accent), accent, openBottom = close == null)
+        }
+        return out
+    }
+
+    /** [rgb] mixed with much white: a light tint of the same hue. */
+    private fun lighten(rgb: Int): Int {
+        fun ch(c: Int) = (c + (255 - c) * 0.88f).toInt().coerceIn(0, 255)
+        return (ch(rgb shr 16 and 0xFF) shl 16) or (ch(rgb shr 8 and 0xFF) shl 8) or ch(rgb and 0xFF)
+    }
+
+    private fun tintedBoxes(page: RawPage, lines: List<TextLine>, tables: List<TableRegion>): List<BoxRegion> {
         val pageArea = page.width * page.height
         val candidates = page.paths.filter { p ->
             val b = p.bounds
@@ -45,6 +85,12 @@ class BoxDetector {
             out += BoxRegion(b, fill, accent, openTop, openBottom)
         }
         return out
+    }
+
+    private companion object {
+        val EXAMPLE_START = Regex("^\\s*(?:worked\\s+)?(?:example|উদাহরণ)\\s*[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*(?![0-9০-৯])", RegexOption.IGNORE_CASE)
+        const val EXAMPLE_FILL = 0xFFF1E0
+        const val EXAMPLE_ACCENT = 0xE07800
     }
 
     /** A light, visibly coloured fill (not white paper, not a dark banner). */

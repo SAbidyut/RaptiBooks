@@ -97,6 +97,71 @@ class TextbookLayoutTest {
     }
 
     @Test
+    fun marginCaptionOnTheBaselinesOfTwoTextLines() {
+        val frags = mutableListOf<TextFragment>()
+        val body = "a circuit is a network providing one or more closed paths and so on"
+        for (k in 0 until 6) frags += words(body, 70f, 100f + k * 12f, size = 10f)
+        val right = frags.maxOf { it.right }
+        // the caption starts 1.5 em after the text column, on the baselines of the next two lines
+        frags += words(body, 70f, 172f, size = 10f) + words("Figure 2.10", right + 15f, 172f, size = 10f, bold = true)
+        frags += words(body, 70f, 184f, size = 10f) + words("Nodes, branches, and loops.", right + 15f, 184f, size = 10f)
+        for (k in 0 until 4) frags += words(body, 70f, 196f + k * 12f, size = 10f)
+        val lines = LineBuilder().build(frags, splitColumns = true).map { it.text }
+        assertTrue(lines.toString(), "Figure 2.10" in lines)
+        assertTrue(lines.toString(), "Nodes, branches, and loops." in lines)
+    }
+
+    @Test
+    fun runningHeadWithItsPageNumberIsNotText() {
+        val titles = listOf("A BRIEF HISTORY", "UNITS OF MEASUREMENT", "SYSTEMS OF UNITS", "SIGNIFICANT FIGURES", "POWERS OF TEN", "SYMBOLS")
+        val layouts = titles.mapIndexed { i, t ->
+            val frags = mutableListOf<TextFragment>()
+            frags += words("$t | ${i + 3}", 400f, 40f, size = 9f)
+            for (k in 0 until 10) frags += words("The text of page $i goes on here with its line number $k", 70f, 100f + k * 12f, size = 10f)
+            PageAnalyzer().analyze(RawPage(i, 570f, 735f, frags))
+        }
+        val profile = DocumentStats().apply { layouts.forEach { add(it) } }.profile()
+        val t = texts(PageStructurer(profile).structure(layouts[2]))
+        assertTrue(t.toString(), t.none { "SYSTEMS OF UNITS" in it })
+    }
+
+    @Test
+    fun numberedPointsRunningOnAreListItemsNotHeadings() {
+        val frags = mutableListOf<TextFragment>()
+        for (k in 0 until 3) frags += words("Before substituting numerical values into an equation try to establish $k", 70f, 100f + k * 12f, size = 10f)
+        frags += words("a range of answers, and be absolutely sure of the following:", 70f, 136f, size = 10f)
+        val points = listOf("Each quantity has the proper unit of measurement as defined by" to "the equation.",
+            "The proper magnitude of each quantity as determined by the" to "defining equation is substituted.")
+        var y = 160f
+        for ((k, p) in points.withIndex()) {
+            frags += words("${k + 1}. ${p.first}", 70f, y, size = 10f, bold = true, italic = true)
+            frags += words(p.second, 82f, y + 12f, size = 10f, bold = true, italic = true)
+            y += 26f
+        }
+        val elements = structure(frags)
+        assertTrue(texts(elements).toString(), elements.none { it is StructuredElement.Heading })
+        val items = elements.filterIsInstance<StructuredElement.ListItem>()
+        assertEquals(texts(elements).toString(), "Each quantity has the proper unit of measurement as defined by the equation.", items.first().text)
+    }
+
+    @Test
+    fun chapterNumberPrintedOverTheLetterSpacedWord() {
+        val frags = mutableListOf<TextFragment>()
+        frags += words("CHAPT1E R", 396f, 90f, size = 60f)
+        frags += words("INTRODUCTION", 325f, 205f, size = 22.6f)
+        frags += words("TO MACHINERY", 324f, 228f, size = 22.6f)
+        frags += words("PRINCIPLES", 371f, 250f, size = 22.6f)
+        frags += words("1.1 ELECTRICAL MACHINES,", 77f, 425f, size = 14.7f, bold = true)
+        frags += words("TRANSFORMERS, AND DAILY LIFE", 76f, 441f, size = 14.7f, bold = true)
+        for (k in 0 until 10) frags += words("An electrical machine is a device that can convert energy $k", 77f, 466f + k * 15f, size = 12.6f)
+        val layout = PageAnalyzer().analyze(RawPage(0, 569f, 844f, frags))
+        val profile = DocumentStats().apply { add(layout) }.profile()
+        val t = texts(PageStructurer(profile).structure(layout))
+        assertEquals(t.toString(), "H1:Chapter 1: INTRODUCTION TO MACHINERY PRINCIPLES", t[0])
+        assertEquals(t.toString(), "H2:1.1 ELECTRICAL MACHINES, TRANSFORMERS, AND DAILY LIFE", t[1])
+    }
+
+    @Test
     fun exponentLongerThanItsNumberStaysWithIt() {
         val frags = mutableListOf<TextFragment>()
         frags += TextFragment("1", 373f, 671f, 377.5f, 681f, 679f, 9f)

@@ -19,6 +19,8 @@ class TextFragment(
     val italic: Boolean = false,
     /** Width of a space in this font at this size, if known. */
     val spaceWidth: Float = fontSize * 0.25f,
+    /** The glyph's name in its font, for glyphs without a Unicode mapping ("H11005"). */
+    val glyph: String = "",
 ) {
     val width: Float get() = right - left
     val bounds: Rect get() = Rect(left, top, right, bottom)

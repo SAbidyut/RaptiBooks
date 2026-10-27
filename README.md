@@ -17,7 +17,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
 - **Conversion** (background, WorkManager foreground job with a progress notification,
   resumable after the app is killed):
   - text with positions and font styles (bold, italic incl. synthetic, superscript);
-  - running headers/footers and page numbers removed (repetition across pages);
+  - running headers/footers and page numbers removed (repetition across pages; also running
+    heads that change with every section but carry the page number, "A BRIEF HISTORY ⏐ 3");
+    titles printed twice for a shadow effect are read once;
   - headings from font-size levels, bold lines, "Chapter/অধ্যায়" and "2.3"-style numbering;
   - paragraphs re-joined across lines, columns and page breaks, with de-hyphenation;
   - lists (bullets, including vector-drawn ones; 1. / a) / ক) / ১। enumerators);
@@ -41,9 +43,13 @@ screen. Bangla and English are both first-class, and everything runs offline.
     box runs over a page break; a frame around running text is never read as a table;
   - **diagrams split into pieces** (thin-line circuits whose wires look like a table, loose
     labels) are put back together above their caption, with the drawing's own title;
-  - **math symbols without Unicode mapping** (the "=", "×", "+" of Mathematical-Pi-style fonts,
-    which otherwise vanish from the text) are identified from their printed shape; "Δ"
-    printed with a "¢" code is repaired;
+  - **math symbols of "pi fonts"** (Linotype Mathematical Pi, Greek-keyboard and operator
+    fonts of engineering textbooks) are read from their glyph names and known layouts: the
+    "=", "≠", "±", "∠", "Δ", "Π", "ω", "θ", "Ω" that otherwise vanish or turn into "¢", "ß",
+    "u", "6"; any other symbol without Unicode mapping is identified from its printed shape;
+  - **worked examples and practice problems** ("Example 2.3", "Practice Problem 2.3",
+    "উদাহরণ ৪.১", also examples set between two rules) become cards of their own, up to the
+    answer or the next section;
   - printed **contents pages** with or without dot leaders (also as tables, also two columns
     of "1.2  Systems of Units 4" with wrapped titles) become tappable contents entries, and
     the reader's Contents panel follows the book's own contents when it can be tied to the
@@ -55,6 +61,15 @@ screen. Bangla and English are both first-class, and everything runs offline.
     bars, arrowheads) are never read as tables; figures of a two-column exercise page stay in
     their own column; tables in the margin column, centred bold header cells, exponents such
     as 10⁻¹² and two-line captions ("TABLE 1.2" + description) are kept together;
+  - **exercise pages**: problems, figures and their "Figure 2.48 For Prob. 2.31" captions stay
+    in their own column and order; problem text is never swallowed by a figure, while the
+    values printed beside a circuit ("10 V", "5 Ω") stay in the drawing; "Review Questions"
+    pages read column by column; margin captions printed on the baselines of the text are
+    split off; "Solution:" beside a margin figure stays text;
+  - section titles wrapped over two lines ("1.1 ELECTRICAL MACHINES, / TRANSFORMERS, AND
+    DAILY LIFE") are one heading; "Section 2.4 Kirchhoff's Laws" over the exercises is a
+    minor heading; numbered or bulleted points set in bold are list items, not headings; a
+    chapter number printed over the word ("CHAPT1E R") is read;
   - printer's marks outside the crop box (file-name slug, crop marks) are ignored, and shapes
     are measured inside their clipping area;
   - Latin words set without space glyphs in tightly justified lines keep their spaces;
@@ -161,6 +176,7 @@ python3 tools/offline-build/rbuild.py test      # JVM unit tests (structure, ref
 python3 tools/offline-build/rbuild.py robotest  # Robolectric tests (DB, pipeline, UI)
 python3 tools/pdf-harness/harness.py some.pdf   # print the reflowed book of a PDF (desktop)
 HARNESS_IMAGES=/tmp/crops python3 tools/pdf-harness/harness.py some.pdf  # also save figure/formula crops
+HARNESS_XMX=5g python3 tools/pdf-harness/harness.py big.pdf  # more heap for very long books
 ```
 
 The test books in `app/src/test/resources/pdf` are printed from HTML; `tools/test-pdfs` holds

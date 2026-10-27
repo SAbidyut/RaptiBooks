@@ -65,7 +65,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     firstRow.outset(1f).contains(p.bounds) && p.bounds.width > 8f
             } && ys.size > 2
             val table = fillGrid(frags, bounds, columns, rowEdges, ruled = true, header = shadedHeader) ?: continue
-            if (looksLikeDiagram(page, table, (columns.size - 1) * (rowEdges.size - 1)) || looksLikeFormula(table)) continue
+            if (looksLikeDiagram(page, table, (columns.size - 1) * (rowEdges.size - 1)) || looksLikeFormula(table) || looksLikeCircuit(table)) continue
             tables += table
             used += component
         }
@@ -101,7 +101,9 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     if (columns != null && columns.size >= 3) {
                         val ys = (listOf(bounds.top) + rowBoundaries(rows) + listOf(bounds.bottom)).distinct().sorted()
                         val table = fillGrid(frags, bounds, columns, ys, ruled = true, header = group.size >= 3)
-                        if (table != null && !looksLikeDiagram(page, table, (columns.size - 1) * (ys.size - 1)) && !looksLikeFormula(table)) {
+                        if (table != null && !looksLikeDiagram(page, table, (columns.size - 1) * (ys.size - 1)) && !looksLikeFormula(table) &&
+                            !looksLikeCircuit(table)
+                        ) {
                             out += table
                             i = j
                             continue
@@ -139,6 +141,20 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                 }
                 return tables to consumed
             }
+        }
+        // Two columns of text (exercises, review questions): their option rows are not one table.
+        val gutter = TextColumns.gutter(lines, page.width, page.height)
+        if (gutter != null) {
+            val tables = mutableListOf<TableRegion>()
+            val consumed = HashSet<TextLine>()
+            val left = lines.filter { it.bounds.right <= gutter + 2f }
+            val right = lines.filter { it.bounds.left >= gutter - 2f }
+            for (zone in listOf(left, right, lines.filter { it !in left && it !in right })) {
+                val (t, c) = detectAlignedIn(zone, page)
+                tables += t
+                consumed += c
+            }
+            return tables to consumed
         }
         return detectAlignedIn(lines, page)
     }
@@ -200,11 +216,14 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     pieces.size >= 3 && pieces.count { maxRight - it.right < 3f } * 10 >= pieces.size * 6 &&
                         pieces.map { it.text.split(' ').size }.average() > 3
                 }
-                // Hanging list markers ("1.", "•") in a narrow first column are lists, not tables.
+                // Hanging list markers ("1.", "•") in a narrow first column are lists, not tables;
+                // so are numbered exercises ("11.1 | The average power absorbed by…").
                 val firstColumnMarkers = run.all { r ->
                     val first = r.pieces.first()
                     Patterns.listMarker.containsMatchIn(first.text + " ") && first.text.length <= 4
-                }
+                } || run.count { r ->
+                    r.pieces.size >= 2 && EXERCISE_NUMBER.matches(r.pieces[0].text) && r.pieces[1].text.split(' ').size >= 4
+                } * 10 >= run.size * 3
                 // Real tables have white channels between columns: no piece crosses into the
                 // next column. Justified prose split at wide word gaps fails this.
                 // A bold header row may centre its labels over the columns.
@@ -283,6 +302,18 @@ class TableDetector(private val lineBuilder: LineBuilder) {
 
     /** Text sitting on boxes and circles is diagram labelling, not an unruled table. */
     private fun onDrawing(page: RawPage, r: Rect): Boolean = drawingShapes(page, r.outset(4f)) >= 2
+
+    /**
+     * A circuit's wires form a grid too; its "cells" hold component values and polarity signs
+     * ("2 Ω", "60 V", "+ vₒ −"), never words.
+     */
+    private fun looksLikeCircuit(table: TableRegion): Boolean {
+        val cells = table.rows.flatten().map { it.trim() }.filter { it.isNotEmpty() }
+        if (cells.isEmpty()) return false
+        val words = cells.any { c -> c.split(' ').any { w -> w.count { it.isLetter() } >= 4 && w.none { it.isDigit() } } }
+        val values = cells.count { c -> COMPONENT_VALUE.containsMatchIn(c) || c.all { it in "+−-–± " } || COMPONENT_NAME.matches(c) }
+        return !words && values * 3 >= cells.size
+    }
 
     /** Fraction bars of a displayed formula ("v₁ = R₁/(R₁ + R₂) v") also make a small grid. */
     private fun looksLikeFormula(table: TableRegion): Boolean {
@@ -565,6 +596,10 @@ class TableDetector(private val lineBuilder: LineBuilder) {
     private companion object {
         val SECTION_NUMBER = Regex("^\\s*(?:(?:chapter|part)\\s+[0-9]{1,2}|[0-9]{1,2}(?:\\.[0-9]{1,2}){1,3})\\s*$", RegexOption.IGNORE_CASE)
         val NUMBERED_TITLE = Regex("^\\s*[0-9]{1,2}(?:\\.[0-9]{1,2}){1,3}\\s+.*\\p{L}.*$")
+        val COMPONENT_VALUE = Regex("[0-9]\\s*(?:[kmMμnpG]?\\s*(?:Ω|V|A|F|H|W|S|Hz)|VAR|VA)\\b|Ω|^[+−-]|[+−-]$")
+        /** "R₁", "Vs", "iₒ", "C2": a component or quantity name next to a drawing. */
+        val COMPONENT_NAME = Regex("^[+−-]?\\s*[A-Za-zΩα-ω][₀-₉ₐ-ₜa-z0-9]{0,3}\\s*[+−-]?$")
+        val EXERCISE_NUMBER = Regex("^\\s*[0-9]{1,2}\\.[0-9]{1,3}\\s*$")
         val PAGE_ONLY = Regex("^\\s*(?:[0-9]{1,4}|[ivxlc]{1,7})\\s*$")
         val TITLE_WITH_PAGE = Regex("^.*\\p{L}.*\\s[0-9]{1,4}$")
     }

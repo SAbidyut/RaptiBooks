@@ -118,6 +118,10 @@ class FigureDetector {
 
         // Running text separates figures: nothing is merged across a paragraph line.
         val prose = lines.filter { isProse(it, bodySize, page.width) }
+        // Left edges of the text columns: where three or more lines of running text start.
+        val textEdges = lines.filter { it.wordCount >= 5 && it.fontSize >= bodySize * 0.9f }.map { it.bounds.left }.let { lefts ->
+            lefts.filter { x -> lefts.count { abs(it - x) <= 1.5f } >= 3 }
+        }
 
         // Cluster strong items, then let weak items (lines, labels) join nearby clusters.
         val clusters = mutableListOf<MutableList<Item>>()
@@ -172,7 +176,7 @@ class FigureDetector {
                 grown = false
                 for (l in lines) {
                     if (l in members || l in absorbed) continue
-                    if (isLabel(l, bounds, bodySize, page.width, page.height)) {
+                    if (isLabel(l, bounds, bodySize, page.width, page.height, textEdges)) {
                         members += l
                         bounds = bounds.union(l.bounds)
                         grown = true
@@ -196,7 +200,11 @@ class FigureDetector {
                 val stacked = a.bounds.horizontalOverlap(b.bounds) >= min(a.bounds.width, b.bounds.width) * 0.3f &&
                     max(a.bounds.top - b.bounds.bottom, b.bounds.top - a.bounds.bottom) <= bodySize * 1.5f
                 val small = min(a.bounds.area, b.bounds.area) < pageArea * 0.05f
-                if ((sideBySide || (stacked && small)) && !separated(a.bounds, b.bounds, prose) &&
+                // Two drawings with their own captions are two figures.
+                val capA = captionUnder(a.bounds, lines, bodySize)
+                val capB = captionUnder(b.bounds, lines, bodySize)
+                val ownCaptions = capA != null && capB != null && capA !== capB
+                if ((sideBySide || (stacked && small)) && !ownCaptions && !separated(a.bounds, b.bounds, prose) &&
                     !(sideBySide && textColumnsBetween(a.bounds, b.bounds, lines.filter { it !in a.members && it !in b.members }, page.height))
                 ) {
                     a.bounds = a.bounds.union(b.bounds)
@@ -222,12 +230,16 @@ class FigureDetector {
             }
             // Small drawings count when they are labelled (a circuit element with its i, +, v, −).
             val labels = cand.members.count { it.text.length <= 12 }
+            // A small drawing with its own "Figure 1.12" caption under it is a figure all the same
+            // (not a shaded box around a sentence printed above a figure's caption).
+            val captioned = captionUnder(bounds, lines.filter { it !in cand.members }, bodySize, bodySize * 3f) != null &&
+                bounds.height >= 20f && cand.members.none { it.wordCount >= 6 }
             val minArea = if (labels >= 2 && (complexCount + rectCount) >= 1) pageArea * 0.003f else pageArea * 0.012f
-            if (!hasRaster && bounds.area < minArea) {
+            if (!hasRaster && bounds.area < minArea && !captioned) {
                 absorbed -= cand.members
                 continue
             }
-            if (!hasRaster && complexCount + rectCount < 2 && c.size < 3 && labels < 2) {
+            if (!hasRaster && complexCount + rectCount < 2 && c.size < 3 && labels < 2 && !captioned) {
                 absorbed -= cand.members
                 continue
             }
@@ -255,6 +267,7 @@ class FigureDetector {
             }
         }
 
+        val gutter = TextColumns.gutter(lines, page.width, page.height)
         // Captions: below the figure first (with any notes between them), else directly above.
         val captionLines = HashSet<TextLine>()
         val withCaptions = merged.sortedBy { it.bounds.top }.map { f ->
@@ -275,7 +288,7 @@ class FigureDetector {
                 FigureRegion(b, f.kind, caption.joinToString(" ") { it.text }, textSize = f.textSize)
             } else {
                 val above = findCaptionAbove(f.bounds, free)
-                val beside = if (above == null) findCaptionBeside(f.bounds, free, page.width) else null
+                val beside = if (above == null) findCaptionBeside(f.bounds, free, page.width, gutter) else null
                 if (above != null) {
                     absorbed += above
                     captionLines += above
@@ -322,11 +335,17 @@ class FigureDetector {
     }
 
     /** Whether [l] is a label of the drawing at [fig]: inside it, or small text right next to it. */
-    private fun isLabel(l: TextLine, fig: Rect, bodySize: Float, pageWidth: Float, pageHeight: Float): Boolean {
+    private fun isLabel(l: TextLine, fig: Rect, bodySize: Float, pageWidth: Float, pageHeight: Float, textEdges: List<Float>): Boolean {
         if (l.bounds.coveredBy(fig.outset(2f)) >= 0.6f) return true
         if (Patterns.caption.containsMatchIn(l.text)) return false
+        // A line starting where the text column's lines start ("Solution:" beside a figure in
+        // the margin column) is part of the text.
+        if (l.fontSize >= bodySize * 0.9f && textEdges.any { abs(it - l.bounds.left) <= 1.5f }) return false
         // Running headers and page numbers in the top and bottom margins are not labels.
         if (l.bounds.bottom < pageHeight * 0.07f || l.bounds.top > pageHeight * 0.93f) return false
+        // Nor is a sentence, an exercise ("2.73 An ammeter…") or a caption's "For Prob. 2.72."
+        // printed about the size of the text (a diagram's phrases are set much smaller).
+        if (l.fontSize >= bodySize * 0.8f && sentence(l)) return false
         val em = l.fontSize
         val hGap = max(0f, max(fig.left - l.bounds.right, l.bounds.left - fig.right))
         val vGap = max(0f, max(fig.top - l.bounds.bottom, l.bounds.top - fig.bottom))
@@ -351,7 +370,25 @@ class FigureDetector {
 
     private companion object {
         const val PAD = 6f
+        val WORD = Regex("\\p{L}{3,}")
+        val FOR_REFERENCE = Regex("^\\s*for\\s+(?:prob|problem|practice|example|exercise|ex)\\b", RegexOption.IGNORE_CASE)
     }
+
+    /** Running text rather than a label: several words, a numbered exercise, "For Prob. 2.7." */
+    private fun sentence(l: TextLine): Boolean {
+        val pieces = if (l.chunks.size >= 2) l.chunks.size else 1
+        // (a value such as "10 V" or "5 kΩ" is a label, not a numbered exercise)
+        return (l.wordCount >= 6 && l.wordCount.toFloat() / pieces >= 4f) ||
+            (Patterns.numberedHeading.containsMatchIn(l.text) && WORD.containsMatchIn(l.text)) ||
+            FOR_REFERENCE.containsMatchIn(l.text) || (l.wordCount >= 4 && Patterns.endsSentence(l.text))
+    }
+
+    /** The "Figure 2.47" caption line printed under [r] (within a few lines), if any. */
+    private fun captionUnder(r: Rect, lines: List<TextLine>, bodySize: Float, slack: Float = 0f): TextLine? =
+        lines.filter { l ->
+            Patterns.caption.containsMatchIn(l.text) && l.bounds.horizontalOverlap(r.outset(slack)) > 0f &&
+                l.bounds.top >= r.bottom - 2f && l.bounds.top - r.bottom <= bodySize * 4f
+        }.minByOrNull { it.bounds.top }
 
     private fun boundsOf(c: List<Item>): Rect = Rect.bounding(c.map { it.bounds })!!
 
@@ -419,7 +456,7 @@ class FigureDetector {
      */
     private fun findCaptionBelow(bounds: Rect, lines: List<TextLine>, bodySize: Float): Pair<List<TextLine>, List<TextLine>>? {
         val below = lines.filter { l ->
-            l.bounds.top >= bounds.bottom - 2f && l.bounds.horizontalOverlap(bounds) > 0f &&
+            l.bounds.top >= bounds.bottom - 4f && l.bounds.horizontalOverlap(bounds) > 0f &&
                 l.bounds.top - bounds.bottom < bodySize * 12f
         }.sortedBy { it.bounds.top }
         val notes = mutableListOf<TextLine>()
@@ -441,11 +478,13 @@ class FigureDetector {
     }
 
     /** A caption printed in the margin column next to the figure (common in textbooks). */
-    private fun findCaptionBeside(bounds: Rect, lines: List<TextLine>, pageWidth: Float): List<TextLine>? {
+    private fun findCaptionBeside(bounds: Rect, lines: List<TextLine>, pageWidth: Float, gutter: Float?): List<TextLine>? {
         val first = lines.filter { l ->
+            // not across the gutter of a two-column page
+            (gutter == null || (l.bounds.centerX < gutter) == (bounds.centerX < gutter)) &&
             Patterns.caption.containsMatchIn(l.text) && l.bounds.horizontalOverlap(bounds) <= 0f &&
                 max(bounds.left - l.bounds.right, l.bounds.left - bounds.right) <= pageWidth * 0.3f &&
-                l.bounds.top >= bounds.top - l.fontSize * 2f && l.bounds.top <= bounds.bottom
+                l.bounds.top >= bounds.top - l.fontSize * 2f && l.bounds.top <= bounds.bottom + l.fontSize * 1.5f
         }.minByOrNull { abs(it.bounds.top - bounds.top) } ?: return null
         return captionLines(first, lines)
     }

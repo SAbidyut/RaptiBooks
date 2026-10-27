@@ -45,6 +45,12 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     private var continuingBox: OpenBox? = null
     private val boxes = mutableListOf<BoxSpan>()
 
+    /**
+     * A worked example or practice problem ("Example 2.15", "Practice Problem 1.4") printed
+     * without a box: shown as a card from its heading to the next section, example or answer.
+     */
+    private var labelBox: OpenBox? = null
+
     val blockCount: Int get() = nextIndex
 
     fun addPage(pageElements: List<StructuredElement>) {
@@ -143,6 +149,7 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     fun finish(): List<TocEntry> {
         flushHeld()
         flushTable()
+        closeLabelBox()
         closeContinuing()
         openBox?.let { closeBox(it) }
         openBox = null
@@ -150,7 +157,7 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     }
 
     /** Ranges of blocks printed inside callout boxes, in order. Valid after [finish]. */
-    fun boxes(): List<BoxSpan> = boxes.toList()
+    fun boxes(): List<BoxSpan> = boxes.sortedBy { it.startIndex }
 
     private fun sameColours(a: StructuredElement.Box, b: StructuredElement.Box) =
         a.region.fill == b.region.fill && a.region.accent == b.region.accent
@@ -165,10 +172,17 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         continuingBox = null
     }
 
+    private fun closeLabelBox(through: Int = nextIndex - 1) {
+        val b = labelBox ?: return
+        labelBox = null
+        if (through > b.start) boxes += BoxSpan(b.start, through, b.fill, b.accent)
+    }
+
     private fun boxMarker(el: StructuredElement.Box) {
         flushTable()
         val r = el.region
         if (el.start) {
+            closeLabelBox()
             val cont = continuingBox
             continuingBox = null
             openBox?.let { closeBox(it) }
@@ -206,8 +220,17 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         when (val el = elements[i]) {
             is StructuredElement.Box -> boxMarker(el)
             is StructuredElement.Heading -> {
+                val label = EXAMPLE.find(el.text)
+                if (labelBox != null && (el.level <= 3 || label != null || Patterns.chapter.containsMatchIn(el.text))) {
+                    flushTable()
+                    closeLabelBox()
+                }
                 val idx = emit { HeadingBlock(it, el.pageIndex, el.level, el.text) }
                 if (el.level <= 3) headings += TocEntry(el.text, el.level, idx, el.pageIndex)
+                if (label != null && openBox == null && continuingBox == null) {
+                    val practice = label.groupValues[1].lowercase().let { it.startsWith("practice") || it.startsWith("exercise") || it == "অনুশীলনী" }
+                    labelBox = if (practice) OpenBox(idx, PRACTICE_FILL, PRACTICE_ACCENT) else OpenBox(idx, EXAMPLE_FILL, EXAMPLE_ACCENT)
+                }
             }
             is StructuredElement.Paragraph -> emitParagraph(el)
             is StructuredElement.ListItem -> emit { ListItemBlock(it, el.pageIndex, el.marker, el.text, el.styles, el.level) }
@@ -276,6 +299,10 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         val text = p.text.trim()
         if (text.isEmpty()) return
         val idx = emit { ParagraphBlock(it, p.pageIndex, text, p.styles, p.kind) }
+        labelBox?.let { b ->
+            // The answer ends a practice problem; a very long stretch is not one example.
+            if (ANSWER.containsMatchIn(text) || idx - b.start > 150) closeLabelBox(idx)
+        }
         if (p.kind == ParagraphKind.TOC) {
             val tab = text.indexOf('\t')
             val title = if (tab >= 0) text.substring(0, tab) else text
@@ -313,6 +340,19 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         val t = pendingTable ?: return
         pendingTable = null
         emit { t.copy(index = it) }
+    }
+
+    private companion object {
+        /** "Example 2.15", "Practice Problem 1.4", "উদাহরণ ৭.৩" (with a number). */
+        val EXAMPLE = Regex(
+            "^\\s*(example|worked example|practice problem|exercise|উদাহরণ|অনুশীলনী)\\s*[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*\\s*[:.ঃ]?\\s*$",
+            RegexOption.IGNORE_CASE,
+        )
+        val ANSWER = Regex("^\\s*(answers?|উত্তর)\\s*[:ঃ]", RegexOption.IGNORE_CASE)
+        const val EXAMPLE_FILL = 0xFFF1E0
+        const val EXAMPLE_ACCENT = 0xE07800
+        const val PRACTICE_FILL = 0xE6F1FA
+        const val PRACTICE_ACCENT = 0x1F6FB2
     }
 
     private inline fun emit(make: (Int) -> ContentBlock): Int {

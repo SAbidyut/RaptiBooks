@@ -88,15 +88,28 @@ class EquationDetector {
                 return Rect(c.left, l.bounds.top, c.right, l.bounds.bottom)
             }
             fun over(l: TextLine) = piece(l).let { it.horizontalOverlap(b) >= min(it.width, b.width) * 0.5f }
+            // The text of the part of the line over the bar.
+            fun pieceText(l: TextLine): String {
+                if (l.chunks.size < 2) return l.text
+                val c = l.chunks.maxByOrNull { min(it.right, b.right) - max(it.left, b.left) }!!
+                return l.text.substring(c.textStart.coerceIn(0, l.text.length), c.textEnd.coerceIn(0, l.text.length))
+            }
+            fun stats(l: TextLine) = if (l.chunks.size < 2) null else MathText.stats(pieceText(l))
+            fun fragment(l: TextLine): Boolean {
+                val st = stats(l) ?: return feats.getValue(l).fragment
+                val t = pieceText(l).trim()
+                return EQ_NUMBER.matches(t) || (st.words == 0 && t.length <= 40) || (st.words <= 1 && t.length <= 12)
+            }
+            fun words(l: TextLine) = stats(l)?.words ?: feats.getValue(l).words
             val num = lines.firstOrNull { l ->
                 val em = l.fontSize
-                over(l) && l.baseline in y - em * 1.0f..y - em * 0.05f && feats.getValue(l).fragment
+                over(l) && l.baseline in y - em * 1.0f..y - em * 0.05f && fragment(l)
             } ?: continue
             val den = lines.firstOrNull { l ->
                 val em = l.fontSize
-                over(l) && l.bounds.top in y - em * 0.25f..y + em * 0.6f && l.baseline > y && feats.getValue(l).fragment
+                over(l) && l.bounds.top in y - em * 0.25f..y + em * 0.6f && l.baseline > y && fragment(l)
             } ?: continue
-            if (feats.getValue(num).words + feats.getValue(den).words > 1) continue
+            if (words(num) + words(den) > 1) continue
             // A fraction bar is centred under its numerator and barely wider than the wider
             // part; a table rule runs under a whole row of header cells.
             val em = max(num.fontSize, den.fontSize)

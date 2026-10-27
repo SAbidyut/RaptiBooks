@@ -27,12 +27,33 @@ fun main(args: Array<String>) {
 }
 
 fun convert(pdf: File) {
+    // HARNESS_FINDGLYPH=H11004,H11006: where glyphs without Unicode mapping of these names are used.
+    System.getenv("HARNESS_FINDGLYPH")?.let { wanted ->
+        val names = wanted.split(",").toSet()
+        val ex = PdfExtractor.open(pdf, File(System.getProperty("java.io.tmpdir"), "harness-scratch"))
+        val found = HashMap<String, Int>()
+        for (i in 0 until ex.pageCount) {
+            for (f in runCatching { ex.extractPage(i).page.fragments }.getOrDefault(emptyList())) {
+                // "Font:c" finds a mapped character of a font
+                val key = if (f.glyph in names) f.glyph else "${f.fontName.substringAfter('+')}:${f.text}".takeIf { it in names } ?: continue
+                if ((found[key] ?: 0) >= 2) continue
+                found[key] = (found[key] ?: 0) + 1
+                println("glyph $key page=${i + 1} x=${f.left} base=${f.baseline} size=${f.fontSize} w=${f.right - f.left} ${f.fontName}")
+            }
+        }
+        ex.close()
+        return
+    }
     println("=".repeat(100)); println("FILE ${pdf.name}")
     val t0 = System.currentTimeMillis()
     val ex = PdfExtractor.open(pdf, File(System.getProperty("java.io.tmpdir"), "harness-scratch"))
     val meta = ex.metadata()
     println("meta: $meta")
-    val analyzer = PageAnalyzer()
+    // Like the app: the body size of the whole book from up to 60 pages spread over it
+    // (HARNESS_BODY overrides it, e.g. for a few pages cut out of a book).
+    val bodySize = System.getenv("HARNESS_BODY")?.toFloatOrNull() ?: surveyBodySize(ex)
+    println("survey body size: $bodySize")
+    val analyzer = PageAnalyzer(bodySize)
     val stats = DocumentStats()
     val layouts = (0 until ex.pageCount).map { i ->
         val e = ex.extractPage(i)
@@ -46,7 +67,7 @@ fun convert(pdf: File) {
         if (System.getenv("HARNESS_SYMBOLS") != null) {
             e.page.fragments.indices.filter { e.page.fragments[it].text == "\uFFFC" }.forEach {
                 val f = page.fragments[it]
-                println("     symbol @${f.left},${f.baseline} size=${f.fontSize} ${f.fontName} -> '${f.text}'")
+                println("     symbol @${f.left},${f.baseline} size=${f.fontSize} w=${f.right - f.left} ${f.fontName} ${f.glyph} -> '${f.text}'")
             }
         }
         val layout = analyzer.analyze(page)
@@ -67,7 +88,7 @@ fun convert(pdf: File) {
             e.page.paths.forEach { println("     path ${it.shape} ${it.bounds} stroked=${it.stroked} filled=${it.filled} light=${it.lightFill} seg=${it.segments}") }
         }
         if (System.getenv("HARNESS_REGIONS") != null) {
-            layout.figures.forEach { println("     FIGURE ${it.kind} ${it.bounds} caption=${it.caption}") }
+            layout.figures.forEach { println("     FIGURE ${it.kind} ${it.bounds} ts=${it.textSize} caption=${it.caption}") }
             layout.tables.forEach { println("     TABLE ruled=${it.ruled} ${it.bounds}") }
         }
         if (System.getenv("HARNESS_LINES") != null) layout.lines.forEach { println("     ${it.bounds.left.toInt()},${it.bounds.top.toInt()} s=${it.fontSize} b=${it.boldRatio} | ${it.text}") }
@@ -96,6 +117,21 @@ fun convert(pdf: File) {
     println("TOC: " + toc.joinToString(" | ") { "${"  ".repeat(it.level - 1)}${it.title} @${it.blockIndex}" })
     println("time: ${System.currentTimeMillis() - t0} ms, blocks=${blocks.size}")
     ex.close()
+}
+
+fun surveyBodySize(ex: PdfExtractor): Float? {
+    val n = ex.pageCount
+    val pages = if (n <= 60) (0 until n).toList() else List(60) { it * (n - 1) / 59 }.distinct()
+    val chars = HashMap<Int, Long>()
+    for (i in pages) {
+        val page = runCatching { ex.extractPage(i).page }.getOrNull() ?: continue
+        for (f in page.fragments) {
+            if (f.isSpace) continue
+            val key = Math.round(f.fontSize * 2f)
+            chars[key] = (chars[key] ?: 0L) + f.text.length
+        }
+    }
+    return chars.maxByOrNull { it.value }?.key?.let { it / 2f }
 }
 
 /** Renders a page region with poppler (the app uses Android's renderer). */

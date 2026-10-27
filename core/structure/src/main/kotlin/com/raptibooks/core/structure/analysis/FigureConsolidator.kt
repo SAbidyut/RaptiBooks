@@ -77,7 +77,7 @@ class FigureConsolidator {
         val outFigures = figures.toMutableList()
         val outTables = tables.toMutableList()
         val absorbed = HashSet<TextLine>()
-        val gutter = columnGutter(lines, page)
+        val gutter = TextColumns.gutter(lines, page.width, page.height)
         for ((start, anchorFigure) in anchors.sortedBy { it.first.top }) {
             if (anchorFigure != null && anchorFigure !in outFigures) continue
             // In a two-column layout a figure stays in the column of its caption.
@@ -95,7 +95,9 @@ class FigureConsolidator {
             val pieces = mutableListOf<Piece>()
             outFigures.filter { it !== anchorFigure }.forEach { pieces += FigurePiece(it) }
             outTables.forEach { pieces += TablePiece(it) }
-            lines.filter { it !in absorbed && it !in captionLines }.forEach { pieces += LinePiece(it) }
+            // (running headers and page numbers in the top and bottom margins are not part of a figure)
+            lines.filter { it !in absorbed && it !in captionLines && it.bounds.top > page.height * 0.07f && it.bounds.bottom < page.height * 0.93f }
+                .forEach { pieces += LinePiece(it) }
             for (p in page.paths) {
                 val b = p.bounds
                 if (b.width > columnWidth * 0.92f || b.bottom > start.top + 2f) continue // box borders, page rules
@@ -198,30 +200,6 @@ class FigureConsolidator {
             outFigures += FigureRegion(bounds.clamp(page.width, page.height), kind, caption, textSize = textSize)
         }
         return Result(outFigures, outTables, absorbed)
-    }
-
-    /**
-     * The x of the gutter between two columns of text, if the page has two: no line of
-     * several words crosses it and there are lines on both sides.
-     */
-    private fun columnGutter(lines: List<TextLine>, page: RawPage): Float? {
-        val text = lines.filter { it.wordCount >= 4 && it.bounds.top > page.height * 0.07f && it.bounds.bottom < page.height * 0.93f }
-        if (text.size < 6) return null
-        var x = page.width * 0.25f
-        var best: Float? = null
-        var bestScore = 0
-        while (x <= page.width * 0.75f) {
-            val gx = x
-            if (text.none { it.bounds.left < gx - 2f && it.bounds.right > gx + 2f }) {
-                val score = minOf(text.count { it.bounds.right <= gx }, text.count { it.bounds.left >= gx })
-                if (score >= 3 && score > bestScore) {
-                    best = gx
-                    bestScore = score
-                }
-            }
-            x += 2f
-        }
-        return best
     }
 
     private fun captionText(lines: List<TextLine>, start: Rect): String? {

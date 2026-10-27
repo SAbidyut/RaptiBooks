@@ -72,7 +72,10 @@ object ReadingOrder {
         return Rect(box.left + inset, box.top, box.right - inset, box.bottom)
     }
 
-    private fun medianWidth(rects: List<Rect>): Float = rects.map { it.width }.sorted()[rects.size / 2]
+    private fun medianWidth(rects: List<Rect>): Float = widthAt(rects, 0.5f)
+
+    /** The width [q] of the way up the sorted widths of [rects]. */
+    private fun widthAt(rects: List<Rect>, q: Float): Float = rects.map { it.width }.sorted()[(rects.size * q).toInt().coerceAtMost(rects.size - 1)]
 
     /**
      * A narrow margin column ([side], [sideWidth] wide) of notes next to a well filled main
@@ -92,7 +95,8 @@ object ReadingOrder {
         // A lone picture beside the text column (a photo, a margin figure).
         if (sideText.isEmpty()) return side.size <= 3 && side.all { it.height >= em * 4f }
         // the main column holds the page's text: its lines are much wider than the notes
-        return side.size >= 2 && medianWidth(main) >= medianWidth(sideText) * 1.5f
+        // (it may have many short lines too: equations, "or", "Solution:")
+        return side.size >= 2 && widthAt(main, 0.75f) >= medianWidth(sideText) * 1.5f
     }
 
     /** Indices of columns that are margin columns (read after the main column of a band). */
@@ -155,7 +159,12 @@ object ReadingOrder {
                 while (k < hi && cover[k] <= limit) k++
                 // Use the least covered part of the run as the gutter proper.
                 val min = (start until k).minOf { cover[it] }
-                val core = (start until k).filter { cover[it] <= min + 0.01f }
+                var core = (start until k).filter { cover[it] <= min + 0.01f }
+                // A figure label printed outside its drawing may stand in the gutter: the
+                // emptiest part is then a sliver beside it, and the label is part of the gutter.
+                if ((core.last() + 1 - core.first()) * step < minOf(minGap, 4f)) {
+                    core = (start until k).filter { cover[it] <= min + em * 1.5f }
+                }
                 val gl = area.left + core.first() * step
                 val gr = area.left + (core.last() + 1) * step
                 if ((k - start) * step >= minGap && gr - gl >= minOf(minGap, 4f)) gutters += gl to gr
@@ -183,7 +192,9 @@ object ReadingOrder {
                 abs(left.maxOf { it.bottom } - right.maxOf { it.bottom }) < area.height && // sanity
                 // Columns of text are filled with long lines; side-by-side short items (answer
                 // options, label lists) are rows to read left to right instead.
-                (shortLineColumns || medianWidth(left) >= (gl - area.left) * 0.5f && medianWidth(right) >= (area.right - gr) * 0.5f)
+                (shortLineColumns || medianWidth(left) >= (gl - area.left) * 0.5f && medianWidth(right) >= (area.right - gr) * 0.5f ||
+                    // questions running the width of each column, with short options under them
+                    left.count { it.width >= (gl - area.left) * 0.7f } >= 3 && right.count { it.width >= (area.right - gr) * 0.7f } >= 3)
         }
     }
 

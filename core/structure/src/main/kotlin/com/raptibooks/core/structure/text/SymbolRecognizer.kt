@@ -55,7 +55,7 @@ object SymbolRecognizer {
                 ) ?: continue
                 replaced[i] = TextFragment(
                     c.toString(), f.left, f.top, f.right, f.bottom, f.baseline, f.fontSize, f.fontName,
-                    f.bold, f.italic, f.spaceWidth,
+                    f.bold, f.italic, f.spaceWidth, f.glyph,
                 )
             }
         }

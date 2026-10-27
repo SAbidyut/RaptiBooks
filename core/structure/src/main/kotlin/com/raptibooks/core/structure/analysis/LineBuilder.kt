@@ -110,6 +110,7 @@ class LineBuilder(
      */
     private fun splitAtGutters(segments: List<List<Frag>>): List<List<Frag>> {
         val bounds = segments.map { solidBounds(it) }
+        val starts = segments.map { gapStarts(it) }
         val out = ArrayList<List<Frag>>(segments.size)
         for ((k, seg) in segments.withIndex()) {
             val b = bounds[k]
@@ -118,9 +119,20 @@ class LineBuilder(
                 continue
             }
             val em = medianSize(seg.filter { !it.f.isSpace })
-            val near = bounds.filterIndexed { j, o -> j != k && o != null && abs(o.centerY - b.centerY) <= em * 4.5f }.map { it!! }
-            fun columnEdge(x: Float) = near.count { abs(it.left - x) <= 2f } >= 2
-            fun crossed(x: Float) = near.any { it.left < x - 1f && it.right > x + 1f }
+            val nearIx = bounds.indices.filter { j -> j != k && bounds[j] != null && abs(bounds[j]!!.centerY - b.centerY) <= em * 4.5f }
+            val near = nearIx.map { bounds[it]!! }
+            fun columnEdge(x: Float, rest: () -> String): Boolean {
+                val n = near.count { abs(it.left - x) <= 2f }
+                // text after a gap at the same place in the rows around it (a margin caption
+                // printed on the baselines of the text lines)
+                val beside = nearIx.flatMap { starts[it] }.filter { abs(it.first - x) <= 2f }
+                // a caption in the margin column ("Figure 1.6") may have one line under it
+                return n >= 2 || (Patterns.caption.containsMatchIn(rest()) && n + beside.size >= 1) || beside.any { it.second }
+            }
+            // (a row that also breaks there, beside the same margin column, does not cross it)
+            fun crossed(x: Float, resume: Float) = nearIx.any { j ->
+                bounds[j]!!.let { it.left < x - 1f && it.right > x + 1f } && starts[j].none { abs(it.first - resume) <= 2f }
+            }
             var current = mutableListOf<Frag>()
             var maxRight = -Float.MAX_VALUE
             for (fr in seg) {
@@ -129,7 +141,8 @@ class LineBuilder(
                     val mid = (maxRight + fr.left) / 2f
                     // a hanging number or bullet ("2.7   Find the…") stays with its text
                     val marker = current.filter { !it.f.isSpace }.joinToString("") { it.f.text }.trim().let { MARKER_ONLY.matches(it) }
-                    if (gap >= em * chunkGapEm && !marker && columnEdge(fr.left) && !crossed(mid) &&
+                    val restText = { seg.subList(seg.indexOf(fr), seg.size).joinToString("") { if (it.f.isSpace) " " else it.f.text } }
+                    if (gap >= em * chunkGapEm && !marker && columnEdge(fr.left, restText) && !crossed(mid, fr.left) &&
                         near.count { it.right <= maxRight + 2f } >= 1
                     ) {
                         out += current
@@ -141,6 +154,23 @@ class LineBuilder(
                 if (!fr.f.isSpace) maxRight = max(maxRight, fr.right)
             }
             if (current.any { !it.f.isSpace }) out += current
+        }
+        return out
+    }
+
+    /** Where text resumes after a wide gap in [segment], and whether a caption starts there. */
+    private fun gapStarts(segment: List<Frag>): List<Pair<Float, Boolean>> {
+        val solid = segment.filter { !it.f.isSpace }
+        if (solid.size < 2) return emptyList()
+        val em = medianSize(solid)
+        val out = mutableListOf<Pair<Float, Boolean>>()
+        var maxRight = solid[0].right
+        for (fr in solid.drop(1)) {
+            if (fr.left - maxRight >= em * chunkGapEm) {
+                val rest = segment.subList(segment.indexOf(fr), segment.size).joinToString("") { if (it.f.isSpace) " " else it.f.text }
+                out += fr.left to Patterns.caption.containsMatchIn(rest)
+            }
+            maxRight = max(maxRight, fr.right)
         }
         return out
     }

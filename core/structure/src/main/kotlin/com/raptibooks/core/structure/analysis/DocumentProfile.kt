@@ -5,6 +5,7 @@ import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.text.BanglaText
 import com.raptibooks.core.structure.text.TextQuality
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /** Accumulates cross-page statistics during the first pass (constant memory per page). */
@@ -12,6 +13,8 @@ class DocumentStats {
     private val sizeChars = HashMap<Int, Long>()
     private val sizePages = HashMap<Int, Int>()
     private val edgePages = HashMap<String, Int>()
+    /** Pages on which an edge line starts or ends with (page index + offset), by offset. */
+    private val folioOffsets = HashMap<Int, Int>()
     private var visualImpossible = 0
     private var preBaseTotal = 0
     private var bengaliLetters = 0L
@@ -27,6 +30,7 @@ class DocumentStats {
         if (lines.isNotEmpty()) pagesWithText++
         val seenSizes = HashSet<Int>()
         val seenEdges = HashSet<String>()
+        val seenOffsets = HashSet<Int>()
         for (l in lines) {
             if (Patterns.tocEntry.containsMatchIn(l.text)) continue // contents lines aren't headings
             val key = sizeKey(l.fontSize)
@@ -38,6 +42,7 @@ class DocumentStats {
                     val sig = zone + Patterns.signature(l.text)
                     if (seenEdges.add(sig)) edgePages[sig] = (edgePages[sig] ?: 0) + 1
                 }
+                for (n in folios(l.text)) if (seenOffsets.add(n - layout.index)) folioOffsets[n - layout.index] = (folioOffsets[n - layout.index] ?: 0) + 1
             }
             if (!layout.fromOcr) {
                 val (imp, total) = BanglaText.visualOrderEvidence(l.text)
@@ -76,6 +81,9 @@ class DocumentStats {
             else -> Int.MAX_VALUE
         }
         val repeated = edgePages.filter { it.value >= minEdgeRepeats }.keys
+        // Page numbers printed in the running heads ("A BRIEF HISTORY ⏐⏐⏐ 3"): a number that
+        // follows the page index on many pages.
+        val folio = folioOffsets.filter { it.value >= max(minEdgeRepeats, pagesWithText / 10) }.keys
         val visual = visualImpossible >= 3 && visualImpossible >= preBaseTotal * 0.12
         val total = (bengaliLetters + latinLetters).coerceAtLeast(1)
         val language = when {
@@ -84,7 +92,7 @@ class DocumentStats {
             bengaliLetters + latinLetters == 0L -> "unknown"
             else -> "bn+en"
         }
-        return DocumentProfile(body, reps.take(3), repeated, visual, language)
+        return DocumentProfile(body, reps.take(3), repeated, visual, language, folio)
     }
 
     companion object {
@@ -96,6 +104,13 @@ class DocumentStats {
             l.bounds.top >= pageHeight * 0.9f -> "B|"
             else -> null
         }
+
+        private val LEADING_NUMBER = Regex("^\\s*(\\d{1,4})(?!\\d|[.,]\\d)")
+        private val TRAILING_NUMBER = Regex("(?<![\\d.,])(\\d{1,4})\\s*$")
+
+        /** The numbers a header or footer line starts or ends with ("12 ⏐ Chapter", "Title 13"). */
+        fun folios(text: String): List<Int> =
+            listOfNotNull(LEADING_NUMBER.find(text), TRAILING_NUMBER.find(text)).mapNotNull { it.groupValues[1].toIntOrNull() }.distinct()
     }
 }
 
@@ -107,6 +122,8 @@ class DocumentProfile(
     /** Bangla text layer is in visual glyph order and must be reordered. */
     val visualOrder: Boolean,
     val language: String,
+    /** Offsets (page number − page index) of the page numbers printed in running heads. */
+    private val folioOffsets: Set<Int> = emptySet(),
 ) {
     fun headingLevelForSize(size: Float): Int? {
         if (size < bodySize * 1.15f) return null
@@ -114,9 +131,10 @@ class DocumentProfile(
         return (headingSizes.size + 1).coerceAtMost(3)
     }
 
-    fun isRunningHeaderOrFooter(line: TextLine, pageHeight: Float): Boolean {
+    fun isRunningHeaderOrFooter(line: TextLine, pageHeight: Float, pageIndex: Int = -1): Boolean {
         val zone = DocumentStats.edgeZone(line, pageHeight) ?: return false
         if (Patterns.pageNumber.matches(line.text.trim())) return true
+        if (pageIndex >= 0 && DocumentStats.folios(line.text).any { it - pageIndex in folioOffsets }) return true
         return (zone + Patterns.signature(line.text)) in repeatedEdges
     }
 
