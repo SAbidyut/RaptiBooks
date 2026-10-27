@@ -1,6 +1,7 @@
 package com.raptibooks.feature.reader
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -112,7 +113,14 @@ internal val LocalMarks = compositionLocalOf { ReaderMarks(emptyMap(), emptyMap(
 
 /** Body text of a block, with the passages marked by the user underlined in their colour. */
 @Composable
-internal fun MarkableText(blockIndex: Int, text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier, part: Int = 0) {
+internal fun MarkableText(
+    blockIndex: Int,
+    text: AnnotatedString,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    part: Int = 0,
+    inlineContent: Map<String, InlineTextContent> = emptyMap(),
+) {
     val marks = LocalMarks.current
     val key = MarkKey.of(blockIndex, part)
     val spans = marks.byKey[key]
@@ -126,6 +134,7 @@ internal fun MarkableText(blockIndex: Int, text: AnnotatedString, style: TextSty
     val drop = with(LocalDensity.current) { 3.dp.toPx() }
     Text(
         text, style = style,
+        inlineContent = inlineContent,
         onTextLayout = { layout = it; target.layout = it },
         modifier = modifier
             .onGloballyPositioned { target.coords = it }

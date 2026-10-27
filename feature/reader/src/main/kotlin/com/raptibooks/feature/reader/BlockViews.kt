@@ -1,6 +1,11 @@
 package com.raptibooks.feature.reader
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.fillMaxSize
+import com.raptibooks.core.model.InlinePicture
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -177,14 +182,17 @@ private fun HeadingView(block: HeadingBlock, style: ReaderStyle, highlight: Stri
 
 @Composable
 private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: String?) {
-    val text = remember(block, highlight, style.colors) { styled(block.text, block.styles, highlight, style.colors) }
+    val text = remember(block, highlight, style.colors) { styled(block.text, block.styles, highlight, style.colors).withPictures(block.pictures) }
+    val pictures = pictureContent(block.pictures, style)
     val base = style.body
     val spacing = (style.fontSize.value * 0.75f).dp
     when (block.kind) {
-        ParagraphKind.BODY -> MarkableText(block.index, text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing))
+        ParagraphKind.BODY -> MarkableText(
+            block.index, text, style = base, modifier = Modifier.fillMaxWidth().padding(bottom = spacing), inlineContent = pictures,
+        )
         ParagraphKind.CENTERED -> MarkableText(
             block.index, text, style = base.copy(textAlign = TextAlign.Center),
-            modifier = Modifier.fillMaxWidth().padding(vertical = spacing / 2).padding(bottom = spacing / 2),
+            modifier = Modifier.fillMaxWidth().padding(vertical = spacing / 2).padding(bottom = spacing / 2), inlineContent = pictures,
         )
         ParagraphKind.QUOTE -> {
             val bar = style.colors.accent.copy(alpha = 0.6f)
@@ -195,6 +203,7 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
                     .padding(bottom = spacing)
                     .drawBehind { drawLine(bar, Offset(0f, 0f), Offset(0f, size.height), strokeWidth = 3.dp.toPx()) }
                     .padding(start = 16.dp),
+                inlineContent = pictures,
             )
         }
         ParagraphKind.CAPTION -> MarkableText(
@@ -204,7 +213,7 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
         ParagraphKind.FORMULA -> FormulaView(text, style)
         ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> MarkableText(
             block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
-            modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2),
+            modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2), inlineContent = pictures,
         )
     }
 }
@@ -351,7 +360,8 @@ private fun ContentsEntryView(block: ParagraphBlock, style: ReaderStyle, highlig
 
 @Composable
 private fun ListItemView(block: ListItemBlock, style: ReaderStyle, highlight: String?) {
-    val text = remember(block, highlight, style.colors) { styled(block.text, block.styles, highlight, style.colors) }
+    val text = remember(block, highlight, style.colors) { styled(block.text, block.styles, highlight, style.colors).withPictures(block.pictures) }
+    val pictures = pictureContent(block.pictures, style)
     val markerWidth = (style.fontSize.value * if (block.marker.length <= 1) 1.4f else 2.4f).dp
     Row(Modifier.fillMaxWidth().padding(start = (block.level * 20).dp, bottom = (style.fontSize.value * 0.4f).dp)) {
         Text(
@@ -359,7 +369,40 @@ private fun ListItemView(block: ListItemBlock, style: ReaderStyle, highlight: St
             style = style.body.copy(textAlign = TextAlign.End, color = style.colors.accent),
             modifier = Modifier.width(markerWidth).padding(end = 8.dp),
         )
-        MarkableText(block.index, text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f))
+        MarkableText(block.index, text, style = style.body.copy(textAlign = TextAlign.Start), modifier = Modifier.weight(1f), inlineContent = pictures)
+    }
+}
+
+private const val INLINE_CONTENT_TAG = "androidx.compose.foundation.text.inlineContent"
+
+/** Marks where the block's word pictures stand in its text (see [InlinePicture]). */
+internal fun AnnotatedString.withPictures(pictures: List<InlinePicture>): AnnotatedString {
+    if (pictures.isEmpty()) return this
+    val base = this
+    return buildAnnotatedString {
+        append(base)
+        for ((k, p) in pictures.withIndex()) {
+            if (p.start in base.text.indices) addStringAnnotation(INLINE_CONTENT_TAG, "pic$k", p.start, p.start + 1)
+        }
+    }
+}
+
+/**
+ * Words shown as printed (Arabic the PDF's text layer could not hold), set in the line like
+ * words, in the colour of the text.
+ */
+@Composable
+internal fun pictureContent(pictures: List<InlinePicture>, style: ReaderStyle): Map<String, InlineTextContent> {
+    if (pictures.isEmpty()) return emptyMap()
+    val ink = style.colors.text
+    val fontPx = with(LocalDensity.current) { style.fontSize.toPx() }
+    return remember(pictures, ink, fontPx) {
+        pictures.withIndex().associate { (k, p) ->
+            "pic$k" to InlineTextContent(Placeholder(p.width.em, p.height.em, PlaceholderVerticalAlign.TextCenter)) {
+                val image by rememberLocalImage(p.path, (p.width * fontPx * 1.5f).roundToInt().coerceAtLeast(1))
+                image?.let { Image(it, contentDescription = null, colorFilter = ColorFilter.tint(ink), modifier = Modifier.fillMaxSize()) }
+            }
+        }
     }
 }
 

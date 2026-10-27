@@ -6,7 +6,9 @@ import com.raptibooks.core.structure.layout.Chunk
 import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.TextFragment
 import com.raptibooks.core.structure.text.BijoyConverter
+import com.raptibooks.core.structure.text.RtlText
 import com.raptibooks.core.structure.text.TextCleaner
+import com.raptibooks.core.structure.text.UnreadableText
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -66,7 +68,9 @@ class LineBuilder(
         var segments = rows.sortedBy { it.baseline }.flatMap { splitSegments(orderRow(it.frags)) }
         segments = attachStrayScripts(segments)
         if (splitColumns && segments.size >= 6) segments = splitAtGutters(segments)
-        return segments.mapNotNull { buildLine(it) }
+        pageTrustsSpaces = scanSpacing(segments)
+        if (splitColumns) scannedPage = pageTrustsSpaces
+        return segments.mapNotNull { buildLine(it) }.also { pageTrustsSpaces = false }
     }
 
     /**
@@ -327,6 +331,39 @@ class LineBuilder(
         return segments.filter { seg -> seg.any { !it.f.isSpace } }
     }
 
+    /** The page's text comes from a scan (see [buildLine]): only its space glyphs part words. */
+    private var pageTrustsSpaces = false
+
+    /** The page last built in full ([build] with columns) has text made from a scan. */
+    private var scannedPage = false
+
+    /**
+     * A page whose lines set their words unevenly apart, as measured across their space glyphs:
+     * glyph places are unreliable there (text an OCR laid over a scan, like Acrobat's
+     * ClearScan). A typeset line keeps the same distance between all its words.
+     */
+    private fun scanSpacing(segments: List<List<Frag>>): Boolean {
+        val spread = ArrayList<Float>()
+        // (and some of its space glyphs overlap the letter after them)
+        var overlapping = 0
+        for (seg in segments) {
+            val gaps = ArrayList<Float>()
+            for ((i, fr) in seg.withIndex()) {
+                if (!fr.f.isSpace) continue
+                val before = seg.subList(0, i).lastOrNull { !it.f.isSpace } ?: continue
+                val after = seg.subList(i + 1, seg.size).firstOrNull { !it.f.isSpace } ?: continue
+                gaps += after.left - before.right
+                if (after.left - before.right < (fr.f.spaceWidth.takeIf { it > 0f } ?: (fr.f.fontSize * 0.25f)) * 0.35f) overlapping++
+            }
+            if (gaps.size < 4) continue
+            val mean = gaps.average().toFloat()
+            if (mean <= 0f) continue
+            val sd = kotlin.math.sqrt(gaps.sumOf { ((it - mean) * (it - mean)).toDouble() } / gaps.size).toFloat()
+            spread += sd / mean
+        }
+        return spread.size >= 6 && spread.sorted()[spread.size / 2] >= 0.2f && overlapping >= 5
+    }
+
     private fun buildLine(segment: List<Frag>): TextLine? {
         val solid = segment.filter { !it.f.isSpace }
         if (solid.isEmpty()) return null
@@ -366,7 +403,18 @@ class LineBuilder(
         } else {
             null
         }
+        // Where the glyphs' places are unreliable (text made from a scan: the gaps between letters
+        // say nothing), the space glyphs alone part the words.
+        val trustSpaces = pageTrustsSpaces && segment.any { it.f.isSpace }
         var startNewChunk = false
+        // where each glyph's text starts (right-to-left lines are put in reading order by glyph)
+        val glyphStarts = ArrayList<Int>()
+        // where each character was printed
+        val charLeft = ArrayList<Float>()
+        val charRight = ArrayList<Float>()
+        fun place(upTo: Int, left: Float, right: Float) {
+            while (charLeft.size < upTo) { charLeft += left; charRight += right }
+        }
         var boldChars = 0
         var italicChars = 0
         var totalChars = 0
@@ -403,10 +451,11 @@ class LineBuilder(
                 // the space glyph in tightly justified lines and just move the next word.
                 val threshold = when {
                     !explicitSpaces -> inferred
-                    simpleScript(p.f.text) && simpleScript(text) -> min(max(inferred, lineSize * 0.15f), tightGap ?: Float.MAX_VALUE)
+                    simpleScript(p.f.text) && simpleScript(text) ->
+                        min(max(inferred, lineSize * 0.15f), tightGap ?: Float.MAX_VALUE)
                     else -> lineSize * 0.6f
                 }
-                needSpace = pendingSpace || gap > threshold
+                needSpace = pendingSpace || (!trustSpaces && gap > threshold)
                 if (gap > chunkGapEm * lineSize) {
                     flushBijoy()
                     chunks += Chunk(chunkLeft, chunkRight, chunkStart, sb.length)
@@ -438,12 +487,15 @@ class LineBuilder(
             } else {
                 flushBijoy()
                 if (needSpace && sb.isNotEmpty() && sb.last() != ' ') sb.append(' ')
+                place(sb.length, maxRight, f.left)
                 if (startNewChunk) {
                     chunkStart = sb.length
                     startNewChunk = false
                 }
                 val start = sb.length
                 sb.append(text)
+                place(sb.length, f.left, f.right)
+                glyphStarts += start
                 if (flags != 0) ranges += intArrayOf(start, sb.length, flags)
             }
             val n = text.length
@@ -460,22 +512,256 @@ class LineBuilder(
         while (sb.isNotEmpty() && sb.last() == ' ') sb.setLength(sb.length - 1)
         if (sb.isBlank()) return null
         chunks += Chunk(chunkLeft, chunkRight, chunkStart.coerceAtMost(sb.length), sb.length)
+        var lineChunks: List<Chunk> = chunks
+        var lineRanges: List<IntArray> = ranges
+        val positions = charLeft.size >= sb.length
+        if (RtlText.hasRtl(sb)) {
+            val logical = toReadingOrder(sb, glyphStarts, ranges, chunks)
+            sb.setLength(0)
+            sb.append(logical.first)
+            lineRanges = logical.second
+            lineChunks = logical.third
+        }
 
         val bounds = Rect(
             solid.minOf { it.left }, solid.minOf { it.f.top },
             solid.maxOf { it.right }, solid.maxOf { it.f.bottom },
         )
-        return TextLine(
+        val built = TextLine(
             text = sb.toString(),
-            styles = mergeRanges(ranges, sb),
+            styles = mergeRanges(lineRanges, sb),
             bounds = bounds,
             baseline = baseline,
             fontSize = lineSize,
             boldRatio = if (totalChars == 0) 0f else boldChars.toFloat() / totalChars,
             italicRatio = if (totalChars == 0) 0f else italicChars.toFloat() / totalChars,
             fontName = fontChars.maxByOrNull { it.value }?.key ?: "",
-            chunks = if (chunks.size > 1) chunks else emptyList(),
+            chunks = if (lineChunks.size > 1) lineChunks else emptyList(),
         )
+        if (positions && !RtlText.hasRtl(sb)) {
+            charPlaces[built] = charLeft.subList(0, sb.length).toFloatArray() to charRight.subList(0, sb.length).toFloatArray()
+        }
+        return built
+    }
+
+    /** Starts a line of words shown as printed from a right-to-left script. */
+    private val RTL_MARK = '\u200F'
+
+    /** Where the characters of the lines built since [pictureWords] last ran were printed. */
+    private val charPlaces = java.util.IdentityHashMap<TextLine, Pair<FloatArray, FloatArray>>()
+
+    /**
+     * Words whose text layer is garbage (a script the scan's OCR could not read: Arabic in an
+     * English book run through Acrobat's ClearScan) are shown as printed: each run of them becomes
+     * an [InlineStyle.PICTURE] character whose place on the page is in [TextLine.pictures]. A line
+     * that is all such words (an Arabic line) becomes one picture per word, in right-to-left order.
+     * Only on a page with clear signs of such garbage. Returns the lines, changed where needed.
+     */
+    fun pictureWords(lines: List<TextLine>): List<TextLine> {
+        val places = HashMap(charPlaces)
+        charPlaces.clear()
+        // Only where the text layer was made by an OCR (glyphs placed loosely) and holds such
+        // garbage, or where garbage is a good part of the page: a page of formulas with symbols
+        // the text layer cannot name is not one.
+        val tokens = lines.sumOf { l -> UnreadableText.tokens(l.text).size }
+        val garbled = lines.sumOf { l -> UnreadableText.tokens(l.text).count { (_, t) -> UnreadableText.strong(t) } }
+        if (garbled < 3 || !(scannedPage || (garbled >= 10 && garbled >= tokens * 0.15f))) return lines
+        val out = lines.map { l ->
+            val (lefts, rights) = places[l] ?: return@map l
+            pictureLine(l, lefts, rights) ?: l
+        }.toMutableList()
+        // Bits of the other script left between its lines (dots, marks read as ".J", "0", "_)"):
+        // a line with nothing like an English word, close to a line of that script.
+        val foreign = out.filter { it.text.startsWith(RTL_MARK) }
+        for ((k, l) in out.withIndex()) {
+            if (l.text.startsWith(RTL_MARK) || l.pictures.isNotEmpty()) continue
+            val (lefts, rights) = places[lines[k]] ?: continue
+            val tokens = UnreadableText.tokens(l.text)
+            if (tokens.isEmpty() || tokens.any { UnreadableText.englishLike(it.second) } || tokens.size > 6) continue
+            if (foreign.none { f -> abs(f.baseline - l.baseline) < max(f.fontSize, l.fontSize) * 2.2f && f.bounds.horizontalOverlap(l.bounds) > 0f }) continue
+            out[k] = pictureLine(l, lefts, rights, force = true) ?: l
+        }
+        return joinForeignRows(out)
+    }
+
+    /**
+     * Pieces of one line of the other script parted by a wide gap are one line, read from the
+     * right: the rightmost piece first.
+     */
+    private fun joinForeignRows(lines: List<TextLine>): List<TextLine> {
+        val foreign = lines.filter { it.text.startsWith(RTL_MARK) }
+        if (foreign.size < 2) return lines
+        val used = HashSet<TextLine>()
+        val out = ArrayList<TextLine>(lines.size)
+        for (l in lines) {
+            if (l in used) continue
+            if (!l.text.startsWith(RTL_MARK)) { out += l; continue }
+            val row = foreign.filter { o -> o !in used && abs(o.baseline - l.baseline) < l.fontSize * 0.4f }.sortedByDescending { it.bounds.right }
+            used += row
+            if (row.size == 1) { out += l; continue }
+            val sb = StringBuilder().append(RTL_MARK)
+            val styles = ArrayList<InlineStyle>()
+            val pictures = ArrayList<Rect>()
+            for (piece in row) {
+                // each piece: its markers in reading order, numbered anew
+                for (st in piece.styles.filter { it.picture }.sortedBy { it.start }) {
+                    if (sb.length > 1) sb.append(' ')
+                    styles += InlineStyle(sb.length, sb.length + 1, InlineStyle.pictureFlags(pictures.size))
+                    pictures += piece.pictures[InlineStyle.pictureId(st.flags)]
+                    sb.append(com.raptibooks.core.model.InlinePicture.MARKER)
+                }
+            }
+            val bounds = Rect.bounding(row.map { it.bounds })!!
+            val first = row.first()
+            out += TextLine(sb.toString(), styles, bounds, first.baseline, first.fontSize, first.boldRatio, first.italicRatio, first.fontName, emptyList(), pictures)
+        }
+        return out
+    }
+
+    private fun pictureLine(l: TextLine, lefts: FloatArray, rights: FloatArray, force: Boolean = false): TextLine? {
+        val tokens = UnreadableText.words(l.text)
+        if (tokens.isEmpty()) return null
+        val bad = tokens.map { (_, t) -> UnreadableText.garbled(t) }
+        if (!force && bad.none { it } && tokens.count { UnreadableText.junk(it.second) } < 2) return null
+        val wordy = tokens.indices.filter { tokens[it].second.any { c -> c.isLetter() || c == TextCleaner.PLACEHOLDER } }
+        val garbled = bad.count { it }
+        val english = tokens.count { UnreadableText.englishLike(it.second) }
+        // a line of the other script: nothing like an English word in it, or mostly garbage
+        val foreign = force || (english == 0 && (garbled >= 1 || tokens.count { UnreadableText.junk(it.second) } >= 2)) ||
+            (garbled >= 3 && english * 3 < garbled && garbled >= wordy.size * 0.4f)
+        val size = l.fontSize
+        fun rect(range: IntRange): Rect {
+            var left = Float.MAX_VALUE
+            var right = -Float.MAX_VALUE
+            for (i in range) if (l.text[i] != ' ') { left = min(left, lefts[i]); right = max(right, rights[i]) }
+            return Rect(left, l.baseline - size * 1.05f, right, l.baseline + size * 0.5f)
+        }
+        // runs of words shown as printed, as character ranges
+        val runs = mutableListOf<IntRange>()
+        if (foreign) {
+            // every word (pieces set much closer than words are one word)
+            var cur: IntRange? = null
+            for ((range, _) in tokens) {
+                val c = cur
+                cur = if (c != null && lefts[range.first] - rights[c.last] < size * 0.15f) c.first..range.last else {
+                    if (c != null) runs += c
+                    range
+                }
+            }
+            cur?.let { runs += it }
+        } else {
+            var k = 0
+            while (k < tokens.size) {
+                if (!bad[k]) { k++; continue }
+                var j = k
+                // short pieces between two garbled words belong to them ("y\:iSll 11\")
+                while (j + 1 < tokens.size && (bad[j + 1] || (UnreadableText.fragment(tokens[j + 1].second) && j + 2 < tokens.size && bad[j + 2]))) j++
+                runs += tokens[k].first.first..tokens[j].first.last
+                k = j + 1
+            }
+        }
+        if (runs.isEmpty()) return null
+        val pictures = runs.map { rect(it) }
+        // the line's text with one marker per picture
+        val sb = StringBuilder()
+        val newIndex = IntArray(l.text.length + 1) { -1 }
+        val styles = ArrayList<InlineStyle>()
+        if (foreign) {
+            // reading order of a right-to-left line: its rightmost word first
+            sb.append(RTL_MARK)
+            runs.indices.reversed().forEachIndexed { n, r ->
+                if (n > 0) sb.append(' ')
+                styles += InlineStyle(sb.length, sb.length + 1, InlineStyle.pictureFlags(r))
+                sb.append(com.raptibooks.core.model.InlinePicture.MARKER)
+            }
+        } else {
+            var i = 0
+            var r = 0
+            while (i < l.text.length) {
+                if (r < runs.size && i == runs[r].first) {
+                    // (a word stuck to the picture is a word of its own)
+                    if (sb.isNotEmpty() && sb.last().isLetterOrDigit()) sb.append(' ')
+                    styles += InlineStyle(sb.length, sb.length + 1, InlineStyle.pictureFlags(r))
+                    sb.append(com.raptibooks.core.model.InlinePicture.MARKER)
+                    i = runs[r].last + 1
+                    if (i < l.text.length && l.text[i].isLetterOrDigit()) sb.append(' ')
+                    r++
+                    continue
+                }
+                newIndex[i] = sb.length
+                sb.append(l.text[i])
+                i++
+            }
+            for (st in l.styles) {
+                val a = (st.start until st.end).firstNotNullOfOrNull { newIndex.getOrNull(it)?.takeIf { x -> x >= 0 } } ?: continue
+                val b = (st.start until st.end).reversed().firstNotNullOfOrNull { newIndex.getOrNull(it)?.takeIf { x -> x >= 0 } } ?: continue
+                if (b >= a) styles += InlineStyle(a, b + 1, st.flags)
+            }
+        }
+        return TextLine(sb.toString(), styles.sortedBy { it.start }, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, emptyList(), pictures)
+    }
+
+    /**
+     * A line holding right-to-left text (Arabic, Hebrew), built in visual order, put into reading
+     * order: its glyphs (each with its combining marks) are reordered, style ranges and chunks
+     * follow them, and Arabic presentation forms become plain letters.
+     */
+    private fun toReadingOrder(
+        text: CharSequence,
+        glyphStarts: List<Int>,
+        ranges: List<IntArray>,
+        chunks: List<Chunk>,
+    ): Triple<String, List<IntArray>, List<Chunk>> {
+        // units: each glyph's text, and each space between them
+        val cuts = sortedSetOf(0, text.length)
+        glyphStarts.forEach { if (it < text.length) cuts += it }
+        for (i in text.indices) if (text[i] == ' ') { cuts += i; cuts += i + 1 }
+        val bounds = cuts.toList().zipWithNext().filter { (a, b) -> b > a }.toMutableList()
+        // a mark drawn as a glyph of its own belongs to the letter before it
+        var k = 1
+        while (k < bounds.size) {
+            val (a, b) = bounds[k]
+            if ((a until b).all { RtlText.isMark(text[it]) } && text[bounds[k - 1].first] != ' ') {
+                bounds[k - 1] = bounds[k - 1].first to b
+                bounds.removeAt(k)
+            } else {
+                k++
+            }
+        }
+        val units = bounds.map { (a, b) -> text.substring(a, b) }
+        val order = RtlText.visualToLogical(units, RtlText.rtlBase(text))
+        val sb = StringBuilder(text.length)
+        val newIndex = IntArray(text.length + 1)
+        for (u in order) {
+            val (a, b) = bounds[u]
+            val piece = RtlText.normalizeForms(units[u])
+            val start = sb.length
+            sb.append(piece)
+            for (i in a until b) newIndex[i] = start + ((i - a) * piece.length / (b - a)).coerceAtMost(piece.length - 1)
+        }
+        newIndex[text.length] = sb.length
+        // styles: per character, then back into ranges
+        val flags = IntArray(sb.length)
+        for (r in ranges) for (i in r[0] until minOf(r[1], text.length)) {
+            val j = newIndex[i]
+            if (j < flags.size) flags[j] = flags[j] or r[2]
+        }
+        val newRanges = ArrayList<IntArray>()
+        var i = 0
+        while (i < flags.size) {
+            if (flags[i] == 0) { i++; continue }
+            var j = i
+            while (j + 1 < flags.size && flags[j + 1] == flags[i]) j++
+            newRanges += intArrayOf(i, j + 1, flags[i])
+            i = j + 1
+        }
+        // chunks keep their place on the page; their text is wherever their characters went
+        val newChunks = chunks.map { c ->
+            val idx = (c.textStart until c.textEnd).map { newIndex[it] }
+            if (idx.isEmpty()) c else Chunk(c.left, c.right, idx.min(), idx.max() + 1)
+        }
+        val contiguous = newChunks.sortedBy { it.textStart }.zipWithNext().all { (x, y) -> x.textEnd <= y.textStart }
+        return Triple(sb.toString(), newRanges, if (contiguous) newChunks else emptyList())
     }
 
     private fun mergeRanges(ranges: List<IntArray>, text: CharSequence): List<InlineStyle> {

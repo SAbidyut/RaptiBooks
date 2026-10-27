@@ -5,6 +5,7 @@ import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ImageKind
+import com.raptibooks.core.model.InlinePicture
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
 import com.raptibooks.core.model.ParagraphBlock
@@ -14,6 +15,7 @@ import com.raptibooks.core.model.TocEntry
 import com.raptibooks.core.structure.analysis.Patterns
 import com.raptibooks.core.structure.analysis.StructuredElement
 import com.raptibooks.core.structure.layout.FigureKind
+import com.raptibooks.core.structure.layout.PictureRegion
 import com.raptibooks.core.structure.text.BanglaText
 import kotlin.math.abs
 
@@ -27,7 +29,11 @@ import kotlin.math.abs
  * * attaching captions to figures and tables;
  * * numbering blocks and remembering headings and the first block of every page.
  */
-class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
+class ReflowEngine(
+    /** The rendered word pictures of the book, by number (see [InlinePicture]). */
+    private val pictureOf: (Int) -> PictureRegion? = { null },
+    private val sink: (ContentBlock) -> Unit,
+) {
 
     private var nextIndex = 0
     private var held: StructuredElement.Paragraph? = null
@@ -234,7 +240,10 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                 }
             }
             is StructuredElement.Paragraph -> emitParagraph(el)
-            is StructuredElement.ListItem -> emit { ListItemBlock(it, el.pageIndex, el.marker, el.text, el.styles, el.level) }
+            is StructuredElement.ListItem -> {
+                val (styles, pictures) = withPictures(el.text, el.styles)
+                emit { ListItemBlock(it, el.pageIndex, el.marker, el.text, styles, el.level, pictures) }
+            }
             is StructuredElement.Figure -> {
                 val region = el.region
                 var caption = region.caption
@@ -299,7 +308,14 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
     private fun emitParagraph(p: StructuredElement.Paragraph) {
         val text = p.text.trim()
         if (text.isEmpty()) return
-        val idx = emit { ParagraphBlock(it, p.pageIndex, text, p.styles, p.kind) }
+        val lead = p.text.length - p.text.trimStart().length
+        val shifted = if (lead == 0) p.styles else p.styles.mapNotNull {
+            val a = (it.start - lead).coerceAtLeast(0)
+            val b = (it.end - lead).coerceAtMost(text.length)
+            if (b > a) InlineStyle(a, b, it.flags) else null
+        }
+        val (styles, pictures) = withPictures(text, shifted)
+        val idx = emit { ParagraphBlock(it, p.pageIndex, text, styles, p.kind, pictures) }
         labelBox?.let { b ->
             // The answer ends a practice problem; a very long stretch is not one example.
             if (ANSWER.containsMatchIn(text) || idx - b.start > 150) closeLabelBox(idx)
@@ -376,6 +392,20 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         val first = b.text.firstOrNull() ?: return false
         return first.isLowerCase() || BanglaText.isBengali(first) || a.text.endsWith('-') ||
             a.text.endsWith(',') || first.isDigit()
+    }
+
+    /** Picture styles become the block's pictures (a picture not rendered stays a marker). */
+    private fun withPictures(text: String, styles: List<InlineStyle>): Pair<List<InlineStyle>, List<InlinePicture>> {
+        if (styles.none { it.picture }) return styles to emptyList()
+        val pictures = ArrayList<InlinePicture>()
+        for (st in styles) {
+            if (!st.picture || st.start !in text.indices || text[st.start] != InlinePicture.MARKER) continue
+            val r = pictureOf(InlineStyle.pictureId(st.flags)) ?: continue
+            val path = r.imagePath ?: continue
+            if (r.imageWidth <= 0 || r.imageHeight <= 0 || r.fontSize <= 0f) continue
+            pictures += InlinePicture(st.start, path, r.imageWidth, r.imageHeight, r.bounds.height / r.fontSize)
+        }
+        return styles.filter { !it.picture } to pictures
     }
 
     private fun merge(a: StructuredElement.Paragraph, b: StructuredElement.Paragraph): StructuredElement.Paragraph {

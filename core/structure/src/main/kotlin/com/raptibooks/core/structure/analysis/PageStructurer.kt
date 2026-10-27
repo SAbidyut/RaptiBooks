@@ -1,5 +1,6 @@
 package com.raptibooks.core.structure.analysis
 
+import com.raptibooks.core.model.InlinePicture
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.structure.geometry.Rect
@@ -10,6 +11,7 @@ import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.text.BanglaText
+import com.raptibooks.core.structure.text.RtlText
 import com.raptibooks.core.structure.text.TextCleaner
 import java.text.Normalizer
 import kotlin.math.abs
@@ -841,15 +843,23 @@ class PageStructurer(private val profile: DocumentProfile) {
             sb.append(part)
             if (flags != 0 && sb.length > start) styles += InlineStyle(start, sb.length, flags)
         }
-        val collapsed = TextCleaner.collapseSpaces(sb.toString())
+        // Runs of spaces become one; the styles follow the characters.
+        val raw = sb.toString()
+        val at = IntArray(raw.length + 1)
+        val cb = StringBuilder(raw.length)
+        for (i in raw.indices) {
+            at[i] = cb.length
+            if (raw[i] != ' ' || cb.isEmpty() || cb.last() != ' ') cb.append(raw[i])
+        }
+        at[raw.length] = cb.length
+        val collapsed = cb.toString()
         if (collapsed.isBlank()) return null
-        // collapseSpaces may shorten the text; clamp styles defensively.
         val trimmedStart = collapsed.length - collapsed.trimStart().length
         // "¢" and the letter after it may sit in different style runs.
         val finalText = TextCleaner.finish(collapsed.trim())
         val finalStyles = styles.mapNotNull {
-            val s = (it.start - trimmedStart).coerceIn(0, finalText.length)
-            val e = (it.end - trimmedStart).coerceIn(0, finalText.length)
+            val s = (at[it.start.coerceIn(0, raw.length)] - trimmedStart).coerceIn(0, finalText.length)
+            val e = (at[it.end.coerceIn(0, raw.length)] - trimmedStart).coerceIn(0, finalText.length)
             if (e > s) InlineStyle(s, e, it.flags) else null
         }
         // "c h a p t e r": a letter-spaced word.
@@ -858,7 +868,7 @@ class PageStructurer(private val profile: DocumentProfile) {
             val flags = finalStyles.firstOrNull()?.flags ?: 0
             return NLine(line, word, if (flags != 0) listOf(InlineStyle(0, word.length, flags)) else emptyList())
         }
-        return NLine(line, finalText, if (collapsed.length == sb.length) finalStyles else emptyList())
+        return NLine(line, finalText, if (finalText.length == collapsed.trim().length) finalStyles else finalStyles.filter { it.picture })
     }
 
     // ---------------------------------------------------------------- headings
@@ -868,6 +878,8 @@ class PageStructurer(private val profile: DocumentProfile) {
         val words = text.split(' ').count { it.isNotBlank() }
         if (text.length < 2 || words > 20 || text.length > 160) return null
         if (Patterns.pageNumber.matches(text)) return null
+        // (a title with words shown as printed stays a paragraph, which can hold them)
+        if (InlinePicture.MARKER in text) return null
         if (text.count { it.isLetter() || BanglaText.isMatra(it) } < 2) return null
         val ratio = line.size / profile.bodySize
         val bold = line.src.isBold
@@ -1001,7 +1013,9 @@ class PageStructurer(private val profile: DocumentProfile) {
         if (cur.styles.any { it.start == 0 && it.bold && it.end <= 16 && cur.text.substring(0, it.end.coerceAtMost(cur.text.length)).trimEnd().endsWith(':') }) return false
         val sizeRatio = cur.size / prev.size
         if (sizeRatio < 0.85f || sizeRatio > 1.18f) return false
-        val expected = max(leading, prev.size * 1.05f)
+        // (lines of words shown as printed from a right-to-left script are set wide apart)
+        val pictured = prev.text.startsWith('\u200F') && cur.text.startsWith('\u200F')
+        val expected = if (pictured) max(leading, prev.size * 1.9f) else max(leading, prev.size * 1.05f)
         if (dy > expected * 1.45f + 1f) return false
         if (prev.bounds.horizontalOverlap(cur.bounds) <= 0f && cur.bounds.left > prev.bounds.right) return false
         val em = prev.size
@@ -1010,6 +1024,15 @@ class PageStructurer(private val profile: DocumentProfile) {
         if (b.marker != null) {
             // List item continuation lines are indented past the marker.
             return cur.bounds.left > b.markerLeft + em * 0.4f
+        }
+        if (RtlText.rtlBase(prev.text) && RtlText.rtlBase(cur.text)) {
+            // Right-to-left text, mirrored: a paragraph's first line is indented from the right,
+            // and its last line ends short of the left edge.
+            val curIndentR = colRight - cur.bounds.right
+            val prevIndentR = colRight - prev.bounds.right
+            if (curIndentR > em * 0.9f && prevIndentR < em * 0.5f && !isCentered(cur, column)) return false
+            if (prev.bounds.left > colLeft + em * 2.5f && Patterns.endsSentence(prev.text)) return false
+            return true
         }
         val curIndent = cur.bounds.left - colLeft
         val prevIndent = prev.bounds.left - colLeft
@@ -1024,7 +1047,7 @@ class PageStructurer(private val profile: DocumentProfile) {
     /** Short lines that don't end a sentence keep their line break (poetry, addresses). */
     private fun isLineBreak(b: Builder, cur: NLine, column: Rect, textRight: Float = column.right): Boolean {
         val prev = b.last
-        val prevShort = prev.bounds.right < textRight - prev.size * 2.5f
+        val prevShort = if (RtlText.rtlBase(prev.text)) prev.bounds.left > column.left + prev.size * 2.5f else prev.bounds.right < textRight - prev.size * 2.5f
         val curShort = cur.bounds.width < (textRight - column.left) * 0.7f
         return b.marker == null && prevShort && (curShort || isCentered(prev, column)) && !prev.text.endsWith('-')
     }

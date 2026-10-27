@@ -1,11 +1,13 @@
 package com.raptibooks.core.structure.analysis
 
+import com.raptibooks.core.model.InlinePicture
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.layout.Chunk
 import com.raptibooks.core.structure.layout.FigureKind
 import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.PageLayout
+import com.raptibooks.core.structure.layout.PictureRegion
 import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.PathShape
@@ -13,6 +15,8 @@ import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.raw.VectorPath
 import com.raptibooks.core.structure.text.BijoyConverter
 import com.raptibooks.core.structure.text.TextQuality
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * First pass, one page at a time: raw fragments/graphics -> lines, tables and figures.
@@ -43,7 +47,9 @@ class PageAnalyzer(
             val cy = (f.top + f.bottom) / 2f
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
         }
-        val (builtLines, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining, splitColumns = true), page)
+        val (bulleted, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining, splitColumns = true), page)
+        // Words whose text is garbage (Arabic read by a Latin-only OCR) are shown as printed.
+        val (builtLines, pictures) = if (page.fromOcr) bulleted to emptyList() else numberPictures(lineBuilder.pictureWords(bulleted), page.index)
         // A table of symbols and formulas printed on a shaded panel is shown as printed.
         val panels = if (page.fromOcr) emptyList() else formulaPanels(page, builtLines)
         val allLines = if (panels.isEmpty()) builtLines else builtLines.filter { l -> panels.none { l in it.second } }
@@ -123,10 +129,45 @@ class PageAnalyzer(
         val body = pieces.filter { it !in whole.absorbed }
         val chars = allLines.sumOf { TextQuality.letterCount(it.text) } +
             ruled.sumOf { t -> t.rows.sumOf { r -> r.sumOf { TextQuality.letterCount(it) } } }
+        // A table with words shown as printed in its cells is shown as printed, whole.
+        val pictureTables = if (pictures.isEmpty()) emptyList() else whole.tables.filter { t -> t.rows.any { r -> r.any { InlinePicture.MARKER in it } } }
+        val outFigures = whole.figures + pictureTables.map { FigureRegion(it.bounds, FigureKind.VECTOR, it.caption) }
+        val outTables = whole.tables - pictureTables.toSet()
         return PageLayout(
-            page.index, page.width, page.height, body, whole.figures, whole.tables, page.fromOcr, chars,
+            page.index, page.width, page.height, body, outFigures, outTables, page.fromOcr, chars,
             if (page.fromOcr) emptyList() else BoxDetector().detect(page, allLines, whole.tables),
+            // (only those still in the text: not inside a figure or a table)
+            if (pictures.isEmpty()) pictures else body.flatMap { l -> l.styles.filter { it.picture }.map { InlineStyle.pictureId(it.flags) } }.toSet()
+                .let { used -> pictures.filter { it.id in used } },
         )
+    }
+
+    /**
+     * Gives the words shown as printed their numbers in the book (page × 1024 + k), carried by
+     * the lines' picture styles, and keeps each picture clear of the lines above and below.
+     */
+    private fun numberPictures(lines: List<TextLine>, pageIndex: Int): Pair<List<TextLine>, List<PictureRegion>> {
+        if (lines.none { it.pictures.isNotEmpty() }) return lines to emptyList()
+        val regions = ArrayList<PictureRegion>()
+        val out = lines.map { l ->
+            if (l.pictures.isEmpty()) return@map l
+            val ids = IntArray(l.pictures.size)
+            for ((k, r) in l.pictures.withIndex()) {
+                var top = r.top
+                var bottom = r.bottom
+                for (o in lines) {
+                    if (o === l || o.bounds.horizontalOverlap(r) <= 0f) continue
+                    if (o.baseline < l.baseline - l.fontSize * 0.5f) top = max(top, min(o.baseline + o.fontSize * 0.25f, l.baseline - l.fontSize * 0.7f))
+                    if (o.baseline > l.baseline + l.fontSize * 0.5f) bottom = min(bottom, max(o.baseline - o.fontSize * 0.75f, l.baseline + l.fontSize * 0.2f))
+                }
+                val id = pageIndex * 1024 + regions.size.coerceAtMost(1023)
+                ids[k] = id
+                regions += PictureRegion(id, Rect(r.left - 0.5f, top, r.right + 0.5f, bottom), l.fontSize)
+            }
+            val styles = l.styles.map { st -> if (st.picture) InlineStyle(st.start, st.end, InlineStyle.pictureFlags(ids[InlineStyle.pictureId(st.flags)])) else st }
+            TextLine(l.text, styles, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, l.chunks)
+        }
+        return out to regions
     }
 
     companion object {

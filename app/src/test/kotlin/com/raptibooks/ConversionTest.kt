@@ -69,6 +69,19 @@ class ConversionTest {
     }
 
     @Test
+    fun convertsArabicText() {
+        val (id, content) = convert("arabic_text.pdf")
+        val blocks = content.blocks(id, 0, 10_000)
+        val dump = blocks.joinToString("\n") { it.javaClass.simpleName + ": " + it.plainText }
+        // Arabic words inside English sentences, and an Arabic passage, in reading order.
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("For example, هذا الكتاب means \"this book\"") })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.startsWith("عشرة أعوام من الفراق، وما زالت تحن اليه.") && it.text.contains("ازداد تأججا عام 1990 وفي العدد 25.") })
+        assertTrue(dump, blocks.any { it is ParagraphBlock && it.text.contains("وتظل تحن الى حبيبها الأول.") })
+        assertTrue(dump, blocks.any { it.plainText.contains("The verb كَتَبَ (to write)") })
+        assertTrue(content.search(id, "الكتاب").isNotEmpty())
+    }
+
+    @Test
     fun convertsBanglaBook() {
         val (id, content) = convert("bangla_book.pdf")
         val paragraphs = content.blocks(id, 0, 10_000).filterIsInstance<ParagraphBlock>().map { it.text }

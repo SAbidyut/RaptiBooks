@@ -12,7 +12,7 @@ from pypdf.generic import NameObject
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE.parents[1] / "app/src/test/resources/pdf"
-CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
+CHROME = (sorted(Path("/opt/pw-browsers").glob("chromium-*/chrome-linux*/chrome")) or [Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")])[-1]
 
 def print_pdf(html: Path, pdf: Path):
     subprocess.run([CHROME, "--headless", "--no-sandbox", "--disable-gpu", "--no-pdf-header-footer",
@@ -38,6 +38,8 @@ def strip_unicode(pdf: Path, font_marker: str):
     with open(pdf, "wb") as fh: w.write(fh)
 
 print_pdf(HERE / "math_textbook.html", OUT / "math_textbook.pdf")
+# English with Arabic words and an Arabic passage (a real right-to-left text layer)
+print_pdf(HERE / "arabic_text.html", OUT / "arabic_text.pdf")
 strip_unicode(OUT / "math_textbook.pdf", "LiberationSans")
 print_pdf(HERE / "bangla_math.html", OUT / "bangla_math.pdf")
 print("ok")

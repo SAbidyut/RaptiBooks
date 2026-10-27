@@ -25,6 +25,7 @@ import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.layout.FigureKind
 import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.PageLayout
+import com.raptibooks.core.structure.layout.PictureRegion
 import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.text.GrayImage
 import com.raptibooks.core.structure.text.SymbolRecognizer
@@ -139,7 +140,9 @@ class ConversionPipeline(
                 val profile = stats.profile()
                 val structurer = PageStructurer(profile)
                 val batch = ArrayList<ContentBlock>(256)
-                val engine = ReflowEngine { block ->
+                // the word pictures of every page read so far (a paragraph may run on)
+                val pictures = HashMap<Int, PictureRegion>()
+                val engine = ReflowEngine({ pictures[it] }) { block ->
                     batch += block
                     if (batch.size >= 200) {
                         content.insertBlocks(bookId, batch)
@@ -149,6 +152,7 @@ class ConversionPipeline(
                 for (i in 0 until pageCount) {
                     currentCoroutineContext().ensureActive()
                     val layout = runCatching { PageLayout.read(pageFile(cacheDir, i)) }.getOrNull() ?: continue
+                    layout.pictures.forEach { pictures[it.id] = it }
                     engine.addPage(structurer.structure(layout))
                     if (i % 25 == 0) onProgress(Progress(0.86f + 0.12f * i / pageCount, context.getString(com.raptibooks.core.data.R.string.progress_layout)))
                 }
@@ -260,7 +264,56 @@ class ConversionPipeline(
         } finally {
             pageBitmap?.recycle()
         }
+        renderPictures(index, layout, renderer, figuresDir, lowMemory)
         return layout
+    }
+
+    /**
+     * Words shown as printed (unreadable script in the text layer): cut from the page rendered
+     * once, as ink, the height of their line so that they sit level in the reflowed text.
+     */
+    private fun renderPictures(index: Int, layout: PageLayout, renderer: PageRenderer?, dir: File, lowMemory: Boolean) {
+        if (layout.pictures.isEmpty() || renderer == null) return
+        val scale = if (lowMemory) 2.5f else 3.5f
+        val page = try {
+            renderer.renderRegion(index, Rect(0f, 0f, layout.width, layout.height), scale)
+        } catch (e: OutOfMemoryError) {
+            System.gc()
+            null
+        } catch (e: Exception) {
+            null
+        } catch (e: LinkageError) {
+            null
+        } ?: return
+        try {
+            for ((k, p) in layout.pictures.withIndex()) {
+                var bmp = image(index, p.bounds, renderer, page, layout.width, scale) ?: continue
+                val pxPerPt = bmp.width / p.bounds.width
+                // (only the empty space at the sides goes: every word keeps the height of its line)
+                val ink = inkBounds(bmp, scale)
+                if (ink == null) {
+                    bmp.recycle()
+                    continue
+                }
+                if (ink.left > 0 || ink.right < bmp.width) {
+                    val b = p.bounds
+                    val cropped = Bitmap.createBitmap(bmp, ink.left, 0, ink.width(), bmp.height)
+                    if (cropped !== bmp) bmp.recycle()
+                    bmp = cropped
+                    p.bounds = Rect(b.left + ink.left / pxPerPt, b.top, b.left + ink.right / pxPerPt, b.bottom)
+                }
+                bmp = inkMask(bmp)
+                val file = File(dir, "p$index-w$k.png")
+                if (save(bmp, file, photo = false)) {
+                    p.imagePath = file.absolutePath
+                    p.imageWidth = bmp.width
+                    p.imageHeight = bmp.height
+                }
+                bmp.recycle()
+            }
+        } finally {
+            page.recycle()
+        }
     }
 
     private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File, lowMemory: Boolean) {
@@ -512,7 +565,7 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 6
+        const val LAYOUT_VERSION = 7
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60

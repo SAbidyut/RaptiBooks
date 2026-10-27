@@ -93,7 +93,7 @@ object Patterns {
         RegexOption.IGNORE_CASE,
     )
 
-    private val terminal = Regex("[.!?।॥…:;]['\"”’)\\]]*\\s*$")
+    private val terminal = Regex("[.!?।॥…:;؟؛۔]['\"”’)\\]]*\\s*$")
 
     fun endsSentence(text: String): Boolean = terminal.containsMatchIn(text)
 

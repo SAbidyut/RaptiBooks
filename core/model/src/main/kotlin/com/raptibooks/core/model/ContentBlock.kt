@@ -42,6 +42,8 @@ data class ParagraphBlock(
     val text: String,
     val styles: List<InlineStyle> = emptyList(),
     val kind: ParagraphKind = ParagraphKind.BODY,
+    /** Words shown as printed, in the text at their [InlinePicture.start]. */
+    val pictures: List<InlinePicture> = emptyList(),
 ) : ContentBlock {
     override val plainText: String get() = text
 }
@@ -54,8 +56,25 @@ data class ListItemBlock(
     val text: String,
     val styles: List<InlineStyle> = emptyList(),
     val level: Int = 0,
+    val pictures: List<InlinePicture> = emptyList(),
 ) : ContentBlock {
     override val plainText: String get() = "$marker $text"
+}
+
+/**
+ * A word (or a few) whose text could not be read from the PDF — script the text layer garbles,
+ * such as Arabic in a scan converted with Latin-only OCR — shown as printed, inside the text.
+ * It stands at character [start] of the block's text (an [InlinePicture.MARKER]); [path] is an
+ * ink image (black with alpha, drawn in the text colour), [height] is in ems of the text.
+ */
+data class InlinePicture(val start: Int, val path: String, val pixelWidth: Int, val pixelHeight: Int, val height: Float) {
+    /** Width in ems of the text. */
+    val width: Float get() = if (pixelHeight <= 0) height else height * pixelWidth / pixelHeight
+
+    companion object {
+        /** Placeholder character standing for a picture in the text. */
+        const val MARKER = '\u2B1A'
+    }
 }
 
 enum class ImageKind {
@@ -119,12 +138,23 @@ data class InlineStyle(val start: Int, val end: Int, val flags: Int) {
     val italic: Boolean get() = flags and ITALIC != 0
     val superscript: Boolean get() = flags and SUPERSCRIPT != 0
     val subscript: Boolean get() = flags and SUBSCRIPT != 0
+    val picture: Boolean get() = flags and PICTURE != 0
 
     companion object {
         const val BOLD = 1
         const val ITALIC = 2
         const val SUPERSCRIPT = 4
         const val SUBSCRIPT = 8
+
+        /**
+         * A word shown as printed (see [InlinePicture]); bits from [PICTURE_SHIFT] up carry its
+         * number, while the book is being converted.
+         */
+        const val PICTURE = 16
+        const val PICTURE_SHIFT = 5
+
+        fun pictureFlags(id: Int): Int = PICTURE or (id shl PICTURE_SHIFT)
+        fun pictureId(flags: Int): Int = flags ushr PICTURE_SHIFT
 
         /** Compact "start:end:flags;..." form used for storage. */
         fun encode(styles: List<InlineStyle>): String =

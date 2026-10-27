@@ -89,6 +89,7 @@ fun convert(pdf: File) {
         }
         if (System.getenv("HARNESS_REGIONS") != null) {
             layout.figures.forEach { println("     FIGURE ${it.kind} ${it.bounds} ts=${it.textSize} caption=${it.caption}") }
+            layout.pictures.forEach { println("     PICTURE ${it.id} ${it.bounds}") }
             layout.tables.forEach { println("     TABLE ruled=${it.ruled} ${it.bounds}") }
         }
         if (System.getenv("HARNESS_LINES") != null) layout.lines.forEach { println("     ${it.bounds.left.toInt()},${it.bounds.top.toInt()} s=${it.fontSize} b=${it.boldRatio} | ${it.text}") }

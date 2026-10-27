@@ -93,6 +93,16 @@ screen. Bangla and English are both first-class, and everything runs offline.
     other column has labels on the same baseline;
   - **Bangla**: visual→logical glyph order repair (ি ে ৈ, reph), ActualText clusters,
     Bijoy/SutonnyMJ (ANSI) → Unicode conversion;
+  - **Arabic and other right-to-left scripts** (Persian, Urdu, Hebrew): lines drawn in visual
+    order are put into reading order (numbers and Latin words keep theirs, marks stay on their
+    letters, presentation forms become plain letters); Arabic paragraphs read and align from
+    the right, also inside English text;
+  - **words a scan's OCR could not read** (Arabic in an English book run through a Latin-only
+    OCR such as Acrobat ClearScan, where the text layer holds junk like `y\:iSll` or glyphs
+    without Unicode): each garbled word is shown as printed, cut from the page as ink and set
+    in the reflowed line like a word (in the theme's text colour); a line of such words is
+    reflowed word by word from the right; the English text around them gets its own spaces
+    back (only the space glyphs part words on such pages);
   - **OCR** for scanned pages and broken text layers: Tesseract 5 with bundled `ben` + `eng`
     models, fully offline; text-as-outlines pages are detected too;
   - table of contents from the PDF outline, else from the printed contents page, else from
@@ -218,6 +228,8 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
   The fast `tessdata` models are bundled to keep the app small.
 - Bijoy (SutonnyMJ) conversion covers the common character set; rare conjuncts may be missing
   ("Convert again with OCR" is the fallback).
+- Arabic words that a scan's OCR misread as plausible Latin letters ("ui", "ru") cannot be told
+  from text and stay as they were read; words shown as printed are not searchable.
 - Password-protected PDFs (user password) are not supported yet; owner-password PDFs work.
 - The bundled Tesseract build (JavaCPP 1.5.9) is the last one with 32-bit ARM support; its
   native libraries are not 16 KB page aligned, so on 16 KB-page devices OCR may be unavailable
