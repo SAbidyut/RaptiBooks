@@ -41,7 +41,7 @@ class PageAnalyzer(
             val cy = (f.top + f.bottom) / 2f
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
         }
-        val (allLines, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining), page)
+        val (allLines, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining, splitColumns = true), page)
         val bodySize = bodySizeHint ?: typicalSize(allLines, page.width)
         // Display equations first: their stacked rows would otherwise look like table rows.
         val equations = if (page.fromOcr) null else equationDetector.detect(page, allLines, bodySize, ruled.map { it.bounds })
@@ -51,18 +51,52 @@ class PageAnalyzer(
 
         // Table captions ("Table 2: ...") directly above or below a table.
         val captionLines = HashSet<TextLine>()
-        val tables = (ruled + aligned).map { t ->
+        val captionOf = HashMap<TableRegion, List<TextLine>>()
+        var tables = (ruled + aligned).map { t ->
             val cap = lines.firstOrNull { l ->
                 l !in captionLines && Patterns.caption.containsMatchIn(l.text) &&
                     l.bounds.horizontalOverlap(t.bounds) > 0f &&
                     (t.bounds.top - l.bounds.bottom in -2f..l.fontSize * 2.5f ||
                         l.bounds.top - t.bounds.bottom in -2f..l.fontSize * 2.5f)
             }
+            // "TABLE 1.1" on its own line with the description under it, right above the table.
+            val label = if (cap != null) null else lines.filter { l ->
+                l !in captionLines && Patterns.tableCaption.containsMatchIn(l.text) && l.wordCount <= 3 &&
+                    l.bounds.horizontalOverlap(t.bounds) > 0f && t.bounds.top - l.bounds.bottom in -2f..l.fontSize * 6f
+            }.maxByOrNull { it.bounds.bottom }
+            val description = label?.let { lb ->
+                lines.filter { l ->
+                    l !== lb && l !in captionLines && l.bounds.top >= lb.bounds.bottom - 2f && l.bounds.bottom <= t.bounds.top + 2f &&
+                        l.bounds.horizontalOverlap(lb.bounds.union(t.bounds)) > 0f
+                }.sortedBy { it.bounds.top }
+            }?.takeIf { it.size <= 3 }
             if (cap != null) {
                 captionLines += cap
-                TableRegion(t.bounds, t.rows, t.headerRows, t.ruled, cap.text)
+                TableRegion(t.bounds, t.rows, t.headerRows, t.ruled, cap.text).also { captionOf[it] = listOf(cap) }
+            } else if (label != null && description != null) {
+                captionLines += label
+                captionLines += description
+                TableRegion(t.bounds, t.rows, t.headerRows, t.ruled, (listOf(label) + description).joinToString(" ") { it.text })
             } else {
                 t
+            }
+        }
+        // A "table" captioned as a figure is a drawing whose lines form a grid (a circuit's
+        // wires): its text and caption go back to the page for the figure detector.
+        val drawings = tables.filter { t ->
+            val c = t.caption
+            c != null && Patterns.caption.containsMatchIn(c) && !Patterns.tableCaption.containsMatchIn(c)
+        }
+        if (drawings.isNotEmpty()) {
+            tables = tables - drawings.toSet()
+            for (t in drawings) {
+                captionOf[t]?.let { captionLines -= it.toSet() }
+                val area = t.bounds.outset(1f)
+                lines = lines + if (t.ruled) {
+                    lineBuilder.build(page.fragments.filter { f -> area.contains((f.left + f.right) / 2f, (f.top + f.bottom) / 2f) })
+                } else {
+                    consumed.filter { it.bounds.coveredBy(area) >= 0.5f }
+                }
             }
         }
         lines = lines.filter { it !in captionLines }

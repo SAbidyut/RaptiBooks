@@ -37,8 +37,18 @@ fun convert(pdf: File) {
     val layouts = (0 until ex.pageCount).map { i ->
         val e = ex.extractPage(i)
         val reason = OcrDecision.evaluate(e.page, e.glyphsDrawn, e.glyphsMapped)
+        // HARNESS_FRAGS=page index: print that page's raw fragments.
+        if (System.getenv("HARNESS_FRAGS")?.split(",")?.contains("$i") == true) {
+            e.page.fragments.forEach { println("     frag '${it.text}' x=${it.left}..${it.right} base=${it.baseline} size=${it.fontSize} sw=${it.spaceWidth} font=${it.fontName}") }
+        }
         // Like the app: symbols without Unicode mapping are identified from their rendering.
         val page = SymbolRecognizer.recognize(e.page) { r, scale -> renderGray(pdf, i, r, scale) }
+        if (System.getenv("HARNESS_SYMBOLS") != null) {
+            e.page.fragments.indices.filter { e.page.fragments[it].text == "\uFFFC" }.forEach {
+                val f = page.fragments[it]
+                println("     symbol @${f.left},${f.baseline} size=${f.fontSize} ${f.fontName} -> '${f.text}'")
+            }
+        }
         val layout = analyzer.analyze(page)
         layout.figures.forEachIndexed { k, f -> f.imagePath = "fig-p$i-$k.png"; f.imageWidth = f.bounds.width.toInt(); f.imageHeight = f.bounds.height.toInt() }
         // HARNESS_IMAGES=dir: save the figure and equation crops as the app would cut them.
@@ -57,7 +67,7 @@ fun convert(pdf: File) {
             e.page.paths.forEach { println("     path ${it.shape} ${it.bounds} stroked=${it.stroked} filled=${it.filled} light=${it.lightFill} seg=${it.segments}") }
         }
         if (System.getenv("HARNESS_REGIONS") != null) {
-            layout.figures.forEach { println("     FIGURE ${it.kind} ${it.bounds}") }
+            layout.figures.forEach { println("     FIGURE ${it.kind} ${it.bounds} caption=${it.caption}") }
             layout.tables.forEach { println("     TABLE ruled=${it.ruled} ${it.bounds}") }
         }
         if (System.getenv("HARNESS_LINES") != null) layout.lines.forEach { println("     ${it.bounds.left.toInt()},${it.bounds.top.toInt()} s=${it.fontSize} b=${it.boldRatio} | ${it.text}") }
@@ -93,7 +103,7 @@ fun renderGray(pdf: File, page: Int, r: Rect, scale: Float): GrayImage? {
     val out = File.createTempFile("harness", "")
     try {
         val dpi = scale * 72f
-        val cmd = listOf("pdftoppm", "-gray", "-singlefile", "-r", dpi.toString(), "-f", "${page + 1}", "-l", "${page + 1}",
+        val cmd = listOf("pdftoppm", "-cropbox", "-gray", "-singlefile", "-r", dpi.toString(), "-f", "${page + 1}", "-l", "${page + 1}",
             "-x", "${(r.left * scale).toInt()}", "-y", "${(r.top * scale).toInt()}",
             "-W", "${(r.width * scale).toInt()}", "-H", "${(r.height * scale).toInt()}", pdf.path, out.path)
         if (ProcessBuilder(cmd).redirectErrorStream(true).start().waitFor() != 0) return null

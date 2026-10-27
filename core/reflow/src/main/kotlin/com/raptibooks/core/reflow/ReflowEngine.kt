@@ -82,11 +82,23 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
                 if (elements.isEmpty()) return
             }
         }
-        // The last body paragraph may continue on the next page; trailing footnotes are deferred.
+        // Figures, tables and margin notes printed at the top of the page beside the end of a
+        // paragraph from the previous page: the paragraph comes first.
+        val h0 = held
+        if (h0 != null) {
+            var k = 0
+            while (k < elements.size && isFloat(elements[k])) k++
+            val next = elements.getOrNull(k)
+            if (k > 0 && next is StructuredElement.Paragraph && canMerge(h0, next)) {
+                elements = listOf(next) + elements.subList(0, k) + elements.subList(k + 1, elements.size)
+            }
+        }
+        // The last body paragraph may continue on the next page; trailing footnotes, figures and
+        // tables are deferred.
         var holdIndex = -1
         for (i in elements.indices.reversed()) {
             val el = elements[i]
-            if (el is StructuredElement.Paragraph && el.kind == ParagraphKind.NOTE) continue
+            if (isFloat(el)) continue
             if (el is StructuredElement.Box) continue
             if (el is StructuredElement.Paragraph && (el.kind == ParagraphKind.BODY || el.kind == ParagraphKind.OPTIONS)) holdIndex = i
             break
@@ -118,6 +130,10 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
             i += emitElement(elements, i)
         }
     }
+
+    private fun isFloat(el: StructuredElement): Boolean =
+        el is StructuredElement.Figure || el is StructuredElement.Table ||
+            (el is StructuredElement.Paragraph && (el.kind == ParagraphKind.NOTE || el.kind == ParagraphKind.CAPTION))
 
     private fun addDeferred(elements: List<StructuredElement>, from: Int) {
         for (k in from until elements.size) deferred += elements[k]

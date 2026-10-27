@@ -42,6 +42,28 @@ class FigureDetector {
             if (rects.any { r -> same(c.bounds, r.bounds, 3f) }) drop += c
         }
         items.removeAll(drop)
+        // A border painted as strips along the edges of a (rounded) panel is one box too.
+        val added = mutableListOf<Item>()
+        for (c in items.toList()) {
+            if (!c.complex || c in drop || c.bounds.width < 40f || c.bounds.height < 20f) continue
+            val b = c.bounds
+            val strips = items.filter { s ->
+                s !== c && (s.rect || !s.strong) && min(s.bounds.width, s.bounds.height) <= 10f && b.outset(3f).contains(s.bounds)
+            }
+            val edges = listOf(
+                strips.filter { abs(it.bounds.top - b.top) <= 3f && it.bounds.width >= b.width * 0.8f },
+                strips.filter { abs(it.bounds.bottom - b.bottom) <= 3f && it.bounds.width >= b.width * 0.8f },
+                strips.filter { abs(it.bounds.left - b.left) <= 3f && it.bounds.height >= b.height * 0.8f },
+                strips.filter { abs(it.bounds.right - b.right) <= 3f && it.bounds.height >= b.height * 0.8f },
+            )
+            if (edges.count { it.isNotEmpty() } < 3) continue
+            val frame = edges.flatten().toSet()
+            drop += c
+            drop += frame
+            added += Item(Rect.bounding(frame.map { it.bounds } + b)!!, strong = true, raster = false, complex = false, rect = true)
+        }
+        items.removeAll(drop)
+        items += added
     }
 
     fun detect(
@@ -150,7 +172,7 @@ class FigureDetector {
                 grown = false
                 for (l in lines) {
                     if (l in members || l in absorbed) continue
-                    if (isLabel(l, bounds, bodySize, page.width)) {
+                    if (isLabel(l, bounds, bodySize, page.width, page.height)) {
                         members += l
                         bounds = bounds.union(l.bounds)
                         grown = true
@@ -174,7 +196,9 @@ class FigureDetector {
                 val stacked = a.bounds.horizontalOverlap(b.bounds) >= min(a.bounds.width, b.bounds.width) * 0.3f &&
                     max(a.bounds.top - b.bounds.bottom, b.bounds.top - a.bounds.bottom) <= bodySize * 1.5f
                 val small = min(a.bounds.area, b.bounds.area) < pageArea * 0.05f
-                if ((sideBySide || (stacked && small)) && !separated(a.bounds, b.bounds, prose)) {
+                if ((sideBySide || (stacked && small)) && !separated(a.bounds, b.bounds, prose) &&
+                    !(sideBySide && textColumnsBetween(a.bounds, b.bounds, lines.filter { it !in a.members && it !in b.members }, page.height))
+                ) {
                     a.bounds = a.bounds.union(b.bounds)
                     a.items += b.items
                     a.members += b.members
@@ -298,9 +322,11 @@ class FigureDetector {
     }
 
     /** Whether [l] is a label of the drawing at [fig]: inside it, or small text right next to it. */
-    private fun isLabel(l: TextLine, fig: Rect, bodySize: Float, pageWidth: Float): Boolean {
+    private fun isLabel(l: TextLine, fig: Rect, bodySize: Float, pageWidth: Float, pageHeight: Float): Boolean {
         if (l.bounds.coveredBy(fig.outset(2f)) >= 0.6f) return true
         if (Patterns.caption.containsMatchIn(l.text)) return false
+        // Running headers and page numbers in the top and bottom margins are not labels.
+        if (l.bounds.bottom < pageHeight * 0.07f || l.bounds.top > pageHeight * 0.93f) return false
         val em = l.fontSize
         val hGap = max(0f, max(fig.left - l.bounds.right, l.bounds.left - fig.right))
         val vGap = max(0f, max(fig.top - l.bounds.bottom, l.bounds.top - fig.bottom))
@@ -341,6 +367,26 @@ class FigureDetector {
             val r = l.bounds
             r.intersects(u, -1f) && !r.intersects(a, -1f) && !r.intersects(b, -1f) && r.coveredBy(u) >= 0.5f
         }
+    }
+
+    /**
+     * Whether a gutter between two text columns runs between [a] and [b] (figures of two
+     * problems printed side by side in a two-column layout are separate figures).
+     */
+    private fun textColumnsBetween(a: Rect, b: Rect, lines: List<TextLine>, pageHeight: Float): Boolean {
+        val (l, r) = if (a.centerX < b.centerX) a to b else b to a
+        if (l.right >= r.left) return false
+        // (running headers in the top and bottom margins span the whole text width)
+        val text = lines.filter { it.wordCount >= 4 && it.bounds.top > pageHeight * 0.07f && it.bounds.bottom < pageHeight * 0.93f }
+        var x = l.right
+        while (x <= r.left) {
+            val gx = x
+            if (text.none { it.bounds.left < gx - 2f && it.bounds.right > gx + 2f } &&
+                text.count { it.bounds.right <= gx } >= 2 && text.count { it.bounds.left >= gx } >= 2
+            ) return true
+            x += 2f
+        }
+        return false
     }
 
     /** A strip of colour behind a line of text (heading bars, example banners). */
@@ -414,10 +460,16 @@ class FigureDetector {
     private fun captionLines(first: TextLine, lines: List<TextLine>): List<TextLine> {
         val out = mutableListOf(first)
         var last = first
-        for (l in lines.sortedBy { it.bounds.top }) {
+        // Only lines under the caption: text of the next column may sit on the same rows.
+        for (l in lines.filter { it.bounds.horizontalOverlap(first.bounds) > 0f }.sortedBy { it.bounds.top }) {
             if (l === first || l.bounds.top <= last.bounds.top) continue
             if (l.bounds.top - last.bounds.bottom > last.fontSize * 0.9f) break
-            if (kotlin.math.abs(l.fontSize - first.fontSize) > 0.6f || l.bounds.horizontalOverlap(first.bounds) <= 0f) break
+            // The label ("Figure 1.5") may be set larger than the description under it.
+            val sameSize = kotlin.math.abs(l.fontSize - last.fontSize) <= 0.6f
+            // the next problem or list item ("2.10 Determine…") starts after the caption
+            if (Patterns.numberedHeading.containsMatchIn(l.text)) break
+            val smallerDescription = out.size == 1 && l.fontSize < first.fontSize && first.fontSize - l.fontSize <= first.fontSize * 0.16f
+            if (!(sameSize || smallerDescription)) break
             out += l
             last = l
             if (out.size >= 4) break

@@ -48,7 +48,14 @@ class LineBuilder(
         val charCount: Int get() = frags.sumOf { it.f.text.trim().length }
     }
 
-    fun build(fragments: List<TextFragment>): List<TextLine> {
+    /** Text in scripts whose glyph advances are reliable (Latin, Greek, Cyrillic, digits, math). */
+    private fun simpleScript(text: String): Boolean = text.all { it.code < 0x0590 || it.code in 0x1D00..0x2BFF || it == TextCleaner.PLACEHOLDER }
+
+    /**
+     * @param splitColumns split rows at the page's column gutters even where the gutter is
+     *        narrower than [segmentGapEm] (a margin column of captions and notes next to the text).
+     */
+    fun build(fragments: List<TextFragment>, splitColumns: Boolean = false): List<TextLine> {
         val frags = fragments.mapIndexedNotNull { i, f ->
             if (f.text.isEmpty() || f.fontSize <= 0f || f.right < f.left) null else Frag(f, i)
         }
@@ -56,14 +63,86 @@ class LineBuilder(
         val rows = groupRows(frags)
         mergeSuperscripts(rows)
         mergeDropCaps(rows)
-        val lines = ArrayList<TextLine>()
-        for (row in rows.sortedBy { it.baseline }) {
-            val ordered = orderRow(row.frags)
-            for (segment in splitSegments(ordered)) {
-                buildLine(segment)?.let { lines += it }
-            }
+        var segments = rows.sortedBy { it.baseline }.flatMap { splitSegments(orderRow(it.frags)) }
+        segments = attachStrayScripts(segments)
+        if (splitColumns && segments.size >= 6) segments = splitAtGutters(segments)
+        return segments.mapNotNull { buildLine(it) }
+    }
+
+    /**
+     * An exponent that landed on the baseline row of another column ("10¹⁸" in a margin table
+     * next to a line of text) is put back right after the number it belongs to.
+     */
+    private fun attachStrayScripts(segments: List<List<Frag>>): List<List<Frag>> {
+        val out = segments.map { it.toMutableList() }.toMutableList()
+        val moved = HashSet<Int>()
+        for ((k, seg) in out.withIndex()) {
+            val solid = seg.filter { !it.f.isSpace }
+            if (solid.isEmpty() || solid.size > 4) continue
+            val size = solid.maxOf { it.size }
+            val left = solid.minOf { it.left }
+            val base = solid.first().f.baseline
+            val target = out.indices.firstOrNull { j ->
+                if (j == k || j in moved) return@firstOrNull false
+                val t = out[j].filter { !it.f.isSpace }
+                if (t.isEmpty()) return@firstOrNull false
+                val tSize = medianSize(t)
+                val tBase = t.map { it.f.baseline }.sorted()[t.size / 2]
+                size <= tSize * 0.87f && abs(t.maxOf { it.right } - left) <= tSize * 0.15f &&
+                    base < tBase - tSize * 0.15f && base > tBase - tSize * 0.9f
+            } ?: continue
+            out[target] = orderRow(out[target] + seg).toMutableList()
+            moved += k
         }
-        return lines
+        return out.filterIndexed { i, _ -> i !in moved }
+    }
+
+    private fun solidBounds(segment: List<Frag>): Rect? {
+        val solid = segment.filter { !it.f.isSpace }
+        if (solid.isEmpty()) return null
+        return Rect(solid.minOf { it.left }, solid.minOf { it.f.top }, solid.maxOf { it.right }, solid.maxOf { it.f.bottom })
+    }
+
+    /**
+     * A row running across a narrow gutter (a caption line in the margin column on the same
+     * baseline as a line of text) is split where the text after the gap starts at the left edge
+     * of the column the lines above and below start at, and nothing nearby crosses the gap.
+     */
+    private fun splitAtGutters(segments: List<List<Frag>>): List<List<Frag>> {
+        val bounds = segments.map { solidBounds(it) }
+        val out = ArrayList<List<Frag>>(segments.size)
+        for ((k, seg) in segments.withIndex()) {
+            val b = bounds[k]
+            if (b == null) {
+                out += seg
+                continue
+            }
+            val em = medianSize(seg.filter { !it.f.isSpace })
+            val near = bounds.filterIndexed { j, o -> j != k && o != null && abs(o.centerY - b.centerY) <= em * 4.5f }.map { it!! }
+            fun columnEdge(x: Float) = near.count { abs(it.left - x) <= 2f } >= 2
+            fun crossed(x: Float) = near.any { it.left < x - 1f && it.right > x + 1f }
+            var current = mutableListOf<Frag>()
+            var maxRight = -Float.MAX_VALUE
+            for (fr in seg) {
+                if (!fr.f.isSpace && maxRight > -Float.MAX_VALUE) {
+                    val gap = fr.left - maxRight
+                    val mid = (maxRight + fr.left) / 2f
+                    // a hanging number or bullet ("2.7   Find the…") stays with its text
+                    val marker = current.filter { !it.f.isSpace }.joinToString("") { it.f.text }.trim().let { MARKER_ONLY.matches(it) }
+                    if (gap >= em * chunkGapEm && !marker && columnEdge(fr.left) && !crossed(mid) &&
+                        near.count { it.right <= maxRight + 2f } >= 1
+                    ) {
+                        out += current
+                        current = mutableListOf()
+                        maxRight = -Float.MAX_VALUE
+                    }
+                }
+                current += fr
+                if (!fr.f.isSpace) maxRight = max(maxRight, fr.right)
+            }
+            if (current.any { !it.f.isSpace }) out += current
+        }
+        return out
     }
 
     /**
@@ -109,12 +188,13 @@ class LineBuilder(
             for ((i, r) in sorted.withIndex()) {
                 if (r.charCount > 12) continue
                 val rSize = r.size
-                val candidates = listOfNotNull(sorted.getOrNull(i - 1), sorted.getOrNull(i + 1))
-                val target = candidates.firstOrNull { n ->
+                // Not only the rows right above and below: a line of another column may sit in between.
+                val candidates = (maxOf(0, i - 4)..minOf(sorted.size - 1, i + 4)).filter { it != i }.map { sorted[it] }
+                val target = candidates.filter { n ->
                     rSize <= n.size * 0.87f &&
                         r.baseline > n.baseline - n.size * 0.9f && r.baseline < n.baseline + n.size * 0.45f &&
                         r.left < n.right + n.size && r.right > n.left - n.size
-                } ?: continue
+                }.minByOrNull { abs(it.baseline - r.baseline) } ?: continue
                 target.frags += r.frags
                 rows.remove(r)
                 changed = true
@@ -195,7 +275,16 @@ class LineBuilder(
     private fun buildLine(segment: List<Frag>): TextLine? {
         val solid = segment.filter { !it.f.isSpace }
         if (solid.isEmpty()) return null
-        val lineSize = medianSize(solid.filter { it.order >= 0 }.ifEmpty { solid })
+        var lineSize = medianSize(solid.filter { it.order >= 0 }.ifEmpty { solid })
+        // "10⁻¹²": more characters in the raised exponent than in the number it belongs to.
+        val big = solid.filter { it.size >= lineSize * 1.25f }
+        if (big.isNotEmpty()) {
+            val bigSize = medianSize(big)
+            val bigBase = big.map { it.f.baseline }.sorted()[big.size / 2]
+            val small = solid.filter { it.size < bigSize * 0.87f }
+            val smallBase = small.map { it.f.baseline }.sorted()[small.size / 2]
+            if (smallBase < bigBase - bigSize * 0.15f || smallBase > bigBase + bigSize * 0.08f) lineSize = bigSize
+        }
         val main = solid.filter { it.size >= lineSize * 0.8f }.ifEmpty { solid }
         val baseline = main.map { it.f.baseline }.sorted()[main.size / 2]
 
@@ -246,7 +335,14 @@ class LineBuilder(
             if (p != null) {
                 val gap = f.left - maxRight
                 val sw = min(p.f.spaceWidth, f.spaceWidth).takeIf { it > 0f } ?: (lineSize * 0.25f)
-                val threshold = if (explicitSpaces) lineSize * 0.6f else (sw * 0.5f).coerceIn(lineSize * 0.1f, lineSize * 0.3f)
+                val inferred = (sw * 0.5f).coerceIn(lineSize * 0.1f, lineSize * 0.3f)
+                // Explicit spaces are trusted for complex scripts only: Latin typesetters drop
+                // the space glyph in tightly justified lines and just move the next word.
+                val threshold = when {
+                    !explicitSpaces -> inferred
+                    simpleScript(p.f.text) && simpleScript(text) -> max(inferred, lineSize * 0.15f)
+                    else -> lineSize * 0.6f
+                }
                 needSpace = pendingSpace || gap > threshold
                 if (gap > chunkGapEm * lineSize) {
                     flushBijoy()
@@ -364,6 +460,8 @@ class LineBuilder(
             }
             return String(chars)
         }
+
+        private val MARKER_ONLY = Regex("^[(\\[]?[0-9০-৯]{1,3}(?:\\.[0-9০-৯]{1,3})*[.)\\]]?$|^[•●○◦▪■♦◆►▸*–-]$|^[(]?[a-zA-Z][.)]$")
 
         private fun medianSize(frags: List<Frag>): Float {
             if (frags.isEmpty()) return 0f

@@ -44,14 +44,27 @@ screen. Bangla and English are both first-class, and everything runs offline.
   - **math symbols without Unicode mapping** (the "=", "×", "+" of Mathematical-Pi-style fonts,
     which otherwise vanish from the text) are identified from their printed shape; "Δ"
     printed with a "¢" code is repaired;
-  - printed **contents pages** with or without dot leaders (also as tables) become tappable
-    contents entries, and the reader's Contents panel follows the book's own contents when
-    it can be tied to the pages;
+  - printed **contents pages** with or without dot leaders (also as tables, also two columns
+    of "1.2  Systems of Units 4" with wrapped titles) become tappable contents entries, and
+    the reader's Contents panel follows the book's own contents when it can be tied to the
+    pages;
+  - **textbook layouts** (e.g. *Fundamentals of Electric Circuits*): section numbers printed
+    apart from their titles ("1.2 | Systems of Units") and chapter openers ("c h a p t e r",
+    a huge "1" and the title) become proper headings; bold exercise numbers ("2.13") hang like
+    list markers; equation numbers stay with their formula; circuit diagrams (wires, resistor
+    bars, arrowheads) are never read as tables; figures of a two-column exercise page stay in
+    their own column; tables in the margin column, centred bold header cells, exponents such
+    as 10⁻¹² and two-line captions ("TABLE 1.2" + description) are kept together;
+  - printer's marks outside the crop box (file-name slug, crop marks) are ignored, and shapes
+    are measured inside their clipping area;
+  - Latin words set without space glyphs in tightly justified lines keep their spaces;
   - hidden 1-pt text (bookmark markers) is ignored; "ভাগ করে…"/"অধ্যায় ১৬-এর…" inside a
     sentence is not a chapter title; answer options split by a page break are joined;
   - in a book with a real text layer, a page that is one big picture (cover, poster) is kept
     as that picture instead of being OCR'd;
-  - margin columns (side notes) are read after the main text next to them;
+  - margin columns (side notes, figures, tables, captions) are placed right after the
+    paragraph printed beside them, also when the gutter is only one character wide; a
+    paragraph continues across the page break past them;
   - multi-column reading order;
   - **Bangla**: visual→logical glyph order repair (ি ে ৈ, reph), ActualText clusters,
     Bijoy/SutonnyMJ (ANSI) → Unicode conversion;

@@ -43,6 +43,8 @@ object SymbolShapes {
         val ink = BooleanArray(w * h) { gray[it] < 150 }
         val comps = components(ink, w, h)
             .filter { it.pixels >= max(2f, em * em * 0.0006f) }
+            // Ink cut by the top or bottom edge belongs to the lines above and below.
+            .filter { it.y0 > 0 && it.y1 < h - 1 }
             .filter { it.cx >= boxLeft - em * 0.05f && it.cx <= boxRight + em * 0.05f }
             .sortedBy { it.cy }
         if (comps.isEmpty() || comps.size > 3) return null
@@ -103,7 +105,7 @@ object SymbolShapes {
             if (rowCov >= 0.85f && colCov >= 0.85f && corners.none { it } && nearAxis(c)) return '+'
             // "×" floats above the baseline; a letter x stands on it.
             if (corners.count { it } >= 4 && rowCov < 0.7f && colCov < 0.7f && at(midX, midY) && nearAxis(c) &&
-                c.y1 <= baseline - em * 0.04f
+                (c.y1 <= baseline - em * 0.04f || (c.h >= em * 0.52f && c.y1 + 1.5f <= baseline))
             ) return '×'
             // Triangle: full bottom edge, narrow apex, hollow.
             val bottom = (c.x0..c.x1).count { x -> (c.y1 - t..c.y1).any { y -> at(x, y) } }.toFloat() / c.w

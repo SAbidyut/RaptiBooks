@@ -97,14 +97,22 @@ class PdfExtractor private constructor(private val document: PDDocument) : Close
         } catch (e: IOException) {
             // Broken graphics are not fatal: keep the text.
         }
+        // Printer's marks (file name and time slug, crop marks) sit outside the crop box.
+        val w = transform.width
+        val h = transform.height
+        fun visible(left: Float, top: Float, right: Float, bottom: Float) = right > 0f && bottom > 0f && left < w && top < h
         val raw = RawPage(
             index = index,
-            width = transform.width,
-            height = transform.height,
-            fragments = ArrayList(textCollector.fragments),
-            images = ArrayList(graphics.images),
-            paths = ArrayList(graphics.paths),
-            rotatedText = ArrayList(textCollector.rotated),
+            width = w,
+            height = h,
+            fragments = textCollector.fragments.filter { f ->
+                val cx = (f.left + f.right) / 2f
+                val cy = (f.top + f.bottom) / 2f
+                cx in 0f..w && cy in 0f..h
+            },
+            images = graphics.images.filter { visible(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom) },
+            paths = graphics.paths.filter { visible(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom) },
+            rotatedText = textCollector.rotated.filter { visible(it.left, it.top, it.right, it.bottom) },
         )
         return PageExtraction(raw, textCollector.glyphsDrawn, textCollector.glyphsMapped)
     }
