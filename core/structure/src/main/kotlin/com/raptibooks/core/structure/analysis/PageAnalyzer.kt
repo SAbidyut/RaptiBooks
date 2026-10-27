@@ -3,6 +3,8 @@ package com.raptibooks.core.structure.analysis
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.layout.Chunk
+import com.raptibooks.core.structure.layout.FigureKind
+import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
@@ -41,7 +43,10 @@ class PageAnalyzer(
             val cy = (f.top + f.bottom) / 2f
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
         }
-        val (allLines, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining, splitColumns = true), page)
+        val (builtLines, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining, splitColumns = true), page)
+        // A table of symbols and formulas printed on a shaded panel is shown as printed.
+        val panels = if (page.fromOcr) emptyList() else formulaPanels(page, builtLines)
+        val allLines = if (panels.isEmpty()) builtLines else builtLines.filter { l -> panels.none { l in it.second } }
         val bodySize = bodySizeHint ?: typicalSize(allLines, page.width)
         // Display equations first: their stacked rows would otherwise look like table rows.
         val equations = if (page.fromOcr) null else equationDetector.detect(page, allLines, bodySize, ruled.map { it.bounds })
@@ -102,12 +107,14 @@ class PageAnalyzer(
         lines = lines.filter { it !in captionLines }
 
         val equationPaths = equations?.paths ?: emptySet()
-        val figurePage = if (bulletPaths.isEmpty() && equationPaths.isEmpty()) page else RawPage(
+        val figurePage = if (bulletPaths.isEmpty() && equationPaths.isEmpty() && panels.isEmpty()) page else RawPage(
             page.index, page.width, page.height, page.fragments, page.images,
-            page.paths.filter { it !in bulletPaths && it !in equationPaths }, page.rotatedText, page.fromOcr, page.ocrPictures,
+            page.paths.filter { p -> p !in bulletPaths && p !in equationPaths && panels.none { it.first.bounds.outset(1f).contains(p.bounds) } },
+            page.rotatedText, page.fromOcr, page.ocrPictures,
         )
         var equationRegions = equations?.equations ?: emptyList()
-        val figures = figureDetector.detect(figurePage, lines, tables, equationRegions.map { it.bounds }, bodySize)
+        val detected = figureDetector.detect(figurePage, lines, tables, equationRegions.map { it.bounds }, bodySize)
+        val figures = if (panels.isEmpty()) detected else FigureDetector.Result(detected.figures + panels.map { it.first }, detected.absorbed)
         // (a formula that is part of a picture, the display of a row of calculator keys)
         equationRegions = equationRegions.filter { e -> figures.figures.none { it.bounds.outset(1f).contains(e.bounds) } }
         val pieces = lines.filter { it !in figures.absorbed }
@@ -145,11 +152,48 @@ class PageAnalyzer(
  * glyph. A small, roughly square filled path just left of a line, vertically inside it, is
  * turned into a "• " prefix so the list structure survives.
  */
+/**
+ * Shaded panels holding a table of symbols and formulas ("TABLE 1.3  Symbol | Meaning" with
+ * fractions in its rows): text extraction cannot keep such a table together, so it becomes a
+ * picture captioned with the table's label. Returns each panel with the lines it takes in.
+ */
+internal fun formulaPanels(page: RawPage, lines: List<TextLine>): List<Pair<FigureRegion, Set<TextLine>>> {
+    val out = mutableListOf<Pair<FigureRegion, Set<TextLine>>>()
+    for (p in page.paths) {
+        val b = p.bounds
+        if (p.shape != PathShape.RECTANGLE || !p.filled || p.lightFill || b.width < page.width * 0.25f || b.height < 40f) continue
+        if (b.area > page.width * page.height * 0.6f) continue
+        val inside = lines.filter { it.bounds.coveredBy(b.outset(1f)) >= 0.6f }
+        if (inside.size < 4) continue
+        val size = inside.map { it.fontSize }.sorted()[inside.size / 2]
+        // labelled as a table right above the panel (or in its first row)
+        val label = lines.filter { l ->
+            Patterns.tableCaption.containsMatchIn(l.text) && l.wordCount <= 3 && l.bounds.horizontalOverlap(b) > 0f &&
+                l.bounds.bottom in b.top - size * 3f..b.top + size * 2f
+        }.minByOrNull { it.bounds.top } ?: continue
+        val description = lines.filter { l ->
+            l !== label && l !in inside && l.bounds.top >= label.bounds.bottom - 1f && l.bounds.bottom <= b.top + 1f && l.bounds.horizontalOverlap(b) > 0f
+        }.sortedBy { it.bounds.top }.takeIf { it.size <= 2 } ?: continue
+        // rows of short entries, with fractions among them
+        if (inside.count { it.wordCount >= 10 } > inside.size / 4) continue
+        val bars = page.paths.count { q ->
+            q.shape == PathShape.HORIZONTAL_LINE && q.bounds.width in 3f..b.width * 0.3f && b.contains(q.bounds)
+        }
+        if (bars == 0) continue
+        val caption = (listOf(label) + description).joinToString(" ") { it.text.trim() }
+        out += FigureRegion(b, FigureKind.VECTOR, caption, textSize = size) to (inside + label + description).toSet()
+    }
+    return out
+}
+
 internal fun attachGraphicBullets(lines: List<TextLine>, page: RawPage): Pair<List<TextLine>, Set<VectorPath>> {
+    // (not a shape inside a small frame: the shading of a calculator key)
+    val keys = page.paths.filter { it.bounds.width in 10f..70f && it.bounds.height in 8f..26f }
     val candidates = page.paths.filter { p ->
         val b = p.bounds
         p.filled && !p.lightFill && b.width in 1.5f..9f && b.height in 1.5f..9f &&
-            b.width / b.height in 0.5f..2f && (p.shape == PathShape.COMPLEX || p.shape == PathShape.RECTANGLE)
+            b.width / b.height in 0.5f..2f && (p.shape == PathShape.COMPLEX || p.shape == PathShape.RECTANGLE) &&
+            keys.none { k -> k !== p && k.bounds.outset(0.5f).contains(b) }
     }
     if (candidates.isEmpty()) return lines to emptySet()
     val used = HashSet<VectorPath>()

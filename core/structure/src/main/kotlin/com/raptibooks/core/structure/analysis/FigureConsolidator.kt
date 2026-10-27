@@ -95,16 +95,17 @@ class FigureConsolidator {
             val pieces = mutableListOf<Piece>()
             outFigures.filter { it !== anchorFigure }.forEach { pieces += FigurePiece(it) }
             outTables.forEach { pieces += TablePiece(it) }
-            // (running headers and page numbers in the top and bottom margins are not part of a figure)
-            lines.filter { it !in absorbed && it !in captionLines && it.bounds.top > page.height * 0.07f && it.bounds.bottom < page.height * 0.93f }
+            // (running headers, page numbers and emblems in the top and bottom margins are not part of a figure)
+            fun margin(r: Rect) = r.bottom <= page.height * 0.08f || r.top >= page.height * 0.92f
+            lines.filter { it !in absorbed && it !in captionLines && it.bounds.top > page.height * 0.07f && it.bounds.bottom < page.height * 0.93f && !margin(it.bounds) }
                 .forEach { pieces += LinePiece(it) }
             for (p in page.paths) {
                 val b = p.bounds
-                if (b.width > columnWidth * 0.92f || b.bottom > start.top + 2f) continue // box borders, page rules
+                if (b.width > columnWidth * 0.92f || b.bottom > start.top + 2f || margin(b)) continue // box borders, page rules
                 if (p.shape == PathShape.RECTANGLE && p.lightFill && lines.any { isProse(it, bodySize, page.width) && b.contains(it.bounds, 1f) }) continue
                 pieces += PathPiece(b)
             }
-            for (img in page.images) if (img.bounds.bottom <= start.top + 2f && img.bounds.width < page.width * 0.95f) pieces += PathPiece(img.bounds)
+            for (img in page.images) if (img.bounds.bottom <= start.top + 2f && img.bounds.width < page.width * 0.95f && !margin(img.bounds)) pieces += PathPiece(img.bounds)
             pieces.retainAll { inColumn(it.bounds) }
 
             var union: Rect? = if (anchorFigure != null) start else null
@@ -150,8 +151,25 @@ class FigureConsolidator {
                         break
                     }
                     if (blocks(l, bodySize, page.width)) break
+                    // the end of a sentence running on from the line above ("…using / nodal analysis.")
+                    if (lines.any { o ->
+                            o !== l && isProse(o, bodySize, page.width) && !Patterns.endsSentence(o.text) &&
+                                l.bounds.top - o.bounds.bottom in -1f..l.fontSize * 0.8f && o.bounds.horizontalOverlap(l.bounds) > 0f
+                        }
+                    ) {
+                        break
+                    }
                 }
                 if (next is TablePiece && !diagramLike(next.table)) break
+                // (a mark printed level with a line of text, an icon beside an exercise, is not
+                // part of the figure under it)
+                if (next !is LinePiece && lines.any { l ->
+                        blocks(l, bodySize, page.width) && l.bounds.verticalOverlap(next.bounds) >= l.bounds.height * 0.5f &&
+                            max(l.bounds.left - next.bounds.right, next.bounds.left - l.bounds.right) <= bodySize * 3f
+                    }
+                ) {
+                    break
+                }
                 if (next is FigurePiece && next.figure.caption != null && isFigureCaption(next.figure.caption)) break
                 taken += next
                 union = union?.union(next.bounds) ?: next.bounds

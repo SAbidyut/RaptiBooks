@@ -4,6 +4,7 @@ import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.layout.BoxRegion
+import com.raptibooks.core.structure.layout.FigureKind
 import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.layout.TableRegion
@@ -88,9 +89,10 @@ class PageStructurer(private val profile: DocumentProfile) {
     }
 
     fun structure(layout: PageLayout): List<StructuredElement> {
-        // A title in the top or bottom margin printed beside the page number is a running header.
+        // A title in the top or bottom margin printed beside the page number is a running header
+        // (a sentence is not: the last line of a page beside a "V" of the artwork).
         val folios = layout.lines.filter { DocumentStats.edgeZone(it, layout.height) != null && Patterns.pageNumber.matches(it.text.trim()) }
-        fun besideFolio(l: TextLine) = DocumentStats.edgeZone(l, layout.height) != null &&
+        fun besideFolio(l: TextLine) = DocumentStats.edgeZone(l, layout.height) != null && l.wordCount < 10 &&
             folios.any { f -> f !== l && abs(f.baseline - l.baseline) <= 1.5f } && l.fontSize <= profile.bodySize * 1.05f
         fun furniture(l: TextLine) = profile.isRunningHeaderOrFooter(l, layout.height, layout.index) || besideFolio(l)
         // A piece that looks like a running header ("Chapter 8", "5.3") but shares its row with
@@ -188,16 +190,32 @@ class PageStructurer(private val profile: DocumentProfile) {
             if (ends.size < 3) col.right else min(col.right, ends[ends.size * 3 / 4])
         }
 
+        // Where the lines of a column start: three or more lines of running text start there.
+        val lefts = HashMap<Rect, Float>()
+        fun textLeft(col: Rect): Float = lefts.getOrPut(col) {
+            val starts = placed.filter { it.column == col }.mapNotNull { (it.item as? LineItem)?.line }
+                .filter { it.src.wordCount >= 5 }.map { it.bounds.left }
+            starts.filter { x -> starts.count { abs(it - x) <= 1.5f } >= 3 }.minOrNull() ?: col.left
+        }
+
         fun record() {
             while (tops.size < out.size) tops += lastTop
         }
+
+        // A figure printed beside a paragraph (in the other column) comes after the paragraph.
+        val afterParagraph = mutableListOf<FigureItem>()
 
         fun flush() {
             val b = current ?: return
             current = null
             record()
-            emit(b, page, out, aside)
+            emit(b, page, out, aside, Rect(textLeft(b.column), b.column.top, textRight(b.column), b.column.bottom))
             while (tops.size < out.size) tops += b.lines.first().bounds.top
+            for (f in afterParagraph) {
+                out += StructuredElement.Figure(page, f.figure)
+                tops += f.bounds.top
+            }
+            afterParagraph.clear()
         }
 
         // Callout boxes: everything printed inside one is marked as its content.
@@ -207,13 +225,48 @@ class PageStructurer(private val profile: DocumentProfile) {
             return layout.boxes.firstOrNull { it.bounds.outset(1f).contains(b.centerX, b.centerY) }
         }
 
+        // A figure printed beside a box (in the margin, level with a worked example) comes after
+        // the box rather than splitting it in two.
+        val beside = mutableListOf<FigureItem>()
+        fun emitBeside() {
+            for (f in beside) {
+                record()
+                lastTop = f.bounds.top
+                out += StructuredElement.Figure(page, f.figure)
+            }
+            beside.clear()
+        }
+
         for ((i, p) in placed.withIndex()) {
+            val building = current
+            val next = placed.getOrNull(i + 1)
+            if (p.item is FigureItem && p.item.figure.kind != FigureKind.EQUATION && building != null && next != null && next.item is LineItem &&
+                boxOf(p.item) == box && boxOf(next.item) == box
+            ) {
+                val para = Rect.bounding(building.lines.map { it.bounds })!!
+                val column = Rect(textLeft(building.column), para.top, textRight(building.column), para.bottom)
+                if (p.bounds.horizontalOverlap(column) <= 0f && next.bounds.horizontalOverlap(para) > min(para.width, next.bounds.width) * 0.5f) {
+                    afterParagraph += p.item
+                    continue
+                }
+            }
+            val itemBox = boxOf(p.item)
+            val open = box
+            if (itemBox == null && open != null && p.item is FigureItem &&
+                (p.bounds.centerX < open.bounds.left || p.bounds.centerX > open.bounds.right) &&
+                placed.subList(i + 1, placed.size).any { boxOf(it.item) === open }
+            ) {
+                beside += p.item
+                continue
+            }
             record()
             lastTop = p.bounds.top
-            val itemBox = boxOf(p.item)
             if (itemBox !== box) {
                 flush()
                 box?.let { out += StructuredElement.Box(page, false, it) }
+                emitBeside()
+                record()
+                lastTop = p.bounds.top
                 itemBox?.let { out += StructuredElement.Box(page, true, it) }
                 box = itemBox
             }
@@ -344,6 +397,7 @@ class PageStructurer(private val profile: DocumentProfile) {
         }
         flush()
         box?.let { out += StructuredElement.Box(page, false, it) }
+        emitBeside()
         record()
         return out.zip(tops)
     }
@@ -362,6 +416,9 @@ class PageStructurer(private val profile: DocumentProfile) {
         if (prose.isEmpty()) return lines
         val textWidth = prose.maxOf { it.bounds.width }
         val bodySize = prose.map { it.size }.sorted()[prose.size / 2]
+        // Where the lines of a text column start: a piece starting there begins a line of that
+        // column ("ceed as follows:" level with a row of a table in the other column).
+        val edges = prose.map { it.bounds.left }.let { lefts -> lefts.filter { x -> lefts.count { abs(it - x) <= 1.5f } >= 3 } }
         val used = HashSet<NLine>()
         val out = ArrayList<NLine>(lines.size)
         for (a in lines) {
@@ -370,7 +427,7 @@ class PageStructurer(private val profile: DocumentProfile) {
                 b === a || (b !in used && abs(b.src.baseline - a.src.baseline) <= a.size * 0.25f &&
                     b.size / a.size in 0.85f..1.18f && b.bounds.horizontalOverlap(a.bounds) <= 0f)
             }.sortedBy { it.bounds.left }
-            if (row.size !in 2..4 || !isShortRow(row, textWidth, bodySize)) {
+            if (row.size !in 2..4 || !isShortRow(row, textWidth, bodySize) || row.drop(1).any { p -> edges.any { abs(it - p.bounds.left) <= 1.5f } }) {
                 out += a
                 continue
             }
@@ -873,7 +930,12 @@ class PageStructurer(private val profile: DocumentProfile) {
             return 4
         }
         val letters = text.filter { it.isLetter() }
-        if (letters.length >= 4 && letters.all { it in 'A'..'Z' } && words <= 8 && ratio >= 1.0f && isolated) return 4
+        // (mostly words: "LN 2 ENTER 693.15E−3" is a calculator sequence)
+        if (letters.length >= 4 && letters.all { it in 'A'..'Z' } && words <= 8 && ratio >= 1.0f && isolated &&
+            letters.length >= text.count { !it.isWhitespace() } * 0.6f
+        ) {
+            return 4
+        }
         return null
     }
 
@@ -1004,7 +1066,7 @@ class PageStructurer(private val profile: DocumentProfile) {
             if (e > s) InlineStyle(s + delta, e + delta, it.flags) else null
         }
 
-    private fun emit(b: Builder, page: Int, out: MutableList<StructuredElement>, aside: Boolean = false) {
+    private fun emit(b: Builder, page: Int, out: MutableList<StructuredElement>, aside: Boolean = false, textArea: Rect = b.column) {
         val text = b.text.toString().trim()
         if (text.isEmpty()) return
         val styles = b.styles.filter { it.start < text.length }.map { InlineStyle(it.start, it.end.coerceAtMost(text.length), it.flags) }
@@ -1021,7 +1083,9 @@ class PageStructurer(private val profile: DocumentProfile) {
             aside && size < profile.bodySize * 0.97f -> ParagraphKind.NOTE
             b.lines.all { isCentered(it, col) } && b.lines.size <= 8 -> ParagraphKind.CENTERED
             profile.isSmallText(size) && first.bounds.top > col.top + col.height * 0.6f -> ParagraphKind.NOTE
-            b.lines.all { it.bounds.left > col.left + it.size * 1.5f && it.bounds.right < col.right - it.size * 1.2f } &&
+            // indented on both sides of where the column's text runs
+            // (set smaller than the text, a little indent is enough)
+            b.lines.all { it.bounds.left > textArea.left + it.size * (if (size < profile.bodySize * 0.95f) 1.2f else 1.5f) && it.bounds.right < textArea.right - it.size * 1.2f } &&
                 b.lines.size >= 2 -> ParagraphKind.QUOTE
             else -> ParagraphKind.BODY
         }

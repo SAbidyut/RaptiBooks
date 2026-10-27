@@ -146,7 +146,12 @@ class LineBuilder(
                     val restText = { seg.subList(seg.indexOf(fr), seg.size).joinToString("") { if (it.f.isSpace) " " else it.f.text } }
                     // ("Practice Problem 12.15" in the margin, level with the first line of its text)
                     val label = { NUMBERED_LABEL.matches(current.joinToString("") { if (it.f.isSpace) " " else it.f.text }) }
-                    if (gap >= em * chunkGapEm && !marker && columnEdge(fr.left, restText) && !crossed(mid, fr.left) &&
+                    // A caption ("Figure 3.117", bold, larger) right after a label of the drawing
+                    // beside it ("2 A"), set in another font: the caption starts its own line.
+                    val prevSolid = current.lastOrNull { !it.f.isSpace }
+                    val captionStart = prevSolid != null && !marker && gap >= em * 0.4f && CAPTION_START.containsMatchIn(restText()) &&
+                        (fr.f.bold != prevSolid.f.bold || abs(fr.f.fontSize - prevSolid.f.fontSize) >= prevSolid.f.fontSize * 0.12f)
+                    if (captionStart || gap >= em * chunkGapEm && !marker && columnEdge(fr.left, restText) && !crossed(mid, fr.left) &&
                         (near.count { it.right <= maxRight + 2f } >= 1 || label())
                     ) {
                         out += current
@@ -353,6 +358,14 @@ class LineBuilder(
         // complex scripts (Bangla clusters positioned by the shaper) understate their extent,
         // so gap-based inference would split words. Without spaces (e.g. LaTeX), infer.
         val explicitSpaces = explicitSpacesHint ?: segment.any { it.f.isSpace }
+        // A tightly justified line set without any space glyph ("Ifthis29thelectrongains…"): its
+        // words are parted by less than the usual gap, but by clearly more than its letters.
+        val tightGap = if (explicitSpaces && solid.size == segment.size && solid.size >= 15) {
+            val gaps = solid.zipWithNext { a, b -> b.left - a.right }.sorted()
+            (gaps[gaps.size / 2] + lineSize * 0.08f).coerceAtLeast(lineSize * 0.1f)
+        } else {
+            null
+        }
         var startNewChunk = false
         var boldChars = 0
         var italicChars = 0
@@ -390,7 +403,7 @@ class LineBuilder(
                 // the space glyph in tightly justified lines and just move the next word.
                 val threshold = when {
                     !explicitSpaces -> inferred
-                    simpleScript(p.f.text) && simpleScript(text) -> max(inferred, lineSize * 0.15f)
+                    simpleScript(p.f.text) && simpleScript(text) -> min(max(inferred, lineSize * 0.15f), tightGap ?: Float.MAX_VALUE)
                     else -> lineSize * 0.6f
                 }
                 needSpace = pendingSpace || gap > threshold
@@ -515,6 +528,8 @@ class LineBuilder(
             "^\\s*(?:example|worked example|practice problem|exercise|problem|উদাহরণ|অনুশীলনী)\\s*[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*\\s*$",
             RegexOption.IGNORE_CASE,
         )
+        /** "Figure 3.117", "Fig. 2.4", "Table 1.3": a numbered caption label opening the text. */
+        private val CAPTION_START = Regex("^\\s*(?:figure|fig\\.|table)\\s*[0-9]+(?:\\.[0-9]+)*", RegexOption.IGNORE_CASE)
         private val MARKER_ONLY = Regex("^[(\\[]?[0-9০-৯]{1,3}(?:\\.[0-9০-৯]{1,3})*[.)\\]]?$|^[•●○◦▪■♦◆►▸*–-]$|^[(]?[a-zA-Z][.)]$")
 
         private fun medianSize(frags: List<Frag>): Float {

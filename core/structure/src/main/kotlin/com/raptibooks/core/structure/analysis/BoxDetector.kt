@@ -43,13 +43,24 @@ class BoxDetector {
             if (body.any { l -> l.bounds.top < first.bounds.top - first.fontSize && under(l) && l.text.count { it.isLetter() } >= 4 }) continue
             // (a label in a margin column, beside the text of the example, is not under the rule's text)
             if (body.any { it !== first && it.bounds.verticalOverlap(first.bounds) > 0f && it.text.count { c -> c.isLetter() } >= 4 }) continue
-            val close = rules.drop(k + 1).firstOrNull { abs(it.bounds.left - top.left) <= 4f && abs(it.bounds.right - top.right) <= 4f }
-            // (without a closing rule the example runs on to the next page)
-            val bottom = close?.bounds?.bottom ?: body.filter { under(it) }.maxOf { it.bounds.bottom }
+            // Without a closing rule the example ends before the next section's heading (or the next
+            // example); one that runs on to the next page is left to the reader's example card,
+            // which follows it there.
+            val stop = body.filter { l ->
+                under(l) && l.bounds.top > first.bounds.bottom &&
+                    // (a heading starts the column's lines: not the "." on a calculator key)
+                    ((l.isBold && l.fontSize >= first.fontSize * 1.1f && l.text.count { it.isLetter() } >= 3 &&
+                        abs(l.bounds.left - top.left) <= l.fontSize * 1.5f) || EXAMPLE_START.containsMatchIn(l.text))
+            }.minByOrNull { it.bounds.top }
+            val close = rules.drop(k + 1).firstOrNull {
+                abs(it.bounds.left - top.left) <= 4f && abs(it.bounds.right - top.right) <= 4f && it.bounds.top < (stop?.bounds?.top ?: Float.MAX_VALUE)
+            }
+            val bottom = close?.bounds?.bottom ?: stop?.let { it.bounds.top - 2f } ?: continue
             val rect = Rect(top.left, top.top, top.right, bottom)
-            if (boxes.any { it.bounds.intersects(rect) } || out.any { it.bounds.intersects(rect) }) continue
+            // (one rule may close an example and open the next)
+            if (boxes.any { it.bounds.intersects(rect) } || out.any { it.bounds.intersects(rect, -2f) }) continue
             val accent = rule.color.takeIf { it >= 0 && saturation(it) >= 60 } ?: EXAMPLE_ACCENT
-            out += BoxRegion(rect, if (accent == EXAMPLE_ACCENT) EXAMPLE_FILL else lighten(accent), accent, openBottom = close == null)
+            out += BoxRegion(rect, if (accent == EXAMPLE_ACCENT) EXAMPLE_FILL else lighten(accent), accent, openBottom = false)
         }
         return out
     }

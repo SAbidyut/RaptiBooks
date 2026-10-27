@@ -140,6 +140,7 @@ class FigureDetector {
             }
             if (grew) mergeClusters(clusters, slack = 4f, prose)
         }
+        joinKeyRows(clusters, lines, prose, bodySize)
 
         class Candidate(var bounds: Rect, val items: MutableList<Item>, val members: MutableSet<TextLine>)
         val candidates = mutableListOf<Candidate>()
@@ -152,6 +153,9 @@ class FigureDetector {
             val drawnShapes = c.count { it.complex && it.bounds.area > 500f }
             val rectCount = c.count { it.rect }
             if (bounds.width < 6f || bounds.height < 6f) continue
+            // A small emblem in the top or bottom margin (the chapter's logo beside the running
+            // head) is page furniture, like the running head.
+            if (max(bounds.width, bounds.height) <= 60f && (bounds.bottom <= page.height * 0.08f || bounds.top >= page.height * 0.92f)) continue
             val inside = lines.filter { it.bounds.coveredBy(bounds.outset(2f)) >= 0.6f }
             val textArea = inside.sumOf { (it.bounds.area).toDouble() }.toFloat()
             val keyRow = keyCaps(c, lines) >= 3
@@ -241,7 +245,8 @@ class FigureDetector {
             if (hasRaster && bounds.height >= page.height * 0.9f && bounds.width < page.width * 0.45f &&
                 (bounds.left <= 2f || bounds.right >= page.width - 2f)
             ) {
-                absorbed -= cand.members
+                // letters printed on it (a logo) are part of the decoration
+                absorbed -= cand.members.filter { it.text.trim().length > 2 }.toSet()
                 continue
             }
             // A row of calculator keys is a small picture, but a picture.
@@ -360,16 +365,73 @@ class FigureDetector {
      * Calculator keys ("2ND", "√", "9", "ENTER"): small framed labels side by side, most of the
      * cluster's shapes. Returns how many keys (0 if the cluster is something else).
      */
-    private fun keyCaps(c: List<Item>, text: List<TextLine>): Int {
-        // a key: a small frame with its label inside, all keys of one height
-        val caps = c.filter { k ->
-            (k.rect || k.complex) && k.bounds.height in 8f..26f && k.bounds.width in 8f..70f &&
-                text.any { l -> k.bounds.outset(1f).contains(l.bounds.centerX, l.bounds.centerY) || l.chunks.any { ch -> ch.left >= k.bounds.left - 1f && ch.right <= k.bounds.right + 1f && l.bounds.centerY in k.bounds.top..k.bounds.bottom } }
+    /**
+     * The calculator keys among [c]: small frames of one height with their label inside, and keys
+     * with a drawn symbol (arrow keys). A key painted as a stack of shapes (shading, outline)
+     * counts once, by its outermost shape.
+     */
+    private fun keysOf(c: List<Item>, text: List<TextLine>): Pair<List<Item>, List<Item>> {
+        val sized = c.filter { k -> (k.rect || k.complex) && k.bounds.height in 8f..26f && k.bounds.width in 8f..70f }
+        val outer = sized.filter { k -> sized.none { o -> o !== k && o.bounds.outset(0.5f).contains(k.bounds) && o.bounds.area > k.bounds.area * 1.02f } }
+            .distinctBy { listOf((it.bounds.left / 2f).toInt(), (it.bounds.top / 2f).toInt(), (it.bounds.right / 2f).toInt(), (it.bounds.bottom / 2f).toInt()) }
+        // (its label may be part of a line running over several keys: "2ND SIN 0")
+        val labelled = outer.filter { k ->
+            text.any { l -> l.bounds.horizontalOverlap(k.bounds) >= min(k.bounds.width, l.bounds.width) * 0.5f && l.bounds.centerY in k.bounds.top..k.bounds.bottom }
         }
-        if (caps.size < 3 || caps.size < c.count { it.strong } * 0.8f) return 0
-        val h = caps.map { it.bounds.height }.sorted()[caps.size / 2]
-        if (caps.any { abs(it.bounds.height - h) > h * 0.25f }) return 0
-        return caps.distinctBy { (it.bounds.centerX / 4f).toInt() to (it.bounds.centerY / 4f).toInt() }.size
+        val drawn = outer.filter { k -> k !in labelled && c.any { o -> o !== k && o !in outer && k.bounds.outset(0.5f).contains(o.bounds) } }
+        return labelled to drawn
+    }
+
+    /** Shapes of [c] that are neither keys nor parts of keys (nor small round buttons). */
+    private fun nonKeys(c: List<Item>, keys: List<Item>): Int {
+        val keysBounds = Rect.bounding(keys.map { it.bounds }) ?: return c.count { it.strong }
+        return c.count { o ->
+            o.strong && keys.none { k -> k.bounds.outset(1f).contains(o.bounds) } && !(o.bounds.width <= 10f && o.bounds.height <= 10f) &&
+                // (the band printed behind the row of keys)
+                !o.bounds.outset(1f).contains(keysBounds)
+        }
+    }
+
+    private fun keyCaps(c: List<Item>, text: List<TextLine>): Int {
+        val (labelled, drawn) = keysOf(c, text)
+        if (labelled.size < 2 || labelled.size + drawn.size < 3) return 0
+        val keys = labelled + drawn
+        if (keys.size < nonKeys(c, keys) * 2) return 0
+        // all keys of one height (an arrow key may be a little smaller)
+        val h = labelled.map { it.bounds.height }.sorted()[labelled.size / 2]
+        if (labelled.any { abs(it.bounds.height - h) > h * 0.25f }) return 0
+        if (drawn.any { it.bounds.height < h * 0.6f || it.bounds.height > h * 1.25f }) return 0
+        return keys.distinctBy { (it.bounds.centerX / 4f).toInt() to (it.bounds.centerY / 4f).toInt() }.size
+    }
+
+    /**
+     * Keys printed along a line of text ("MODE ↓ Display Digits → 3:FIX 2 ENTER ENTER") are one
+     * row of keys, however far apart: clusters of nothing but keys on one row are joined.
+     */
+    private fun joinKeyRows(clusters: MutableList<MutableList<Item>>, lines: List<TextLine>, prose: List<TextLine>, bodySize: Float) {
+        fun keysOnly(c: List<Item>): Boolean {
+            val (labelled, drawn) = keysOf(c, lines)
+            val keys = labelled + drawn
+            return keys.isNotEmpty() && nonKeys(c, keys) == 0
+        }
+        var joined = true
+        while (joined) {
+            joined = false
+            outer@ for (i in clusters.indices) for (j in i + 1 until clusters.size) {
+                val a = boundsOf(clusters[i])
+                val b = boundsOf(clusters[j])
+                if (a.verticalOverlap(b) < min(a.height, b.height) * 0.5f) continue
+                val gap = Rect(min(a.right, b.right), min(a.top, b.top), max(a.left, b.left), max(a.bottom, b.bottom))
+                if (gap.width > bodySize * 15f || prose.any { it.bounds.intersects(gap) }) continue
+                if (!keysOnly(clusters[i]) || !keysOnly(clusters[j])) continue
+                val both = clusters[i] + clusters[j]
+                if (keyCaps(both, lines) < 3) continue
+                clusters[i].addAll(clusters[j])
+                clusters.removeAt(j)
+                joined = true
+                break@outer
+            }
+        }
     }
 
     /** Whether [l] is a label of the drawing at [fig]: inside it, or small text right next to it. */
@@ -380,7 +442,7 @@ class FigureDetector {
         // the margin column) is part of the text.
         if (l.fontSize >= bodySize * 0.9f && textEdges.any { abs(it - l.bounds.left) <= 1.5f }) return false
         // Running headers and page numbers in the top and bottom margins are not labels.
-        if (l.bounds.bottom < pageHeight * 0.07f || l.bounds.top > pageHeight * 0.93f) return false
+        if (l.bounds.bottom < pageHeight * 0.08f || l.bounds.top > pageHeight * 0.92f) return false
         // Nor is a sentence, an exercise ("2.73 An ammeter…") or a caption's "For Prob. 2.72."
         // printed about the size of the text (a diagram's phrases are set much smaller).
         if (l.fontSize >= bodySize * 0.8f && sentence(l)) return false

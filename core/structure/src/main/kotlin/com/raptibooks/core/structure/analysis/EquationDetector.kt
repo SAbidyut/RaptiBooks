@@ -171,7 +171,8 @@ class EquationDetector {
                         }
                         continue
                     }
-                    if (sameRow && (f.fragment || f.seed) && hGap <= em * 2.5f) {
+                    // (an option's label, "b.", belongs to the formula after it)
+                    if (sameRow && (f.fragment || f.seed) && hGap <= em * 2.5f && !(l.bounds.left >= r.bounds.right - 1f && OPTION_LABEL.matches(l.text.trim()))) {
                         r.lines += l
                         r.bounds = r.bounds.union(l.bounds)
                         changed = true
@@ -216,17 +217,22 @@ class EquationDetector {
             // A line of prose sharing the rows of the formula: it is inline math, keep the text.
             // (measured from the formulas, without the words printed on their rows)
             val formula = Rect.bounding(r.lines.filter { it !in r.labels }.map { it.bounds } + r.bars.map { it.bounds }) ?: r.bounds
+            // (a line of the other column of the page, across the gutter, is not)
             val prose = lines.any { l ->
                 l !in r.lines && l !== r.number && feats.getValue(l).prose &&
                     l.bounds.verticalOverlap(formula) > l.bounds.height * 0.5f &&
-                    abs(l.bounds.centerX - formula.centerX) < page.width * 0.35f
+                    abs(l.bounds.centerX - formula.centerX) < page.width * 0.35f &&
+                    max(l.bounds.left - formula.right, formula.left - l.bounds.right) <= em * 3f
             }
             if (prose) continue
             // Labels inside a drawing ("R1 = 10 Ω" next to a resistor) belong to the figure.
             val near = r.bounds.outset(em)
             if (page.images.any { it.bounds.intersects(near) }) continue
+            // (units struck out where they cancel, "3 ft̸ / 1 yard̸", are marks on the formula)
+            fun strike(p: VectorPath) = p.shape == PathShape.COMPLEX && p.segments <= 2 && p.bounds.height <= em &&
+                r.lines.any { it.bounds.intersects(p.bounds) }
             val shapes = page.paths.filter { p ->
-                p !in r.bars && p.bounds.intersects(near) && !p.bounds.contains(r.bounds.outset(-1f)) && p.bounds.width < page.width * 0.8f
+                p !in r.bars && p.bounds.intersects(near) && !p.bounds.contains(r.bounds.outset(-1f)) && p.bounds.width < page.width * 0.8f && !strike(p)
             }
             if (shapes.count { it.shape == PathShape.COMPLEX && min(it.bounds.width, it.bounds.height) > em * 0.8f } >= 1 ||
                 shapes.count { it.shape != PathShape.HORIZONTAL_LINE } >= 6
@@ -389,6 +395,9 @@ class EquationDetector {
         return gap in -1f..em * 1.6f && next.bounds.horizontalOverlap(top.bounds) > 0f
     }
 
+    /** The formula starts with an option's label ("b.", "*f."). */
+    private fun labelled(r: Region): Boolean = r.lines.minByOrNull { it.bounds.left }?.let { OPTION_LABEL.matches(it.text.trim()) } == true
+
     private fun mergeOverlapping(regions: MutableList<Region>, bodySize: Float) {
         var merged = true
         while (merged) {
@@ -397,8 +406,11 @@ class EquationDetector {
                 val a = regions[i]
                 val b = regions[j]
                 val em = min(emOf(a, bodySize), emOf(b, bodySize))
+                // (two options side by side, "e. … f. …", are two formulas)
+                val (left, right) = if (a.bounds.left <= b.bounds.left) a to b else b to a
                 val sameRows = a.bounds.verticalOverlap(b.bounds) > 0f &&
-                    max(a.bounds.left - b.bounds.right, b.bounds.left - a.bounds.right) <= em * 3f
+                    max(a.bounds.left - b.bounds.right, b.bounds.left - a.bounds.right) <= em * 3f &&
+                    !(right.bounds.left >= left.bounds.right && labelled(right))
                 val stacked = a.bounds.horizontalOverlap(b.bounds) > 0f &&
                     max(a.bounds.top - b.bounds.bottom, b.bounds.top - a.bounds.bottom) <= em * 0.35f
                 if (sameRows || stacked || continues(a, b, em) || continues(b, a, em)) {
@@ -419,6 +431,8 @@ class EquationDetector {
     private companion object {
         /** Two words opening the line: "That is,", "Thus, from", "where the". */
         val SENTENCE_START = Regex("^\\s*\\p{L}{2,}[,:]?\\s+\\p{Ll}{2,}[\\s,:]")
+        /** "b.", "*f.", "(c)": the label of an option in a list of exercises. */
+        val OPTION_LABEL = Regex("^\\*?\\(?\\p{Ll}[.)]$")
         /** A connective opening a sentence before its formula: "Thus, I1 = …", "Since ω0 = …". */
         val OPENER = Regex(
             "^\\s*(?:that is|thus|hence|since|then|therefore|so|where|also|similarly|here|if|when|from|using|" +
