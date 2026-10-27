@@ -21,13 +21,23 @@ object ReadingOrder {
      * @param shortLineColumns columns of short lines are columns too (a printed table of
      *        contents), not rows of side-by-side items.
      */
-    fun <T> order(items: List<T>, boundsOf: (T) -> Rect, emOf: (T) -> Float, shortLineColumns: Boolean = false): List<Placed<T>> {
+    fun <T> order(items: List<T>, boundsOf: (T) -> Rect, emOf: (T) -> Float, shortLineColumns: Boolean = false): List<Placed<T>> =
+        order(items, boundsOf, emOf, shortLineColumns, depth = 0)
+
+    private fun <T> order(items: List<T>, boundsOf: (T) -> Rect, emOf: (T) -> Float, shortLineColumns: Boolean, depth: Int): List<Placed<T>> {
         if (items.isEmpty()) return emptyList()
         val area = Rect.bounding(items.map(boundsOf))!!
         val ems = items.map(emOf).filter { it > 0f }.sorted()
         val em = if (ems.isEmpty()) 10f else ems[ems.size / 2]
-        val gutters = findGutters(items, boundsOf, area, em, emOf, shortLineColumns)
+        val gutters = findGutters(items, boundsOf, area, em, emOf, shortLineColumns, relaxed = depth > 0)
         if (gutters.isEmpty()) {
+            // The upper and lower parts of the page may be laid out differently (a column of text
+            // over two columns of exercises): read each part on its own.
+            if (depth < 3 && items.size >= 12) {
+                horizontalCut(items, boundsOf, emOf, shortLineColumns, area.width)?.let { (upper, lower) ->
+                    return order(upper, boundsOf, emOf, shortLineColumns, depth + 1) + order(lower, boundsOf, emOf, shortLineColumns, depth + 1)
+                }
+            }
             val sorted = sortTopDown(items, boundsOf)
             return sorted.map { Placed(it, boundsOf(it), area) }
         }
@@ -61,6 +71,52 @@ object ReadingOrder {
         }
         flush()
         return result
+    }
+
+    /**
+     * A horizontal cut nothing crosses, below which (or above which) the items stand in columns
+     * that the page as a whole does not show. Null if there is none.
+     */
+    private fun <T> horizontalCut(
+        items: List<T>,
+        boundsOf: (T) -> Rect,
+        emOf: (T) -> Float,
+        shortLineColumns: Boolean,
+        pageWidth: Float,
+    ): Pair<List<T>, List<T>>? {
+        val sorted = items.sortedBy { boundsOf(it).top }
+        // (columns of running text on both sides, not a grid of short answer options)
+        fun columns(part: List<T>): Boolean {
+            if (part.size < 8) return false
+            val area = Rect.bounding(part.map(boundsOf))!!
+            val ems = part.map(emOf).filter { it > 0f }.sorted()
+            val em = if (ems.isEmpty()) 10f else ems[ems.size / 2]
+            return findGutters(part, boundsOf, area, em, emOf, shortLineColumns, relaxed = true).any { (gl, gr) ->
+                // (long lines of text, or pictures)
+                val blocks = part.filter { emOf(it) > 0f && boundsOf(it).width >= pageWidth * 0.25f || emOf(it) <= 0f && boundsOf(it).height >= em * 3f }
+                    .map(boundsOf)
+                blocks.count { it.right <= gr } >= 3 && blocks.count { it.left >= gl } >= 3
+            }
+        }
+        val ems = items.map(emOf).filter { it > 0f }.sorted()
+        val em = if (ems.isEmpty()) 10f else ems[ems.size / 2]
+        var best: Pair<List<T>, List<T>>? = null
+        var bestSize = 0
+        var bottom = Float.NEGATIVE_INFINITY
+        for (k in 0 until sorted.size - 1) {
+            bottom = max(bottom, boundsOf(sorted[k]).bottom)
+            // (white space between blocks, not the gap between two lines of a paragraph)
+            if (boundsOf(sorted[k + 1]).top - bottom < em * 0.8f) continue
+            val upper = sorted.subList(0, k + 1)
+            val lower = sorted.subList(k + 1, sorted.size)
+            // the part in columns, the bigger the better
+            val size = (if (columns(upper)) upper.size else 0) + (if (columns(lower)) lower.size else 0)
+            if (size > bestSize) {
+                best = upper to lower
+                bestSize = size
+            }
+        }
+        return best
     }
 
     /**
@@ -130,6 +186,8 @@ object ReadingOrder {
         em: Float,
         emOf: (T) -> Float,
         shortLineColumns: Boolean = false,
+        // within a part of the page cut off from the rest: a column may hold fewer long lines
+        relaxed: Boolean = false,
     ): List<Pair<Float, Float>> {
         if (items.size < 6 || area.width < 100f) return emptyList()
         val all = items.map { core(boundsOf(it), emOf(it)) }
@@ -174,6 +232,12 @@ object ReadingOrder {
         }
         // Require real columns on both sides of each gutter (or a margin column of side notes).
         val text = items.map { emOf(it) > 0f }
+        fun wide(i: Int, columnWidth: Float) = all[i].width >= columnWidth * 0.7f || (!text[i] && all[i].height >= em * 3f)
+        fun wideCount(gl: Float, gr: Float, left: Boolean) = if (left) {
+            all.indices.count { all[it].left < gl && all[it].right <= gr - 0.5f && wide(it, gl - area.left) }
+        } else {
+            all.indices.count { all[it].right > gr && all[it].left >= gl + 0.5f && wide(it, area.right - gr) }
+        }
         return gutters.filter { (gl, gr) ->
             val leftIx = all.indices.filter { all[it].right <= gl + 0.5f }
             val rightIx = all.indices.filter { all[it].left >= gr - 0.5f }
@@ -193,8 +257,11 @@ object ReadingOrder {
                 // Columns of text are filled with long lines; side-by-side short items (answer
                 // options, label lists) are rows to read left to right instead.
                 (shortLineColumns || medianWidth(left) >= (gl - area.left) * 0.5f && medianWidth(right) >= (area.right - gr) * 0.5f ||
-                    // questions running the width of each column, with short options under them
-                    left.count { it.width >= (gl - area.left) * 0.7f } >= 3 && right.count { it.width >= (area.right - gr) * 0.7f } >= 3)
+                    // questions running the width of each column (and their figures), with short
+                    // options under them; a ragged right edge may run into the gutter
+                    wideCount(gl, gr, left = true).let { l ->
+                        wideCount(gl, gr, left = false).let { r -> if (relaxed) min(l, r) >= 2 && l + r >= 6 else min(l, r) >= 3 }
+                    })
         }
     }
 

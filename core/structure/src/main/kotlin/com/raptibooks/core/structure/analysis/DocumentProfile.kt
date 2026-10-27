@@ -33,6 +33,8 @@ class DocumentStats {
         val seenOffsets = HashSet<Int>()
         for (l in lines) {
             if (Patterns.tocEntry.containsMatchIn(l.text)) continue // contents lines aren't headings
+            // (nor is a huge chapter number or a page number)
+            if (l.text.isNotBlank() && l.text.all { it.isDigit() || it.isWhitespace() } && l.fontSize > 14f) continue
             val key = sizeKey(l.fontSize)
             val letters = TextQuality.letterCount(l.text)
             sizeChars[key] = (sizeChars[key] ?: 0L) + letters

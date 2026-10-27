@@ -40,6 +40,12 @@ class PiFontsTest {
         assertEquals("π", PiFonts.decode("BLCKCF+Grk", "", "p"))
         assertEquals("(", PiFonts.decode("HOANNK+PBB", "", "a"))
         assertEquals("ℒ", PiFonts.decode("XYZABC+Fancy", "", "L"))
+        // a cut known by glyph names only
+        assertEquals("(", PiFonts.decode("GHAFHP+PBB", "one", null))
+        assertEquals("}", PiFonts.decode("GHAFHP+PBB", "", "f"))
+        assertEquals("π", PiFonts.decode("GMNMGD+MathTechnicalP12", "", "p"))
+        assertEquals("∠", PiFonts.decode("GGNOBJ+MathematicalPi-Six", "H11028", null))
+        assertEquals("≅", PiFonts.decode("GGNNJN+MathematicalPi-Three", "H33361", null))
     }
 
     @Test

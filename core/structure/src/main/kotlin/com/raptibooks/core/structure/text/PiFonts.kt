@@ -16,8 +16,9 @@ object PiFonts {
     /** Mathematical Pi glyph names (operators, relations, delimiters). */
     private val MATH_PI = mapOf(
         "H11001" to "+", "H11002" to "−", "H11003" to "×", "H11004" to "÷", "H11005" to "=",
-        "HS11005" to "≠", "H11006" to "±", "H11007" to "∓", "H11009" to "∞", "H11017" to "≤",
-        "H11021" to "<", "H11022" to ">", "H11032" to "′", "H11034" to "°", "H11061" to "≅",
+        "HS11005" to "≠", "H11006" to "±", "H11007" to "∓", "H11009" to "∞", "H11015" to "≈", "H11017" to "≤",
+        "H11021" to "<", "H11022" to ">", "H11028" to "∠", "H11032" to "′", "H11033" to "″", "H11034" to "°", "H11061" to "≅",
+        "H33361" to "≅", "H20904" to "|",
         "H11084" to "≥", "H11229" to "≃", "H11349" to "≤", "H11350" to "≥",
         // bold set (Mathematical Pi Four)
         "H11543" to "°", "H11545" to "+", "H11546" to "−", "H11549" to "=", "H11554" to "·", "H11557" to "∞",
@@ -33,8 +34,14 @@ object PiFonts {
         "0" to "∂", "r" to "∝", "–" to "″",
     )
 
-    /** Big delimiters ("PBB"): parentheses, brackets and bars; other pieces carry no text. */
-    private val DELIMITERS = mapOf("a" to "(", "b" to ")", "c" to "[", "d" to "]", "`" to "|", "0" to "|")
+    /** Big delimiters ("PBB"): parentheses, brackets, braces and bars; other pieces carry no text. */
+    private val DELIMITERS = mapOf("a" to "(", "b" to ")", "c" to "[", "d" to "]", "e" to "{", "f" to "}", "`" to "|", "0" to "|")
+
+    /** The same delimiters in a cut of the font known by glyph names only. */
+    private val DELIMITER_GLYPHS = mapOf("one" to "(", "two" to ")", "greater" to "/")
+
+    /** "Math Technical" fonts: π and μ typed as p and m. */
+    private val TECHNICAL = mapOf("p" to "π", "m" to "μ")
 
     /** Greek typed on a Greek keyboard layout: u = θ, c = ψ, v = ω, j = ξ (capitals: bold). */
     private val GREEK_KEYBOARD = mapOf(
@@ -53,10 +60,11 @@ object PiFonts {
     fun decode(fontName: String, glyph: String, unicode: String?): String? {
         val family = fontName.substringAfter('+')
         if (PI_GLYPH.matches(glyph) && MATH_PI_FONT.containsMatchIn(family)) return mathPi(glyph) ?: ""
+        if (family.startsWith("PBB")) return unicode?.let { DELIMITERS[it] } ?: DELIMITER_GLYPHS[glyph] ?: ""
         val text = unicode ?: return null
         return when {
             family.startsWith("Optr") -> OPERATORS[text] ?: ""
-            family.startsWith("PBB") -> DELIMITERS[text] ?: ""
+            family.startsWith("MathTechnical") -> TECHNICAL[text] ?: text
             family == "Grk" || family.startsWith("Grk-") -> {
                 val c = text.singleOrNull() ?: return null
                 GREEK_KEYBOARD[c.lowercaseChar()] ?: text

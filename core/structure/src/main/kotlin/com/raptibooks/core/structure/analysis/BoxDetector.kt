@@ -37,10 +37,12 @@ class BoxDetector {
         for ((k, rule) in rules.withIndex()) {
             val top = rule.bounds
             fun under(l: TextLine) = l.bounds.top >= top.bottom - 1f && l.bounds.horizontalOverlap(top) >= l.bounds.width * 0.5f
-            val first = body.filter { under(it) }.minByOrNull { it.bounds.top } ?: continue
-            if (first.bounds.top - top.bottom > first.fontSize * 2.5f || !EXAMPLE_START.containsMatchIn(first.text)) continue
+            // (the label may have a formula beside it, whose numerator is printed higher)
+            val first = body.filter { under(it) && it.bounds.top - top.bottom <= it.fontSize * 2.5f }
+                .firstOrNull { EXAMPLE_START.containsMatchIn(it.text) } ?: continue
+            if (body.any { l -> l.bounds.top < first.bounds.top - first.fontSize && under(l) && l.text.count { it.isLetter() } >= 4 }) continue
             // (a label in a margin column, beside the text of the example, is not under the rule's text)
-            if (body.any { it !== first && it.bounds.verticalOverlap(first.bounds) > 0f }) continue
+            if (body.any { it !== first && it.bounds.verticalOverlap(first.bounds) > 0f && it.text.count { c -> c.isLetter() } >= 4 }) continue
             val close = rules.drop(k + 1).firstOrNull { abs(it.bounds.left - top.left) <= 4f && abs(it.bounds.right - top.right) <= 4f }
             // (without a closing rule the example runs on to the next page)
             val bottom = close?.bounds?.bottom ?: body.filter { under(it) }.maxOf { it.bounds.bottom }

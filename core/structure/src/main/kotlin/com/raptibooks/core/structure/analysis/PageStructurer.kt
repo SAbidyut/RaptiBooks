@@ -227,7 +227,23 @@ class PageStructurer(private val profile: DocumentProfile) {
                     if (entries != null) entries.forEach { out += it.copy(pageIndex = page) } else out += StructuredElement.Table(page, item.table)
                 }
                 is LineItem -> {
-                    val line = item.line
+                    var line = item.line
+                    // "EXAMPLE 6.11 Determine the values of…": the label printed in bold at the
+                    // start of the question is the example's heading.
+                    val label = INLINE_LABEL.find(line.text)?.takeIf { m ->
+                        m.range.last + 1 < line.text.trimEnd().length &&
+                            line.styles.any { it.bold && it.start <= m.range.first && it.end >= m.groupValues[1].length }
+                    }
+                    if (label != null && line !in contents) {
+                        flush()
+                        out += StructuredElement.Heading(page, profile.headingLevelForSize(line.size)?.coerceAtLeast(3) ?: 4, label.groupValues[1].trim())
+                        val cut = label.range.last + 1
+                        line = NLine(line.src, line.text.substring(cut), line.styles.mapNotNull { st ->
+                            val a = (st.start - cut).coerceAtLeast(0)
+                            val b = st.end - cut
+                            if (b > a) InlineStyle(a, b, st.flags) else null
+                        })
+                    }
                     if (line in contents) {
                         val entry = contents[line]
                         if (entry != null) {
@@ -246,24 +262,50 @@ class PageStructurer(private val profile: DocumentProfile) {
                         options.forEach { (m, t) -> out += StructuredElement.ListItem(page, m, t, emptyList(), 1) }
                         continue
                     }
-                    // A formula set on its own line (centred or indented): one block of its own.
-                    if (MathText.isFormula(line.text) && displayed(line, p.column)) {
+                    // A formula set on its own line (centred or indented): one block of its own —
+                    // not the next line of a sentence ("is υC = 12 V(1 − e−t/40ms).").
+                    val runOn = current?.let { c ->
+                        !Patterns.endsSentence(c.last.text) && line.text.trimStart().firstOrNull()?.isLowerCase() == true &&
+                            line.bounds.top - c.last.bounds.bottom < line.size * 0.8f &&
+                            // where the lines of the paragraph start (an exercise: its hanging indent),
+                            // not centred like a display formula
+                            (abs(line.bounds.left - c.last.bounds.left) <= line.size * 0.6f ||
+                                (c.marker != null && line.bounds.left in c.last.bounds.left..c.last.bounds.left + line.size * 3f &&
+                                    !isCentered(line, p.column)))
+                    } == true
+                    if (MathText.isFormula(line.text) && displayed(line, p.column) && !runOn) {
                         flush()
                         out += StructuredElement.Paragraph(page, line.text, line.styles, ParagraphKind.FORMULA, false, line.size)
                         continue
                     }
                     val prevLine = (placed.getOrNull(i - 1)?.item as? LineItem)?.line
+                    // "SECTION 10.5 Transients in Capacitive Networks: / The Charging Phase"
+                    val lastHeading = out.lastOrNull() as? StructuredElement.Heading
+                    if (current == null && lastHeading != null && prevLine != null && lastHeading.text.endsWith(':') &&
+                        lastHeading.text.endsWith(prevLine.text.trim()) && line.src.isBold && abs(line.size - prevLine.size) < 0.5f &&
+                        line.bounds.top - prevLine.bounds.bottom < line.size * 0.8f && line.text.split(' ').size <= 8
+                    ) {
+                        out[out.size - 1] = lastHeading.copy(text = lastHeading.text + " " + line.text.trim())
+                        continue
+                    }
                     val nextLine = (placed.getOrNull(i + 1)?.item as? LineItem)?.line
                     val level = headingLevel(line, prevLine, nextLine, leading)
                     if (level != null) {
                         flush()
                         val prev = out.lastOrNull()
-                        val close = prev is StructuredElement.Heading && prevLine != null && line.bounds.top - prevLine.bounds.bottom < line.size * 0.8f
+                        // (the next line of a title is below it, not beside it: "Review Questions" in
+                        // the margin and "15.7 Summary" in the text column are two headings)
+                        val close = prev is StructuredElement.Heading && prevLine != null && line.bounds.top - prevLine.bounds.bottom < line.size * 0.8f &&
+                            line.bounds.top >= prevLine.bounds.top + prevLine.size * 0.5f && line.bounds.horizontalOverlap(prevLine.bounds) > 0f
                         // "1.1 ELECTRICAL MACHINES, / TRANSFORMERS, AND DAILY LIFE": the second line of a
                         // numbered title carries no number (and may look like a lower level).
+                        // (an all-caps title is not continued by a line in small letters: "17.8 COMPUTER
+                        // ANALYSIS" over "PSpice" is a section and its first subsection)
+                        fun caps(t: String) = t.filter { it.isLetter() }.let { it.isNotEmpty() && it.all { c -> c.isUpperCase() } }
                         val wrapped = close && prevLine != null && (prev as StructuredElement.Heading).text.endsWith(prevLine.text.trim()) &&
                             abs(prevLine.size - line.size) < 0.5f && Patterns.numberedHeading.containsMatchIn(prev.text) &&
-                            !Patterns.numberedHeading.containsMatchIn(line.text) && !Patterns.endsSentence(prev.text)
+                            !Patterns.numberedHeading.containsMatchIn(line.text) && !Patterns.endsSentence(prev.text) &&
+                            caps(prev.text) == caps(line.text)
                         if (close && prev is StructuredElement.Heading && (wrapped || prev.level == level && headingLevel(prevLine!!, null, null, leading) == level)) {
                             out[out.size - 1] = prev.copy(text = joinHeading(prev.text, line.text))
                         } else {
@@ -505,7 +547,10 @@ class PageStructurer(private val profile: DocumentProfile) {
     /** A bold exercise number ("2.13 For the circuit…") hangs like a list marker. */
     private fun problemNumber(line: NLine): MatchResult? {
         val m = PROBLEM_MARKER.find(line.text) ?: return null
-        val bold = line.styles.any { it.bold && it.start == 0 && it.end >= m.groupValues[1].length }
+        // (the number in bold; a "*" before it marks a challenging exercise)
+        val group = m.groups[1]!!.range
+        val first = if (line.text[group.first] == '*') group.first + 1 else group.first
+        val bold = line.styles.any { it.bold && it.start <= first && it.end >= group.last + 1 }
         return if (bold || line.src.boldRatio >= 0.99f) m else null
     }
 
@@ -672,6 +717,10 @@ class PageStructurer(private val profile: DocumentProfile) {
         val NUMBER_TOKEN = Regex("(?<=^|\\s)([0-9০-৯]{1,3})(?=\\s|$)")
         private val BULLET_START = Regex("^\\s*[•●○◦▪■♦◆►▸]")
         val SECTION_TITLE = Regex("^\\s*(?:section|sections|sec\\.)\\s+[0-9]{1,2}(?:\\.[0-9]{1,2})*(?:\\s*(?:and|–|-|to)\\s*[0-9]{1,2}(?:\\.[0-9]{1,2})*)?\\s+\\p{Lu}[^.]*$", RegexOption.IGNORE_CASE)
+        val INLINE_LABEL = Regex(
+            "^\\s*((?:example|worked example|practice problem|exercise|উদাহরণ)\\s+[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*)\\s*[:.]?\\s+",
+            RegexOption.IGNORE_CASE,
+        )
         val NUMBERED_LABEL = Regex(
             "^\\s*(?:example|worked example|practice problem|exercise|problem|উদাহরণ|অনুশীলনী)\\s*[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*\\s*[:.ঃ]?\\s*$",
             RegexOption.IGNORE_CASE,
@@ -681,7 +730,7 @@ class PageStructurer(private val profile: DocumentProfile) {
         val INLINE_PAGE = Regex("^(.*\\p{L}.*?[^,\\s])\\s+([0-9০-৯]{1,4}|[ivxlc]{1,7})$")
         val SUBSECTION = Regex("^\\s*[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}\\s+\\S")
         val CONTENTS_LABEL = Regex("^\\s*(?:chapter|part|appendix|অধ্যায়|অধ্যায়|ভাগ)\\s+[0-9A-Z০-৯]{1,3}\\s*$", RegexOption.IGNORE_CASE)
-        val PROBLEM_MARKER = Regex("^\\s*([0-9০-৯]{1,2}\\.[0-9০-৯]{1,3})\\s+(?=\\S)")
+        val PROBLEM_MARKER = Regex("^\\s*(\\*?[0-9০-৯]{1,2}\\.[0-9০-৯]{1,3})\\s+(?=\\S)")
         val LETTER_SPACED = Regex("^(?:\\p{L} ){3,}\\p{L}$")
 
         /** "1.2 Systems of Units", "১.৩ ..." : a numbered section (not a chapter). */
@@ -791,6 +840,10 @@ class PageStructurer(private val profile: DocumentProfile) {
             next.src.isBold == line.src.isBold && next.text.firstOrNull()?.isLowerCase() == true
         val numbered = Patterns.numberedHeading.find(text)?.takeUnless { runsOn && !it.groupValues[1].contains('.') }
         if (runsOn && numbered == null && Patterns.numberedHeading.containsMatchIn(text)) return null
+        // A long bold sentence running on into the next line ("The curves obtained for the
+        // magnitude… versus / frequency are called…") or a word broken at the line's end is text.
+        if (runsOn && words >= 8 && !Patterns.numberedHeading.containsMatchIn(text)) return null
+        if (text.endsWith('-') && next?.text?.firstOrNull()?.isLowerCase() == true) return null
         // so is a bulleted one ("• Develop skills in interpreting and establishing the / Bode…")
         if (BULLET_START.containsMatchIn(text) && next != null && gapBelow <= leading * 0.6f && abs(next.size - line.size) < 0.5f &&
             next.src.isBold == line.src.isBold && !Patterns.endsSentence(text)
@@ -811,7 +864,9 @@ class PageStructurer(private val profile: DocumentProfile) {
         // A bold line between paragraphs at body size: minor heading.
         // A worked formula ("I = 0.58 × 30 = 17.4 A") set in bold is a result, not a heading.
         val formula = text.any { it in "=≈≠<>" } && text.any { it.isDigit() }
+        // (a statement in bold starting with a small letter, "the symbol E is applied to…", is text)
         if (bold && !formula && ratio >= 0.95f && words <= 12 && isolated && !text.endsWith(',') &&
+            text.trimStart().firstOrNull()?.isLowerCase() != true &&
             (!Patterns.endsSentence(text) || text.endsWith(':')) &&
             !(prev != null && prev.src.isBold && gapAbove < leading * 0.6f)
         ) {
@@ -913,7 +968,8 @@ class PageStructurer(private val profile: DocumentProfile) {
     }
 
     private fun isCentered(l: NLine, column: Rect): Boolean =
-        abs(l.bounds.centerX - column.centerX) < column.width * 0.06f && l.bounds.width < column.width * 0.8f
+        abs(l.bounds.centerX - column.centerX) < column.width * 0.06f && l.bounds.width < column.width * 0.8f &&
+            l.bounds.left > column.left + l.size // (a line starting at the column's edge is flush left)
 
     private fun append(b: Builder, line: NLine, lineBreak: Boolean) {
         val sb = b.text

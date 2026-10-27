@@ -60,7 +60,7 @@ fun convert(pdf: File) {
         val reason = OcrDecision.evaluate(e.page, e.glyphsDrawn, e.glyphsMapped)
         // HARNESS_FRAGS=page index: print that page's raw fragments.
         if (System.getenv("HARNESS_FRAGS")?.split(",")?.contains("$i") == true) {
-            e.page.fragments.forEach { println("     frag '${it.text}' x=${it.left}..${it.right} base=${it.baseline} size=${it.fontSize} sw=${it.spaceWidth} font=${it.fontName}") }
+            e.page.fragments.forEach { println("     frag '${it.text}' x=${it.left}..${it.right} base=${it.baseline} size=${it.fontSize} sw=${it.spaceWidth} font=${it.fontName} glyph=${it.glyph}") }
         }
         // Like the app: symbols without Unicode mapping are identified from their rendering.
         val page = SymbolRecognizer.recognize(e.page) { r, scale -> renderGray(pdf, i, r, scale) }

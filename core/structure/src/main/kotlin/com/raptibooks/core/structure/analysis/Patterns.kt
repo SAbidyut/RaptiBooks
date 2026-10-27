@@ -27,7 +27,7 @@ object Patterns {
     val listMarker = Regex(
         "^\\s*(" +
             "[•●○◦▪▫■□♦◆◇►▸▹➢➤✓✔☐☑❖✦✧*·]" +
-            "|\\(?$NUM{1,3}[.)।]" +
+            "|\\*?\\(?$NUM{1,3}[.)।]" + // ("*3." marks a challenging exercise)
             "|\\($NUM{1,3}\\)" +
             "|\\(?[a-z][.)]" +
             "|\\([a-zA-Z]\\)" +

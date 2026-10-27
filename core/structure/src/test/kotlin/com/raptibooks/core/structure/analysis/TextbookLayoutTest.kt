@@ -162,6 +162,31 @@ class TextbookLayoutTest {
     }
 
     @Test
+    fun subscriptsStayWithTheirLineBesideAnotherColumnsLabels() {
+        val frags = mutableListOf<TextFragment>()
+        // right column: "υ and the current i for …" with subscripts C below υ and i
+        frags += words("υ and the current i for the discharge phase.", 334f, 465f, size = 9f)
+        frags += TextFragment("C", 339f, 463f, 343f, 469f, 467.8f, 5.85f)
+        frags += TextFragment("C", 404f, 463f, 408f, 469f, 467.8f, 5.85f)
+        // left column: labels of a figure on (nearly) the subscripts' baseline
+        frags += words("100 V", 111f, 469f, size = 8f) + words("1 μF", 150f, 469f, size = 8f) + words("E", 84f, 469f, size = 8f)
+        val lines = LineBuilder().build(frags)
+        assertTrue(lines.map { it.text }.toString(), lines.none { it.text.trim() == "C" || it.text.trim() == "C C" })
+    }
+
+    @Test
+    fun inlineExampleLabelIsTheExamplesHeading() {
+        val frags = mutableListOf<TextFragment>()
+        for (k in 0 until 4) frags += words("Running text of the section before the example goes on here $k.", 70f, 100f + k * 12f, size = 10f)
+        frags += words("EXAMPLE 6.11", 70f, 160f, size = 10f, bold = true) +
+            words("Determine the values of R1, R2 and R3 in Fig. 6.16 if R2 = 2R1.", 140f, 160f, size = 10f)
+        val t = texts(structure(frags))
+        val k = t.indexOfFirst { it.endsWith("EXAMPLE 6.11") }
+        assertTrue(t.toString(), k >= 0 && t[k].startsWith("H"))
+        assertTrue(t.toString(), t[k + 1].startsWith("Determine the values"))
+    }
+
+    @Test
     fun exponentLongerThanItsNumberStaysWithIt() {
         val frags = mutableListOf<TextFragment>()
         frags += TextFragment("1", 373f, 671f, 377.5f, 681f, 679f, 9f)

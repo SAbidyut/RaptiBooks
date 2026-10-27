@@ -154,7 +154,8 @@ class FigureDetector {
             if (bounds.width < 6f || bounds.height < 6f) continue
             val inside = lines.filter { it.bounds.coveredBy(bounds.outset(2f)) >= 0.6f }
             val textArea = inside.sumOf { (it.bounds.area).toDouble() }.toFloat()
-            if (!hasRaster) {
+            val keyRow = keyCaps(c, lines) >= 3
+            if (!hasRaster && !keyRow) {
                 // Frames, shaded boxes, highlight bars: mostly rectangles around running text.
                 if (complexCount == 0 && rectCount <= 3 && (inside.size >= 3 || textArea > bounds.area * 0.25f)) continue
                 // A callout box: frame, maybe an icon, and lines of running text.
@@ -171,6 +172,18 @@ class FigureDetector {
             // Labels around the drawing (titles above nodes, notes beside them) belong to it too,
             // otherwise they leak into the text and the picture is cropped through them.
             val members = inside.toMutableSet()
+            if (keyRow) {
+                // The rest of the row of keys: the text on the keys and the result after them
+                // ("ENTER = 3 + 9/4 = 5.25"), a formula in it included.
+                var more = true
+                while (more) {
+                    more = false
+                    val row = { r: Rect -> r.verticalOverlap(bounds) >= min(r.height, bounds.height) * 0.5f &&
+                        max(bounds.left - r.right, r.left - bounds.right) <= bodySize * 2f }
+                    for (l in lines) if (l !in members && l !in absorbed && row(l.bounds)) { members += l; bounds = bounds.union(l.bounds); more = true }
+                    for (e in equations) if (!bounds.contains(e) && row(e)) { bounds = bounds.union(e); more = true }
+                }
+            }
             var grown = true
             while (grown) {
                 grown = false
@@ -224,7 +237,16 @@ class FigureDetector {
             val hasRaster = c.any { it.raster }
             val complexCount = c.count { it.complex }
             val rectCount = c.count { it.rect }
-            if (bounds.width < 30f || bounds.height < 20f) {
+            // A decorative band of pictures down the edge of a chapter opener is not a figure.
+            if (hasRaster && bounds.height >= page.height * 0.9f && bounds.width < page.width * 0.45f &&
+                (bounds.left <= 2f || bounds.right >= page.width - 2f)
+            ) {
+                absorbed -= cand.members
+                continue
+            }
+            // A row of calculator keys is a small picture, but a picture.
+            val keys = keyCaps(c, cand.members.toList()) >= 3
+            if ((bounds.width < 30f || bounds.height < 20f) && !keys) {
                 absorbed -= cand.members
                 continue
             }
@@ -235,7 +257,7 @@ class FigureDetector {
             val captioned = captionUnder(bounds, lines.filter { it !in cand.members }, bodySize, bodySize * 3f) != null &&
                 bounds.height >= 20f && cand.members.none { it.wordCount >= 6 }
             val minArea = if (labels >= 2 && (complexCount + rectCount) >= 1) pageArea * 0.003f else pageArea * 0.012f
-            if (!hasRaster && bounds.area < minArea && !captioned) {
+            if (!hasRaster && bounds.area < minArea && !captioned && !keys) {
                 absorbed -= cand.members
                 continue
             }
@@ -332,6 +354,22 @@ class FigureDetector {
             }
         }
         return Rect(left, top, right, bottom)
+    }
+
+    /**
+     * Calculator keys ("2ND", "√", "9", "ENTER"): small framed labels side by side, most of the
+     * cluster's shapes. Returns how many keys (0 if the cluster is something else).
+     */
+    private fun keyCaps(c: List<Item>, text: List<TextLine>): Int {
+        // a key: a small frame with its label inside, all keys of one height
+        val caps = c.filter { k ->
+            (k.rect || k.complex) && k.bounds.height in 8f..26f && k.bounds.width in 8f..70f &&
+                text.any { l -> k.bounds.outset(1f).contains(l.bounds.centerX, l.bounds.centerY) || l.chunks.any { ch -> ch.left >= k.bounds.left - 1f && ch.right <= k.bounds.right + 1f && l.bounds.centerY in k.bounds.top..k.bounds.bottom } }
+        }
+        if (caps.size < 3 || caps.size < c.count { it.strong } * 0.8f) return 0
+        val h = caps.map { it.bounds.height }.sorted()[caps.size / 2]
+        if (caps.any { abs(it.bounds.height - h) > h * 0.25f }) return 0
+        return caps.distinctBy { (it.bounds.centerX / 4f).toInt() to (it.bounds.centerY / 4f).toInt() }.size
     }
 
     /** Whether [l] is a label of the drawing at [fig]: inside it, or small text right next to it. */

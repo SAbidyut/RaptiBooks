@@ -137,8 +137,9 @@ class ReflowEngine(private val sink: (ContentBlock) -> Unit) {
         }
     }
 
+    // (a display equation is part of the text: a paragraph does not continue past it)
     private fun isFloat(el: StructuredElement): Boolean =
-        el is StructuredElement.Figure || el is StructuredElement.Table ||
+        (el is StructuredElement.Figure && el.region.kind != FigureKind.EQUATION) || el is StructuredElement.Table ||
             (el is StructuredElement.Paragraph && (el.kind == ParagraphKind.NOTE || el.kind == ParagraphKind.CAPTION))
 
     private fun addDeferred(elements: List<StructuredElement>, from: Int) {

@@ -512,7 +512,7 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 5
+        const val LAYOUT_VERSION = 6
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60

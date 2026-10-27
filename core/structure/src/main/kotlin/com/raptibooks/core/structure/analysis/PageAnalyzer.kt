@@ -106,8 +106,10 @@ class PageAnalyzer(
             page.index, page.width, page.height, page.fragments, page.images,
             page.paths.filter { it !in bulletPaths && it !in equationPaths }, page.rotatedText, page.fromOcr, page.ocrPictures,
         )
-        val equationRegions = equations?.equations ?: emptyList()
+        var equationRegions = equations?.equations ?: emptyList()
         val figures = figureDetector.detect(figurePage, lines, tables, equationRegions.map { it.bounds }, bodySize)
+        // (a formula that is part of a picture, the display of a row of calculator keys)
+        equationRegions = equationRegions.filter { e -> figures.figures.none { it.bounds.outset(1f).contains(e.bounds) } }
         val pieces = lines.filter { it !in figures.absorbed }
         // Diagrams split into pieces are put back together above their captions.
         val whole = FigureConsolidator().consolidate(figurePage, pieces, figures.figures + equationRegions, tables, bodySize, allLines)

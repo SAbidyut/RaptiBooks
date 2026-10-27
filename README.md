@@ -45,11 +45,19 @@ screen. Bangla and English are both first-class, and everything runs offline.
     labels) are put back together above their caption, with the drawing's own title;
   - **math symbols of "pi fonts"** (Linotype Mathematical Pi, Greek-keyboard and operator
     fonts of engineering textbooks) are read from their glyph names and known layouts: the
-    "=", "≠", "±", "∠", "Δ", "Π", "ω", "θ", "Ω" that otherwise vanish or turn into "¢", "ß",
-    "u", "6"; any other symbol without Unicode mapping is identified from its printed shape;
+    "=", "≠", "±", "∠", "Δ", "Π", "ω", "θ", "Ω", "π", "≈", "≅", "″" that otherwise vanish or turn
+    into "¢", "ß", "u", "p", "6"; any other symbol without Unicode mapping is identified from
+    its printed shape;
   - **worked examples and practice problems** ("Example 2.3", "Practice Problem 2.3",
-    "উদাহরণ ৪.১", also examples set between two rules) become cards of their own, up to the
-    answer or the next section;
+    "উদাহরণ ৪.১", also examples set between two rules and labels printed at the start of the
+    question, "EXAMPLE 6.11 Determine…") become cards of their own, up to the answer or the
+    next section;
+  - **calculator keys** ("2ND", "√", "ENTER" drawn as key caps) and the display after them are
+    one picture per row;
+  - derivations with words on their rows ("so that", "and", "resulting in") stay one picture;
+    a sentence with inline math ("That is, VW = 0∠0°…") stays text and an equation picture
+    never takes in a sliver of the text line above it; fractions of words ("Effect =
+    cause / opposition") are formulas; columns of "A = 1.0" values are a table;
   - printed **contents pages** with or without dot leaders (also as tables, also two columns
     of "1.2  Systems of Units 4" with wrapped titles) become tappable contents entries, and
     the reader's Contents panel follows the book's own contents when it can be tied to the
@@ -80,7 +88,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
   - margin columns (side notes, figures, tables, captions) are placed right after the
     paragraph printed beside them, also when the gutter is only one character wide; a
     paragraph continues across the page break past them;
-  - multi-column reading order;
+  - multi-column reading order, also on pages that change layout half way (a column of text
+    over two columns of exercises); subscripts are kept with their line when a figure in the
+    other column has labels on the same baseline;
   - **Bangla**: visual→logical glyph order repair (ি ে ৈ, reph), ActualText clusters,
     Bijoy/SutonnyMJ (ANSI) → Unicode conversion;
   - **OCR** for scanned pages and broken text layers: Tesseract 5 with bundled `ben` + `eng`

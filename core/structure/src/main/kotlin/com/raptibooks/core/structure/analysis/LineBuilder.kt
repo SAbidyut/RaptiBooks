@@ -127,7 +127,9 @@ class LineBuilder(
                 // printed on the baselines of the text lines)
                 val beside = nearIx.flatMap { starts[it] }.filter { abs(it.first - x) <= 2f }
                 // a caption in the margin column ("Figure 1.6") may have one line under it
-                return n >= 2 || (Patterns.caption.containsMatchIn(rest()) && n + beside.size >= 1) || beside.any { it.second }
+                return n >= 2 || (Patterns.caption.containsMatchIn(rest()) && n + beside.size >= 1) || beside.any { it.second } ||
+                    // "Practice Problem 15.15" in the margin column right of a line of text
+                    NUMBERED_LABEL.matches(rest().trim())
             }
             // (a row that also breaks there, beside the same margin column, does not cross it)
             fun crossed(x: Float, resume: Float) = nearIx.any { j ->
@@ -142,8 +144,10 @@ class LineBuilder(
                     // a hanging number or bullet ("2.7   Find the…") stays with its text
                     val marker = current.filter { !it.f.isSpace }.joinToString("") { it.f.text }.trim().let { MARKER_ONLY.matches(it) }
                     val restText = { seg.subList(seg.indexOf(fr), seg.size).joinToString("") { if (it.f.isSpace) " " else it.f.text } }
+                    // ("Practice Problem 12.15" in the margin, level with the first line of its text)
+                    val label = { NUMBERED_LABEL.matches(current.joinToString("") { if (it.f.isSpace) " " else it.f.text }) }
                     if (gap >= em * chunkGapEm && !marker && columnEdge(fr.left, restText) && !crossed(mid, fr.left) &&
-                        near.count { it.right <= maxRight + 2f } >= 1
+                        (near.count { it.right <= maxRight + 2f } >= 1 || label())
                     ) {
                         out += current
                         current = mutableListOf()
@@ -211,6 +215,22 @@ class LineBuilder(
     }
 
     private fun mergeSuperscripts(rows: MutableList<Row>) {
+        // A row runs across the page: its pieces are judged on their own (the subscripts of a
+        // line in one column share a baseline with the labels of a figure in the other).
+        val pieces = rows.flatMap { r ->
+            val sorted = r.frags.sortedBy { it.left }
+            val gap = max(r.size * 3f, 12f)
+            val out = mutableListOf(mutableListOf(sorted.first()))
+            var right = sorted.first().right
+            for (fr in sorted.drop(1)) {
+                if (!fr.f.isSpace && fr.left - right > gap) out += mutableListOf<Frag>()
+                out.last() += fr
+                right = max(right, fr.right)
+            }
+            out.map { Row(it).also { p -> p.baseline = r.baseline } }
+        }
+        rows.clear()
+        rows.addAll(pieces)
         var changed = true
         while (changed) {
             changed = false
@@ -491,6 +511,10 @@ class LineBuilder(
             return String(chars)
         }
 
+        private val NUMBERED_LABEL = Regex(
+            "^\\s*(?:example|worked example|practice problem|exercise|problem|উদাহরণ|অনুশীলনী)\\s*[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*\\s*$",
+            RegexOption.IGNORE_CASE,
+        )
         private val MARKER_ONLY = Regex("^[(\\[]?[0-9০-৯]{1,3}(?:\\.[0-9০-৯]{1,3})*[.)\\]]?$|^[•●○◦▪■♦◆►▸*–-]$|^[(]?[a-zA-Z][.)]$")
 
         private fun medianSize(frags: List<Frag>): Float {

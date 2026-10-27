@@ -58,6 +58,10 @@ class EquationDetector {
 
     private class Region(var bounds: Rect) {
         val lines = LinkedHashSet<TextLine>()
+        /** Words on the rows of a derivation ("so that", "and"), part of the picture. */
+        val labels = LinkedHashSet<TextLine>()
+        /** Numerators and denominators made of words ("potential difference / resistance"). */
+        val wordy = LinkedHashSet<TextLine>()
         val bars = mutableListOf<VectorPath>()
         val frames = mutableListOf<VectorPath>()
         var number: TextLine? = null
@@ -67,6 +71,11 @@ class EquationDetector {
         if (lines.isEmpty()) return Result(emptyList(), emptySet(), emptySet())
         val feats = lines.associateWith { Feat(it) }
         val free = { r: Rect -> obstacles.none { it.intersects(r) } }
+        // "That is, VW = 0∠0°, VB = 120∠0°": a sentence with inline math, starting where the
+        // lines of the paragraph start, is text (display formulas are set apart).
+        val proseLefts = lines.filter { feats.getValue(it).prose }.map { it.bounds.left }
+        fun sentence(l: TextLine) = (SENTENCE_START.containsMatchIn(l.text) || OPENER.containsMatchIn(l.text.lowercase())) &&
+            proseLefts.count { abs(it - l.bounds.left) <= l.fontSize * 0.5f } >= 2
 
         val regions = mutableListOf<Region>()
         // Fraction bars: a short rule with a math piece right above and right below it.
@@ -101,15 +110,22 @@ class EquationDetector {
                 return EQ_NUMBER.matches(t) || (st.words == 0 && t.length <= 40) || (st.words <= 1 && t.length <= 12)
             }
             fun words(l: TextLine) = stats(l)?.words ?: feats.getValue(l).words
+            // "Effect = cause / opposition": a fraction of words, with "=" right beside the bar
+            val relation = lines.any { l ->
+                abs(l.bounds.centerY - y) <= bodySize * 0.8f &&
+                    ((l.text.trimEnd().endsWith("=") && l.bounds.right <= b.left + 1f && b.left - l.bounds.right <= bodySize * 2f) ||
+                        (l.text.trimStart().startsWith("=") && l.bounds.left >= b.right - 1f && l.bounds.left - b.right <= bodySize * 2f))
+            }
+            fun wordy(l: TextLine) = relation && words(l) <= 3 && pieceText(l).trim().length <= 30
             val num = lines.firstOrNull { l ->
                 val em = l.fontSize
-                over(l) && l.baseline in y - em * 1.0f..y - em * 0.05f && fragment(l)
+                over(l) && l.baseline in y - em * 1.0f..y - em * 0.05f && (fragment(l) || wordy(l))
             } ?: continue
             val den = lines.firstOrNull { l ->
                 val em = l.fontSize
-                over(l) && l.bounds.top in y - em * 0.25f..y + em * 0.6f && l.baseline > y && fragment(l)
+                over(l) && l.bounds.top in y - em * 0.25f..y + em * 0.6f && l.baseline > y && (fragment(l) || wordy(l))
             } ?: continue
-            if (words(num) + words(den) > 1) continue
+            if (words(num) + words(den) > 1 && !(wordy(num) && wordy(den))) continue
             // A fraction bar is centred under its numerator and barely wider than the wider
             // part; a table rule runs under a whole row of header cells.
             val em = max(num.fontSize, den.fontSize)
@@ -122,12 +138,14 @@ class EquationDetector {
             val r = Region(b.union(num.bounds).union(den.bounds))
             r.lines += num
             r.lines += den
+            if (!fragment(num)) r.wordy += num
+            if (!fragment(den)) r.wordy += den
             r.bars += bar
             regions += r
         }
         for (l in lines) {
             val f = feats.getValue(l)
-            if (f.seed && free(l.bounds) && regions.none { l in it.lines }) {
+            if (f.seed && free(l.bounds) && regions.none { l in it.lines } && !sentence(l)) {
                 regions += Region(l.bounds).also { it.lines += l }
             }
         }
@@ -161,7 +179,9 @@ class EquationDetector {
                     }
                     val vGap = max(0f, max(r.bounds.top - l.bounds.bottom, l.bounds.top - r.bounds.bottom))
                     val within = l.bounds.left >= r.bounds.left - em * 1.5f && l.bounds.right <= r.bounds.right + em * 1.5f
-                    if (vGap <= em * 0.35f && within && (f.words == 0 || f.seed) && !f.number) {
+                    // (a sentence stays text, but its pieces on the formula's own row join it:
+                    // "Since v =" before a fraction and an integral)
+                    if (vGap <= em * 0.35f && within && (f.words == 0 || f.seed) && !f.number && !sentence(l)) {
                         r.lines += l
                         r.bounds = r.bounds.union(l.bounds)
                         changed = true
@@ -171,12 +191,13 @@ class EquationDetector {
         }
 
         mergeDerivations(regions, lines, feats, bodySize)
+        if (absorbRowLabels(regions, lines, bodySize, proseLefts)) mergeOverlapping(regions, bodySize)
 
         val out = mutableListOf<FigureRegion>()
         val absorbed = HashSet<TextLine>()
         val usedPaths = HashSet<VectorPath>()
         for (r in regions) {
-            val members = r.lines.map { feats.getValue(it) }
+            val members = r.lines.filter { it !in r.labels && it !in r.wordy }.map { feats.getValue(it) }
             val em = emOf(r, bodySize)
             val rows = rowCount(r.lines)
             val stacked = rows >= 2 || r.bars.isNotEmpty()
@@ -185,12 +206,20 @@ class EquationDetector {
             val numbered = r.number != null && members.any { it.rel > 0 }
             if (!stacked && !special && !numbered) continue
             if (members.sumOf { it.words } >= 5) continue
+            // Columns of plain "A = 1.0" lines side by side are a table of values.
+            if (r.bars.isEmpty() && !special && rows >= 3 && regions.count { o ->
+                    o !== r && o.bars.isEmpty() && rowCount(o.lines) >= 3 &&
+                        o.bounds.verticalOverlap(r.bounds) >= min(o.bounds.height, r.bounds.height) * 0.8f
+                } >= 2
+            ) continue
             if (!stacked && !numbered && inParagraph(r, lines, feats, em)) continue
             // A line of prose sharing the rows of the formula: it is inline math, keep the text.
+            // (measured from the formulas, without the words printed on their rows)
+            val formula = Rect.bounding(r.lines.filter { it !in r.labels }.map { it.bounds } + r.bars.map { it.bounds }) ?: r.bounds
             val prose = lines.any { l ->
                 l !in r.lines && l !== r.number && feats.getValue(l).prose &&
-                    l.bounds.verticalOverlap(r.bounds) > l.bounds.height * 0.5f &&
-                    abs(l.bounds.centerX - r.bounds.centerX) < page.width * 0.35f
+                    l.bounds.verticalOverlap(formula) > l.bounds.height * 0.5f &&
+                    abs(l.bounds.centerX - formula.centerX) < page.width * 0.35f
             }
             if (prose) continue
             // Labels inside a drawing ("R1 = 10 Ω" next to a resistor) belong to the figure.
@@ -221,8 +250,19 @@ class EquationDetector {
             val alt = r.lines.sortedWith(compareBy({ it.baseline }, { it.bounds.left }))
                 .joinToString(" ") { TextCleaner.finish(it.text) }.replace(Regex("\\s+"), " ").trim()
             val size = r.lines.map { it.fontSize }.sorted().let { it[it.size / 2] }
+            // The picture never takes in a piece of the text line above or below.
+            var crop = bounds.outset(min(2f, em * 0.15f))
+            for (l in lines) {
+                if (l in r.lines || l === r.number || l.bounds.horizontalOverlap(crop) <= 0f) continue
+                if (l.bounds.centerY < bounds.top && l.bounds.bottom > crop.top) {
+                    crop = Rect(crop.left, min(l.bounds.bottom, bounds.top + em * 0.1f), crop.right, crop.bottom)
+                }
+                if (l.bounds.centerY > bounds.bottom && l.bounds.top < crop.bottom) {
+                    crop = Rect(crop.left, crop.top, crop.right, max(l.bounds.top, bounds.bottom - em * 0.1f))
+                }
+            }
             out += FigureRegion(
-                bounds.outset(min(2f, em * 0.15f)).clamp(page.width, page.height), FigureKind.EQUATION, number,
+                crop.clamp(page.width, page.height), FigureKind.EQUATION, number,
                 textSize = size, text = alt,
             )
             absorbed += r.lines
@@ -270,6 +310,8 @@ class EquationDetector {
                     val between = Rect(min(a.bounds.left, b.bounds.left), a.bounds.bottom, max(a.bounds.right, b.bounds.right), b.bounds.top)
                     if (gap > 0f && lines.any { l -> l !in a.lines && l !in b.lines && l !== a.number && l !== b.number && between.intersects(l.bounds, -0.5f) }) continue
                     a.lines += b.lines
+                    a.labels += b.labels
+                    a.wordy += b.wordy
                     a.bars += b.bars
                     if (a.number == null) a.number = b.number
                     a.bounds = a.bounds.union(b.bounds)
@@ -279,6 +321,35 @@ class EquationDetector {
                 }
             }
         }
+    }
+
+    /**
+     * "However,", "so that", "and", "resulting in" printed level with the lines of a derivation,
+     * to the left of its formulas: the words belong to the derivation's picture.
+     */
+    private fun absorbRowLabels(regions: List<Region>, lines: List<TextLine>, bodySize: Float, proseLefts: List<Float>): Boolean {
+        var any = false
+        for (r in regions) {
+            val em = emOf(r, bodySize)
+            for (l in lines) {
+                if (regions.any { l in it.lines } || !ROW_LABEL.matches(l.text.trim())) continue
+                val t = l.text.trim()
+                if (!(t.first().isLowerCase() || t.endsWith(',')) || t.count { it.isLetter() } < 2) continue
+                // (printed where the lines of the text start, not a label of a drawing beside it)
+                if (proseLefts.count { abs(it - l.bounds.left) <= em } < 2) continue
+                // (measured from the formulas, not from labels taken in already)
+                val left = r.lines.filter { it !in r.labels }.minOfOrNull { it.bounds.left } ?: r.bounds.left
+                val gap = left - l.bounds.right
+                val between = Rect(l.bounds.right, l.bounds.top, left, l.bounds.bottom)
+                if (l.bounds.centerY !in r.bounds.top..r.bounds.bottom || gap < em * 0.5f || gap > em * 12f) continue
+                if (lines.any { o -> o !== l && o !in r.lines && between.intersects(o.bounds, -0.5f) }) continue
+                r.lines += l
+                r.labels += l
+                r.bounds = r.bounds.union(l.bounds)
+                any = true
+            }
+        }
+        return any
     }
 
     private fun emOf(r: Region, bodySize: Float): Float =
@@ -332,6 +403,8 @@ class EquationDetector {
                     max(a.bounds.top - b.bounds.bottom, b.bounds.top - a.bounds.bottom) <= em * 0.35f
                 if (sameRows || stacked || continues(a, b, em) || continues(b, a, em)) {
                     a.lines += b.lines
+                    a.labels += b.labels
+                    a.wordy += b.wordy
                     a.bars += b.bars
                     if (a.number == null) a.number = b.number
                     a.bounds = a.bounds.union(b.bounds)
@@ -344,6 +417,14 @@ class EquationDetector {
     }
 
     private companion object {
+        /** Two words opening the line: "That is,", "Thus, from", "where the". */
+        val SENTENCE_START = Regex("^\\s*\\p{L}{2,}[,:]?\\s+\\p{Ll}{2,}[\\s,:]")
+        /** A connective opening a sentence before its formula: "Thus, I1 = …", "Since ω0 = …". */
+        val OPENER = Regex(
+            "^\\s*(?:that is|thus|hence|since|then|therefore|so|where|also|similarly|here|if|when|from|using|" +
+                "substituting|solving|but|now|again|note that|i\\.e\\.)[,:]?\\s",
+        )
+        val ROW_LABEL = Regex("^\\p{L}+,?(?:\\s+\\p{L}+,?){0,2}$")
         val EQ_NUMBER = Regex("\\(\\s*[0-9০-৯]{1,3}(?:[.\\-][0-9০-৯]{1,3}){0,2}[a-z]?\\s*\\)")
     }
 }
