@@ -454,12 +454,13 @@ class PageStructurer(private val profile: DocumentProfile) {
             numberLine.text.trim()
         } else {
             // the big chapter number printed on the title's baseline
-            val m = NUMBER_TOKEN.find(title) ?: return lines
-            title = (title.substring(0, m.range.first) + " " + title.substring(m.range.last + 1)).replace(Regex("\\s+"), " ").trim()
-            m.groupValues[1]
+            val m = NUMBER_TOKEN.find(title)
+            if (m != null) title = (title.substring(0, m.range.first) + " " + title.substring(m.range.last + 1)).replace(Regex("\\s+"), " ").trim()
+            m?.groupValues?.get(1)
         }
         val label = word.text.trim().lowercase().replaceFirstChar { it.uppercase() }
-        val text = "$label $number: $title"
+        // (the number may be part of the artwork: then the title alone)
+        val text = if (number != null) "$label $number: $title" else title
         val merged = joined(word, first, text, emptyList(), first.src)
         val drop = titleLines.drop(1).toSet() + listOfNotNull(word, numberLine)
         return lines.filter { it !in drop }.map { if (it === first) merged else it }
