@@ -60,6 +60,15 @@ class VectorPath(
     val color: Int = -1,
 )
 
+/**
+ * Where a scanned page (one picture under an invisible OCR text layer) is dark: a grid of
+ * [cell]-point squares, row by row. It shows what the text layer leaves out: drawings, the
+ * symbols and bars of a formula, the frame around it.
+ */
+class InkMap(val cols: Int, val rows: Int, val cell: Float, val dark: BooleanArray) {
+    fun at(col: Int, row: Int): Boolean = col in 0 until cols && row in 0 until rows && dark[row * cols + col]
+}
+
 class RawPage(
     val index: Int,
     val width: Float,
@@ -73,4 +82,8 @@ class RawPage(
     val fromOcr: Boolean = false,
     /** Regions OCR classified as pictures. */
     val ocrPictures: List<Rect> = emptyList(),
+    /** For a scan under an OCR text layer: where the page has ink. */
+    val ink: InkMap? = null,
+    /** The text is drawn invisible: an OCR's text layer over the picture of a scanned page. */
+    val invisibleText: Boolean = false,
 )

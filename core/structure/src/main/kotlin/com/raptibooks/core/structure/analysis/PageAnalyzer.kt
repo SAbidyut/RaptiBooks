@@ -10,11 +10,14 @@ import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.layout.PictureRegion
 import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
+import com.raptibooks.core.structure.raw.ImageRegion
 import com.raptibooks.core.structure.raw.PathShape
 import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.raw.VectorPath
 import com.raptibooks.core.structure.text.BijoyConverter
+import com.raptibooks.core.structure.text.OcrWords
 import com.raptibooks.core.structure.text.TextQuality
+import com.raptibooks.core.structure.text.Vocabulary
 import kotlin.math.max
 import kotlin.math.min
 
@@ -25,6 +28,8 @@ import kotlin.math.min
 class PageAnalyzer(
     /** Body text size of the document, when known from a first scan of all pages. */
     private val bodySizeHint: Float? = null,
+    /** The book's words, from the same scan: to put right the words an OCR misread. */
+    private val vocabulary: Vocabulary? = null,
 ) {
     private val lineBuilder = LineBuilder()
     private val tableDetector = TableDetector(lineBuilder)
@@ -36,22 +41,28 @@ class PageAnalyzer(
         // it must not be read as content.
         val page = if (input.fromOcr || input.fragments.none { it.fontSize < MIN_VISIBLE_SIZE }) input else RawPage(
             input.index, input.width, input.height, input.fragments.filter { it.fontSize >= MIN_VISIBLE_SIZE },
-            input.images, input.paths, input.rotatedText, input.fromOcr, input.ocrPictures,
+            input.images, input.paths, input.rotatedText, input.fromOcr, input.ocrPictures, input.ink, input.invisibleText,
         )
         val spaces = page.fragments.count { it.isSpace }
         val solid = page.fragments.size - spaces
         lineBuilder.explicitSpacesHint = if (solid < 20) null else spaces * 30 >= solid
-        val ruled = if (page.fromOcr) emptyList() else tableDetector.detectRuled(page)
+        // (on a scan, rules are the lines of drawings CVISION traced: its tables are in its ink)
+        val ruled = if (page.fromOcr || page.ink != null) emptyList() else tableDetector.detectRuled(page)
         val remaining = page.fragments.filter { f ->
             val cx = (f.left + f.right) / 2f
             val cy = (f.top + f.bottom) / 2f
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
         }
-        val (bulleted, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining, splitColumns = true), page)
+        val built = lineBuilder.build(remaining, splitColumns = true).let { if (page.ink != null) ScanPage.lineEndHyphens(it) else it }.let {
+            // (text read by an OCR: ours, or the one under a scanned page)
+            if (vocabulary != null && (page.fromOcr || page.ink != null)) OcrWords.fix(it, vocabulary) else it
+        }
+        val (bulleted, bulletPaths) = attachGraphicBullets(built, page)
         // Words whose text is garbage (Arabic read by a Latin-only OCR) are shown as printed, and
         // so are the lines of that script the OCR left as images.
         val imageLines = if (page.fromOcr) emptyList() else ForeignText.imageLines(page, bulleted)
-        val (builtLines, pictures) = if (page.fromOcr) bulleted to emptyList() else numberPictures(
+        // (not on a scan: its garbled words are formulas, shown as printed with their lines)
+        val (builtLines, pictures) = if (page.fromOcr || page.ink != null) bulleted to emptyList() else numberPictures(
             ForeignText.joinCells(lineBuilder.pictureWords(bulleted, foreignPage = imageLines.isNotEmpty()) + imageLines.map { it.second }), page.index,
         )
         // Patches of the scan over such words are part of their pictures.
@@ -61,10 +72,16 @@ class PageAnalyzer(
         val panels = if (page.fromOcr) emptyList() else formulaPanels(page, builtLines) + ForeignText.grids(builtLines)
         val allLines = if (panels.isEmpty()) builtLines else builtLines.filter { l -> panels.none { l in it.second } }
         val bodySize = bodySizeHint ?: typicalSize(allLines, page.width)
+        // A scan under an OCR text layer: its ink shows the drawings and the display formulas
+        // (whose text is garbled) that are shown as printed.
+        val scan = if (page.ink == null) null else ScanPage.read(page, allLines, bodySize)
         // Display equations first: their stacked rows would otherwise look like table rows.
-        val equations = if (page.fromOcr) null else equationDetector.detect(page, allLines, bodySize, ruled.map { it.bounds })
+        val equations = if (page.fromOcr) null else scan?.equations ?: equationDetector.detect(page, allLines, bodySize, ruled.map { it.bounds })
         val textLines = if (equations == null) allLines else allLines.filter { it !in equations.absorbed }
-        val (aligned, consumed) = tableDetector.detectAligned(textLines, page)
+        // (a scan's drawings and ruled tables are shown as printed: their text is no table)
+        val (aligned, consumed) = tableDetector.detectAligned(
+            if (scan == null) textLines else textLines.filter { l -> scan.drawings.none { it.contains(l.bounds.centerX, l.bounds.centerY) } }, page,
+        )
         var lines = textLines.filter { it !in consumed }
 
         // Table captions ("Table 2: ...") directly above or below a table.
@@ -120,11 +137,17 @@ class PageAnalyzer(
         lines = lines.filter { it !in captionLines }
 
         val equationPaths = equations?.paths ?: emptySet()
-        val figurePage = if (bulletPaths.isEmpty() && equationPaths.isEmpty() && panels.isEmpty() && usedImages.isEmpty()) page else RawPage(
+        val scanDrawings = scan?.drawings.orEmpty().map { ImageRegion(it) }
+        val figurePage = if (bulletPaths.isEmpty() && equationPaths.isEmpty() && panels.isEmpty() && usedImages.isEmpty() && scan == null) page else RawPage(
             page.index, page.width, page.height, page.fragments,
-            page.images.filter { img -> img !in usedImages && panels.none { it.first.bounds.outset(1f).contains(img.bounds) } },
-            page.paths.filter { p -> p !in bulletPaths && p !in equationPaths && panels.none { it.first.bounds.outset(1f).contains(p.bounds) } },
-            page.rotatedText, page.fromOcr, page.ocrPictures,
+            page.images.filter { img ->
+                img !in usedImages && panels.none { it.first.bounds.outset(1f).contains(img.bounds) } &&
+                    // (a scan's formula kept as a picture of its own is in its equation)
+                    (scan == null || scan.equations.equations.none { it.bounds.intersects(img.bounds) })
+            } + scanDrawings,
+            // (a scan's vector lines are CVISION's tracing of its drawings, already in its ink)
+            if (scan != null) emptyList() else page.paths.filter { p -> p !in bulletPaths && p !in equationPaths && panels.none { it.first.bounds.outset(1f).contains(p.bounds) } },
+            page.rotatedText, page.fromOcr, page.ocrPictures, page.ink, page.invisibleText,
         )
         var equationRegions = equations?.equations ?: emptyList()
         val detected = figureDetector.detect(figurePage, lines, tables, equationRegions.map { it.bounds }, bodySize)
@@ -142,7 +165,11 @@ class PageAnalyzer(
         val pictureTables = whole.tables.filter { t ->
             (pictures.isNotEmpty() && t.rows.any { r -> r.any { InlinePicture.MARKER in it } }) || ForeignText.unreadable(t, foreignPage = pictures.isNotEmpty())
         }
-        val outFigures = whole.figures + pictureTables.map { FigureRegion(it.bounds, FigureKind.VECTOR, it.caption) }
+        // (the sizes the OCR of a scan gives the labels of a drawing are guesses, often too big)
+        val figures2 = if (scan == null) whole.figures else whole.figures.map { f ->
+            if (f.kind == FigureKind.EQUATION || f.textSize <= bodySize) f else FigureRegion(f.bounds, f.kind, f.caption, textSize = bodySize * 0.85f, text = f.text)
+        }
+        val outFigures = figures2 + pictureTables.map { FigureRegion(it.bounds, FigureKind.VECTOR, it.caption) }
         val outTables = whole.tables - pictureTables.toSet()
         return PageLayout(
             page.index, page.width, page.height, body, outFigures, outTables, page.fromOcr, chars,

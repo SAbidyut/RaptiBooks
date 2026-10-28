@@ -13,10 +13,10 @@ object Patterns {
         "\\s*(?:fig\\.?|figure|table)\\s*$NUM+(?:[.\\-]$NUM+)*(?:\\s*\\([a-z]\\))?\\s+" +
             "(?:shows?|illustrates|depicts|is|are|was|gives|presents|represents|displays|contains|has|can|will|summarizes|lists|compares|provides)\\b"
 
-    /** "Figure 3:", "Fig. 2.1", "চিত্র ৪ -", "Table 1." */
+    /** "Figure 3:", "Fig. 2.1", "চিত্র ৪ -", "Table 1.", "FIGURE P1-14", "Table A-1" */
     val caption = Regex(
-        "^(?!$REFERENCE)(?:\\s*(?:$CAPTION_WORDS)\\s*(?:$NUM+(?:[.\\-]$NUM+)*|[IVXivx]+)?\\s*[:.।\\-–—)]|" +
-            "\\s*(?:$CAPTION_WORDS)\\s+$NUM+)",
+        "^(?!$REFERENCE)(?:\\s*(?:$CAPTION_WORDS)\\s*(?:(?:[A-Z]-?)?$NUM+(?:[.\\-]$NUM+)*|[IVXivx]+)?\\s*[:.।\\-–—)]|" +
+            "\\s*(?:$CAPTION_WORDS)\\s+(?:[A-Z]-?)?$NUM+)",
         RegexOption.IGNORE_CASE,
     )
 

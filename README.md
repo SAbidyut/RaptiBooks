@@ -107,6 +107,11 @@ screen. Bangla and English are both first-class, and everything runs offline.
     them are shown as printed, whole;
   - **OCR** for scanned pages and broken text layers: Tesseract 5 with bundled `ben` + `eng`
     models, fully offline; text-as-outlines pages are detected too;
+  - **scanned books with an OCR text layer** (Acrobat, CVISION: the picture of each page under
+    invisible text): the page's ink shows what the text layer misses — drawings become figures
+    with their captions (panels of one figure, ruled tables), display formulas are shown as
+    printed with their numbers, and words the OCR misread the way OCRs do ("transfonner",
+    "1lle", "nux") are put right when the book prints the right word elsewhere;
   - table of contents from the PDF outline, else from the printed contents page, else from
     detected headings;
   - tables keep superscripts and subscripts (10¹⁸, 10⁻³); wide tables scroll sideways with a
@@ -232,6 +237,9 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
   ("Convert again with OCR" is the fallback).
 - Arabic words that a scan's OCR misread as plausible Latin letters ("ui", "ru") cannot be told
   from text and stay as they were read; words shown as printed are not searchable.
+- In a scanned book with an OCR text layer, inline math inside sentences stays as the OCR read
+  it (often garbled: "cp" for φ), and misread words the book never prints right elsewhere stay
+  misread.
 - Password-protected PDFs (user password) are not supported yet; owner-password PDFs work.
 - The bundled Tesseract build (JavaCPP 1.5.9) is the last one with 32-bit ARM support; its
   native libraries are not 16 KB page aligned, so on 16 KB-page devices OCR may be unavailable

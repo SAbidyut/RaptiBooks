@@ -113,6 +113,7 @@ class PdfExtractor private constructor(private val document: PDDocument) : Close
             images = graphics.images.filter { visible(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom) },
             paths = graphics.paths.filter { visible(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom) },
             rotatedText = textCollector.rotated.filter { visible(it.left, it.top, it.right, it.bottom) },
+            invisibleText = textCollector.fragments.isNotEmpty() && textCollector.invisible * 2 >= textCollector.fragments.size,
         )
         return PageExtraction(raw, textCollector.glyphsDrawn, textCollector.glyphsMapped)
     }

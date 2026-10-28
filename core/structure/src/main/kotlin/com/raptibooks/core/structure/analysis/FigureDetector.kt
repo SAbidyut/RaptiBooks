@@ -21,6 +21,9 @@ class FigureDetector {
 
     class Result(val figures: List<FigureRegion>, val absorbed: Set<TextLine>)
 
+    /** The page is a scan: the sizes of its text are an OCR's guesses. */
+    private var scan = false
+
     private class Item(var bounds: Rect, val strong: Boolean, val raster: Boolean, val complex: Boolean, val rect: Boolean)
 
     /**
@@ -74,6 +77,7 @@ class FigureDetector {
         bodySizeHint: Float? = null,
     ): Result {
         val pageArea = page.width * page.height
+        scan = page.ink != null
         val items = mutableListOf<Item>()
         val inTable = { r: Rect -> tables.any { it.bounds.outset(2f).contains(r) } || equations.any { it.outset(2f).contains(r) } }
 
@@ -142,6 +146,10 @@ class FigureDetector {
         }
         joinKeyRows(clusters, lines, prose, bodySize)
 
+        // On a scan, captions ("FIGURE 1-1" and the description under it, beside the drawing)
+        // are no labels.
+        val captionBlocks = if (page.ink == null) emptyList() else lines.filter { Patterns.caption.containsMatchIn(it.text) }.map { captionLines(it, lines) }
+        val captions = captionBlocks.flatten().toSet()
         class Candidate(var bounds: Rect, val items: MutableList<Item>, val members: MutableSet<TextLine>)
         val candidates = mutableListOf<Candidate>()
         val absorbed = HashSet<TextLine>()
@@ -170,8 +178,8 @@ class FigureDetector {
                 // A big drawing that is mostly text paragraphs (e.g. a page border with content).
                 if (inside.size > 12 && textArea > bounds.area * 0.35f) continue
                 if (inside.count { it in prose } >= 2 && rectCount <= 3 && drawnShapes <= 1) continue
-            } else if (inside.size > 15 && textArea > bounds.area * 0.4f) {
-                continue // decorative background image behind text
+            } else if (inside.size > 15 && textArea > bounds.area * 0.4f && !scan) {
+                continue // decorative background image behind text (on a scan: what an OCR read in a drawing)
             }
             // Labels around the drawing (titles above nodes, notes beside them) belong to it too,
             // otherwise they leak into the text and the picture is cropped through them.
@@ -192,7 +200,9 @@ class FigureDetector {
             while (grown) {
                 grown = false
                 for (l in lines) {
-                    if (l in members || l in absorbed) continue
+                    if (l in members || l in absorbed || l in captions) continue
+                    // (on a scan, not the labels of another drawing)
+                    if (scan && clusters.any { o -> o !== c && boundsOf(o).contains(l.bounds.centerX, l.bounds.centerY) }) continue
                     if (isLabel(l, bounds, bodySize, page.width, page.height, textEdges)) {
                         members += l
                         bounds = bounds.union(l.bounds)
@@ -200,6 +210,12 @@ class FigureDetector {
                     }
                 }
             }
+            // (a caption printed beside the drawing, over the end of its axis: the drawing stops there)
+            captionBlocks.map { b -> Rect.bounding(b.map { it.bounds })!! }.filter { it.intersects(bounds) && it.left > bounds.left + bounds.width * 0.5f }
+                .minOfOrNull { it.left }?.let { edge ->
+                    bounds = Rect(bounds.left, bounds.top, edge - 2f, bounds.bottom)
+                    members.removeAll { it.bounds.left >= edge - 1f }
+                }
             absorbed += members
             candidates += Candidate(bounds, c.toMutableList(), members)
         }
@@ -604,10 +620,10 @@ class FigureDetector {
             if (l === first || l.bounds.top <= last.bounds.top) continue
             if (l.bounds.top - last.bounds.bottom > last.fontSize * 0.9f) break
             // The label ("Figure 1.5") may be set larger than the description under it.
-            val sameSize = kotlin.math.abs(l.fontSize - last.fontSize) <= 0.6f
+            val sameSize = kotlin.math.abs(l.fontSize - last.fontSize) <= if (scan) 1.5f else 0.6f
             // the next problem or list item ("2.10 Determine…") starts after the caption
             if (Patterns.numberedHeading.containsMatchIn(l.text)) break
-            val smallerDescription = out.size == 1 && l.fontSize < first.fontSize && first.fontSize - l.fontSize <= first.fontSize * 0.16f
+            val smallerDescription = out.size == 1 && l.fontSize < first.fontSize && first.fontSize - l.fontSize <= first.fontSize * (if (scan) 0.3f else 0.16f)
             if (!(sameSize || smallerDescription)) break
             out += l
             last = l

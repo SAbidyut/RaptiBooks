@@ -36,6 +36,10 @@ internal class TextCollector : PDFTextStripper() {
     var glyphsMapped = 0
         private set
 
+    /** Fragments drawn invisible (text render mode 3: an OCR's text layer over a scan). */
+    var invisible = 0
+        private set
+
     private lateinit var transform: DisplayTransform
     private val styleCache = HashMap<PDFont, Pair<Boolean, Boolean>>()
 
@@ -100,6 +104,7 @@ internal class TextCollector : PDFTextStripper() {
         rotated.clear()
         markedStack.clear()
         glyphsDrawn = 0
+        invisible = 0
         glyphsMapped = 0
         startPage = pageIndex + 1
         endPage = pageIndex + 1
@@ -277,6 +282,7 @@ internal class TextCollector : PDFTextStripper() {
             val f = fragments[k]
             if (f.text == unicode && abs(f.left - x0) < 0.8f && abs(f.baseline - y0) < 0.8f) return
         }
+        if (renderingMode == RenderingMode.NEITHER) invisible++
         fragments += TextFragment(
             text = unicode,
             left = x0,

@@ -13,9 +13,11 @@ import com.raptibooks.core.structure.analysis.DocumentStats
 import com.raptibooks.core.structure.analysis.OcrDecision
 import com.raptibooks.core.structure.analysis.PageAnalyzer
 import com.raptibooks.core.structure.analysis.PageStructurer
+import com.raptibooks.core.structure.analysis.ScanPage
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.text.GrayImage
 import com.raptibooks.core.structure.text.SymbolRecognizer
+import com.raptibooks.core.structure.text.Vocabulary
 import java.io.File
 
 /** Runs the real extraction + structure + reflow code on PDFs and prints the reflowed book. */
@@ -52,8 +54,14 @@ fun convert(pdf: File) {
     // Like the app: the body size of the whole book from up to 60 pages spread over it
     // (HARNESS_BODY overrides it, e.g. for a few pages cut out of a book).
     val bodySize = System.getenv("HARNESS_BODY")?.toFloatOrNull() ?: surveyBodySize(ex)
+    // (HARNESS_VOCAB=whole book: its words, for pages cut out of it)
+    System.getenv("HARNESS_VOCAB")?.let { book ->
+        val whole = PdfExtractor.open(File(book), File(System.getProperty("java.io.tmpdir"), "harness-scratch"))
+        surveyBodySize(whole)
+        whole.close()
+    }
     println("survey body size: $bodySize")
-    val analyzer = PageAnalyzer(bodySize)
+    val analyzer = PageAnalyzer(bodySize, vocabulary.build())
     val stats = DocumentStats()
     val layouts = (0 until ex.pageCount).map { i ->
         val e = ex.extractPage(i)
@@ -63,7 +71,10 @@ fun convert(pdf: File) {
             e.page.fragments.forEach { println("     frag '${it.text}' x=${it.left}..${it.right} base=${it.baseline} size=${it.fontSize} sw=${it.spaceWidth} font=${it.fontName} glyph=${it.glyph}") }
         }
         // Like the app: symbols without Unicode mapping are identified from their rendering.
-        val page = SymbolRecognizer.recognize(e.page) { r, scale -> renderGray(pdf, i, r, scale) }
+        val page = SymbolRecognizer.recognize(e.page) { r, scale -> renderGray(pdf, i, r, scale) }.let {
+            // and a scan under an OCR text layer gets its ink map
+            if (ScanPage.isScan(it)) ScanPage.withInk(it) { r, scale -> renderGray(pdf, i, r, scale) } else it
+        }
         if (System.getenv("HARNESS_SYMBOLS") != null) {
             e.page.fragments.indices.filter { e.page.fragments[it].text == "\uFFFC" }.forEach {
                 val f = page.fragments[it]
@@ -123,9 +134,14 @@ fun convert(pdf: File) {
     ex.close()
 }
 
+/** The book's words, from the pages of the survey (filled by [surveyBodySize]). */
+val vocabulary = Vocabulary.Builder()
+
 fun surveyBodySize(ex: PdfExtractor): Float? {
     val n = ex.pageCount
     val pages = if (n <= 60) (0 until n).toList() else List(60) { it * (n - 1) / 59 }.distinct()
+    val wordPages = if (n <= 120) (0 until n).toSet() else List(120) { it * (n - 1) / 119 }.toSet()
+    for (i in wordPages) runCatching { ex.extractPage(i).page }.getOrNull()?.let { vocabulary.add(it.fragments) }
     val chars = HashMap<Int, Long>()
     for (i in pages) {
         val page = runCatching { ex.extractPage(i).page }.getOrNull() ?: continue
