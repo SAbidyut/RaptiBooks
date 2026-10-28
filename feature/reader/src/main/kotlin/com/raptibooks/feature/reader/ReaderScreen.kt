@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -159,6 +158,8 @@ private fun Reader(
     var penMenu by rememberSaveable { mutableStateOf(false) }
     var tool by rememberSaveable { mutableStateOf(MarkTool.NONE) }
     var viewer by remember { mutableStateOf<ViewerState?>(null) }
+    // The text of a passage held with two fingers, to select or copy.
+    var copyText by remember { mutableStateOf<String?>(null) }
     var spot by remember { mutableStateOf<NoteSpot?>(null) }
     var noteStep by remember { mutableStateOf(NoteStep.CHOOSE) }
     var openNote by remember { mutableStateOf<Note?>(null) }
@@ -219,8 +220,17 @@ private fun Reader(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                // A sideways swipe opens the original page (and a swipe there comes back).
-                .horizontalSwipe(enabled = tool == MarkTool.NONE) { onOpenOriginal(currentPage) }
+                // One finger held still for two seconds opens the original page (and the same there
+                // comes back); two fingers held on a passage give its text to copy.
+                .holdGestures(
+                    enabled = tool == MarkTool.NONE,
+                    onHold = { onOpenOriginal(currentPage) },
+                    onTwoFingerHold = { at ->
+                        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { at.y.roundToInt() in it.offset until it.offset + it.size }
+                        copyText = item?.let { pictureBookText(source.peek(it.index)) ?: source.peek(it.index)?.plainText }
+                            ?.trim()?.takeIf { it.isNotEmpty() }
+                    },
+                )
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = { pos ->
@@ -283,16 +293,13 @@ private fun Reader(
                                 ),
                         ) {
                             Box(Modifier.fillMaxWidth().padding(end = strip)) {
-                                // (a long press selects words to copy)
-                                SelectionContainer {
-                                    BlockView(
-                                        block, style, vm.highlight,
-                                        onContentsClick = { title ->
-                                            scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
-                                        },
-                                    ) { path, caption, equation, blockIndex ->
-                                        viewer = ViewerState(path, caption, equation, blockIndex, penMenu, pictureBookText(source.peek(blockIndex)))
-                                    }
+                                BlockView(
+                                    block, style, vm.highlight,
+                                    onContentsClick = { title ->
+                                        scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
+                                    },
+                                ) { path, caption, equation, blockIndex ->
+                                    viewer = ViewerState(path, caption, equation, blockIndex, penMenu, pictureBookText(source.peek(blockIndex)))
                                 }
                             }
                             if (!pins.isNullOrEmpty()) NotesLayer(pins, onOpen = { openNote = it }, modifier = Modifier.matchParentSize())
@@ -474,6 +481,7 @@ private fun Reader(
         Panel.INFO -> BookInfoDialog(book, onDismiss = { panel = Panel.NONE })
         Panel.NONE -> Unit
     }
+    copyText?.let { TextCopyDialog(it, onClose = { copyText = null }) }
     viewer?.let { v ->
         ImageViewer(
             path = v.path, caption = v.caption, equation = v.equation,

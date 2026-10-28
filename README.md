@@ -130,8 +130,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
 - **Reader**: Light / Sepia / Dark / Black themes; bundled Tiro Bangla (serif) and Hind
   Siliguri (sans) fonts that cover Bangla and Latin, plus system fonts; text size, line
   spacing, margins, justification; contents, bookmarks,
-  in-book search with highlights; zoomable figures; **copying text**: a long press selects
-  words in any paragraph, heading, list or table to copy, and "Copy text" in the picture
+  in-book search with highlights; zoomable figures; **copying text**: two fingers held on a
+  paragraph, heading, list item or table give its text to select a part of or copy whole (one
+  finger never selects, so reading and scrolling stay undisturbed), and "Copy text" in the picture
   viewer reads the text printed in a figure, formula or page kept as a picture (offline OCR)
   and shows it to select or copy, beside the text the book's text layer has for it; **marking pen** (tap the right edge: red / blue / yellow / green and an eraser; draw along
   words or loop around a passage — in text, tables and answer options — to underline it in that colour; on pictures a
@@ -139,8 +140,8 @@ screen. Bangla and English are both first-class, and everything runs offline.
   anywhere in the book and leave a voice recording or a written note there, shown as a pin in the free strip beside the text with an arrow to the place, so the text stays readable; tap the pin to open it again;
   status and navigation bars always stay visible, so swiping home never scrolls the page; horizontally scrollable tables; resume
   position; keep-screen-on; **original PDF page view** with pinch zoom and a jump back to the
-  reflowed text at the same page: a quick sideways swipe on the text opens the original page,
-  and one there comes back; a double tap on an original page zooms its printed part to the
+  reflowed text at the same page: one finger held still on the text for two seconds opens the
+  original page, and the same there comes back; a double tap on an original page zooms its printed part to the
   width of the screen (the tapped line stays put), another zooms back out.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page
   analyses are cached on disk, images are never decoded during analysis, fonts are kept only
