@@ -18,6 +18,7 @@ import com.raptibooks.core.structure.text.BijoyConverter
 import com.raptibooks.core.structure.text.OcrWords
 import com.raptibooks.core.structure.text.TextQuality
 import com.raptibooks.core.structure.text.Vocabulary
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -48,7 +49,8 @@ class PageAnalyzer(
         lineBuilder.explicitSpacesHint = if (solid < 20) null else spaces * 30 >= solid
         // (on a scan, rules are the lines of drawings CVISION traced: its tables are in its ink)
         val ruled = if (page.fromOcr || page.ink != null) emptyList() else tableDetector.detectRuled(page)
-        val remaining = page.fragments.filter { f ->
+        val fragments = if (page.ink != null) ScanPage.dashes(page.fragments) else page.fragments
+        val remaining = fragments.filter { f ->
             val cx = (f.left + f.right) / 2f
             val cy = (f.top + f.bottom) / 2f
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
@@ -56,6 +58,12 @@ class PageAnalyzer(
         val built = lineBuilder.build(remaining, splitColumns = true).let { if (page.ink != null) ScanPage.lineEndHyphens(it) else it }.let {
             // (text read by an OCR: ours, or the one under a scanned page)
             if (vocabulary != null && (page.fromOcr || page.ink != null)) OcrWords.fix(it, vocabulary) else it
+        }.let { ls ->
+            // (on a scan, what the OCR made of a drawing's big labels, "~gCm1- 16cm---", set in a
+            // heading's size: no word of the book in it, and no heading)
+            val body = bodySizeHint
+            if (page.ink == null || vocabulary == null || vocabulary.isEmpty || body == null) ls
+            else ls.filter { l -> l.fontSize <= body * 1.25f || OcrWords.hasWord(l.text, vocabulary) || CHAPTER_NUMBER.matches(l.text) }
         }
         val (bulleted, bulletPaths) = attachGraphicBullets(built, page)
         // Words whose text is garbage (Arabic read by a Latin-only OCR) are shown as printed, and
@@ -212,6 +220,9 @@ class PageAnalyzer(
     }
 
     companion object {
+        /** A chapter's number set big on its opening page. */
+        private val CHAPTER_NUMBER = Regex("^\\s*[0-9]{1,2}\\s*$")
+
         /** Smaller text is not meant to be read (hidden markers). */
         const val MIN_VISIBLE_SIZE = 2.5f
 
@@ -277,13 +288,24 @@ internal fun attachGraphicBullets(lines: List<TextLine>, page: RawPage): Pair<Li
             b.width / b.height in 0.5f..2f && (p.shape == PathShape.COMPLEX || p.shape == PathShape.RECTANGLE) &&
             keys.none { k -> k !== p && k.bounds.outset(0.5f).contains(b) }
     }
+    // A bullet stands alone: not a piece of an icon (the "e2d" beside a design problem, whose
+    // pieces touch) or an arrowhead on its wire. (The panel of a box around the list is behind
+    // it, and the same shape drawn twice, filled and stroked, is one.)
+    fun alone(p: VectorPath): Boolean {
+        val b = p.bounds
+        return page.paths.none { q ->
+            val o = q.bounds
+            q !== p && o.verticalOverlap(b) > 0f && max(o.left - b.right, b.left - o.right) < 1.5f && !o.outset(0.5f).contains(b) &&
+                !(abs(o.left - b.left) < 1f && abs(o.right - b.right) < 1f && abs(o.top - b.top) < 1f && abs(o.bottom - b.bottom) < 1f)
+        }
+    }
     if (candidates.isEmpty()) return lines to emptySet()
     val used = HashSet<VectorPath>()
     val out = lines.map { line ->
         val em = line.fontSize
         val bullet = candidates.firstOrNull { p ->
             p !in used && line.bounds.left - p.bounds.right in 0.5f..em * 2.2f &&
-                p.bounds.centerY in line.bounds.top..line.bounds.bottom && p.bounds.height <= em * 0.8f
+                p.bounds.centerY in line.bounds.top..line.bounds.bottom && p.bounds.height <= em * 0.8f && alone(p)
         }
         if (bullet == null) {
             line

@@ -119,7 +119,7 @@ fun convert(pdf: File) {
     println("profile: body=${profile.bodySize} headings=${profile.headingSizes} visualOrder=${profile.visualOrder} lang=${profile.language}")
     val structurer = PageStructurer(profile)
     val blocks = mutableListOf<ContentBlock>()
-    val engine = ReflowEngine { blocks += it }
+    val engine = ReflowEngine(keepsHyphen = profile::keepsHyphen) { blocks += it }
     layouts.forEach { engine.addPage(structurer.structure(it)) }
     val headings = engine.finish()
     val toc = TocBuilder.build(ex.outline().map { OutlineItem(it.title, it.pageIndex, it.level) }, headings, engine.pageStarts(), engine.blockCount, engine.printedContents())

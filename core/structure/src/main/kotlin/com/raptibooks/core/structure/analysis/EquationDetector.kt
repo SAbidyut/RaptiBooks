@@ -213,6 +213,7 @@ class EquationDetector {
             if (f.words == 0 && !f.number && free(l.bounds) && l.bounds.coveredBy(r.bounds) >= 0.9f) r.lines += l
         }
         if (absorbRowLabels(regions, lines, bodySize, proseLefts)) mergeOverlapping(regions, bodySize)
+        numberRows(regions, lines, feats, page, free)
 
         val out = mutableListOf<FigureRegion>()
         val absorbed = HashSet<TextLine>()
@@ -350,6 +351,67 @@ class EquationDetector {
     }
 
     /**
+     * The numbers printed beside a formula put together from its rows: "(9.9)" set between the
+     * two identities it numbers (level with neither row), and two numbered formulas taken in as
+     * one ("(4.9.2)" and "(4.9.3)"), which become two formulas again, each with its number.
+     */
+    private fun numberRows(regions: MutableList<Region>, lines: List<TextLine>, feats: Map<TextLine, Feat>, page: RawPage, free: (Rect) -> Boolean) {
+        val taken = regions.mapNotNullTo(HashSet()) { it.number }
+        for (r in regions.toList()) {
+            val numbers = lines.filter { l ->
+                feats.getValue(l).number && free(l.bounds) && (l === r.number || (l !in taken && regions.none { l in it.lines })) &&
+                    l.bounds.left >= r.bounds.right - 1f && l.bounds.left - r.bounds.right <= page.width * 0.45f &&
+                    l.bounds.centerY in r.bounds.top..r.bounds.bottom
+            }.sortedBy { it.bounds.centerY }
+            if (numbers.isEmpty()) continue
+            if (numbers.size == 1) {
+                if (r.number == null) {
+                    r.number = numbers[0]
+                    taken += numbers[0]
+                }
+                continue
+            }
+            // each number takes the rows nearest to it
+            val cuts = numbers.zipWithNext { a, b -> (a.bounds.centerY + b.bounds.centerY) / 2f }
+            fun part(y: Float) = cuts.count { y > it }
+            val parts = numbers.map { Region(it.bounds).also { p -> p.number = it } }
+            for (l in r.lines) {
+                val p = parts[part(l.bounds.centerY)]
+                p.lines += l
+                if (l in r.labels) p.labels += l
+                if (l in r.wordy) p.wordy += l
+            }
+            for (b in r.bars) parts[part(b.bounds.centerY)].bars += b
+            if (parts.any { p -> p.lines.none { it !in p.labels } }) continue
+            for (p in parts) p.bounds = Rect.bounding(p.lines.map { it.bounds } + p.bars.map { it.bounds })!!
+            regions.remove(r)
+            regions += parts
+            taken += numbers
+        }
+        // A number between two formulas, level with neither ("(2.52)" beside a fraction and the
+        // "= …" under it): the two are one formula with that number.
+        for (n in lines) {
+            if (!feats.getValue(n).number || n in taken || regions.any { n in it.lines } || !free(n.bounds)) continue
+            val y = n.bounds.centerY
+            val near = regions.filter { r ->
+                r.number == null && n.bounds.left >= r.bounds.right - 1f && n.bounds.left - r.bounds.right <= page.width * 0.45f &&
+                    max(r.bounds.top - y, y - r.bounds.bottom) <= n.fontSize * 1.2f
+            }
+            val above = near.filter { it.bounds.centerY < y }.maxByOrNull { it.bounds.bottom } ?: continue
+            val below = near.filter { it.bounds.centerY > y }.minByOrNull { it.bounds.top } ?: continue
+            if (below.bounds.top - above.bounds.bottom > n.fontSize * 1.6f || above.bounds.horizontalOverlap(below.bounds) <= 0f) continue
+            above.lines += below.lines
+            above.labels += below.labels
+            above.wordy += below.wordy
+            above.bars += below.bars
+            above.bounds = above.bounds.union(below.bounds)
+            above.number = n
+            regions.remove(below)
+            taken += n
+        }
+    }
+
+    /**
      * "However,", "so that", "and", "resulting in" printed level with the lines of a derivation,
      * to the left of its formulas: the words belong to the derivation's picture.
      */
@@ -478,6 +540,7 @@ class EquationDetector {
                 "substituting|solving|but|now|again|note that|i\\.e\\.)[,:]?\\s",
         )
         val ROW_LABEL = Regex("^\\p{L}+,?(?:\\s+\\p{L}+,?){0,2}$")
-        val EQ_NUMBER = Regex("\\(\\s*[0-9০-৯]{1,3}(?:[.\\-][0-9০-৯]{1,3}){0,2}[a-z]?\\s*\\)")
+        /** "(1.6)", "(4.9.2)", "(2.44b)", and in an appendix "(A.12)", "(E.3.3)". */
+        val EQ_NUMBER = Regex("\\(\\s*(?:[0-9০-৯]{1,3}(?:[.\\-][0-9০-৯]{1,3}){0,2}|[A-Z](?:[.\\-][0-9]{1,3}){1,2})[a-z]?\\s*\\)")
     }
 }

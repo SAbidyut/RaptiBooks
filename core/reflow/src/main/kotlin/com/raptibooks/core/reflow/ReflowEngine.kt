@@ -32,6 +32,8 @@ import kotlin.math.abs
 class ReflowEngine(
     /** The rendered word pictures of the book, by number (see [InlinePicture]). */
     private val pictureOf: (Int) -> PictureRegion? = { null },
+    /** Whether a word broken at a hyphen across a page is a hyphenated word ("three-phase"). */
+    private val keepsHyphen: (String, String) -> Boolean = { _, _ -> false },
     private val sink: (ContentBlock) -> Unit,
 ) {
 
@@ -409,11 +411,14 @@ class ReflowEngine(
     }
 
     private fun merge(a: StructuredElement.Paragraph, b: StructuredElement.Paragraph): StructuredElement.Paragraph {
-        val dehyphenate = a.text.endsWith("-") && a.text.length > 1 && a.text[a.text.length - 2].isLetter() &&
+        val broken = a.text.endsWith("-") && a.text.length > 1 && a.text[a.text.length - 2].isLetter() &&
             a.text[a.text.length - 2].code < 0x250 && b.text.first().isLowerCase()
         val joined: String
         val offset: Int
-        if (dehyphenate) {
+        if (broken && keepsHyphen(a.text.dropLast(1), b.text)) {
+            joined = a.text + b.text
+            offset = a.text.length
+        } else if (broken) {
             joined = a.text.dropLast(1) + b.text
             offset = a.text.length - 1
         } else {

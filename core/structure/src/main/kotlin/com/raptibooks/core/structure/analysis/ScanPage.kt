@@ -6,6 +6,7 @@ import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.InkMap
 import com.raptibooks.core.structure.raw.RawPage
+import com.raptibooks.core.structure.raw.TextFragment
 import com.raptibooks.core.structure.text.GrayImage
 import com.raptibooks.core.structure.text.TextCleaner
 import com.raptibooks.core.structure.text.UnreadableText
@@ -519,6 +520,42 @@ object ScanPage {
         out += Rect(b.bounds.left, top, b.bounds.right, b.bounds.bottom) to pending.firstOrNull()
         return out
     }
+
+    /**
+     * Dashes the OCR read as a hyphen: "machines—both", "torque–speed" come as "-" with the rest
+     * of the dash left as a gap before the next word, and no space between them (the OCR puts a
+     * space where there is one: "two- and three-phase"). The gap tells the dash, and no space
+     * goes in it.
+     */
+    fun dashes(fragments: List<TextFragment>): List<TextFragment> {
+        var out: MutableList<TextFragment>? = null
+        for (i in 1 until fragments.size - 1) {
+            val f = fragments[i]
+            if (f.text != "-" && f.text != "−") continue
+            val prev = fragments[i - 1]
+            val next = fragments[i + 1]
+            val em = f.fontSize
+            if (!prev.text.last().isLetter() || !next.text.first().isLetter()) continue
+            if (abs(prev.baseline - f.baseline) > em * 0.25f || abs(next.baseline - f.baseline) > em * 0.25f) continue
+            if (f.left - prev.right > em * 0.15f) continue
+            val gap = next.left - f.right
+            if (gap < em * 0.12f || gap > em * 1.5f) continue
+            // ("two- and three-phase": a hyphen and a space the OCR left out)
+            val word = StringBuilder()
+            var k = i + 1
+            while (k < fragments.size && fragments[k].text.all { it.isLetter() } && fragments[k].text.isNotEmpty() && word.length < 8 &&
+                (k == i + 1 || fragments[k].left - fragments[k - 1].right < em * 0.15f)
+            ) word.append(fragments[k++].text)
+            if (word.toString().lowercase() in SUSPENDED) continue
+            // (an en dash, "torque–speed", is kept as the hyphen it is typed as)
+            val dash = if (next.left - f.left <= em * 0.8f) "-" else "—"
+            val list = out ?: fragments.toMutableList().also { out = it }
+            list[i] = TextFragment(dash, f.left, f.top, next.left - 0.1f, f.bottom, f.baseline, f.fontSize, f.fontName, f.bold, f.italic, f.spaceWidth, f.glyph)
+        }
+        return out ?: fragments
+    }
+
+    private val SUSPENDED = setOf("and", "or", "nor", "to", "through")
 
     /** Lines ending in a word broken by a hyphen the text layer has no character for ("rela￼"). */
     fun lineEndHyphens(lines: List<TextLine>): List<TextLine> = lines.map { l ->

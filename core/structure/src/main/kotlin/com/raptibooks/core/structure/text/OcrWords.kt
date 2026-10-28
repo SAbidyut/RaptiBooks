@@ -119,13 +119,18 @@ object OcrWords {
         return null
     }
 
+    private val WORD = Regex("[A-Za-z]{3,}")
+
+    /** Whether [text] holds a word of the book (one it prints more than once). */
+    fun hasWord(text: String, vocab: Vocabulary): Boolean = WORD.findAll(text).any { vocab.count(it.value) >= 2 }
+
     /** "ofa", "ofthe", "ofMATLAB": two words read as one. */
     private val JOINED = Regex("^(?:[Oo]f(?:a|an|the)|OF(?:A|AN|THE)|[Oo]f[A-Z][A-Za-z]+)$")
 
-    /** A figure's label as the OCR read it: '""GURE l-S' for "FIGURE 1-5", "FlGURES-9" for "FIGURE 5-9", "H GURE 2-11", "fo'IGURE 1-8", '""GURE \-10', "FIGURE PI- IS" for "FIGURE P1-15", "HGURE )'1-3" for "FIGURE P1-3", '""GURE 7-1J' for "FIGURE 7-13". */
-    private val FIGURE_LABEL = Regex("^\\s*\\S{0,4}\\s?GURE\\s*(P|\\)'?)?([0-9lIOSoBJZ\\\\|]{1,2})\\s*([-–—]+)\\s*([0-9lIOSoBJZ\\\\|]{1,3})(?![A-Za-z0-9])")
+    /** A figure's label as the OCR read it: '""GURE l-S' for "FIGURE 1-5", "FlGURES-9" for "FIGURE 5-9", "H GURE 2-11", "fo'IGURE 1-8", '""GURE \-10', "FIGURE PI- IS" for "FIGURE P1-15", "HGURE )'1-3" for "FIGURE P1-3", '""GURE 7-1J' for "FIGURE 7-13", '""GURE 1'1-6' for "FIGURE P1-6", "FIGURE Pi- IO" for "FIGURE P1-10". */
+    private val FIGURE_LABEL = Regex("^\\s*\\S{0,4}\\s?GURE\\s*(P|\\)'?|[1lI]')?([0-9lIiOSoBJZ\\\\|]{1,2})\\s*([-–—]+)\\s*([0-9lIiOSoBJZ\\\\|]{1,3})(?![A-Za-z0-9])")
 
-    private fun digits(s: String) = s.map { c -> when (c) { 'l', 'I', '\\', '|' -> '1'; 'O', 'o' -> '0'; 'S' -> '5'; 'B' -> '8'; 'J' -> '3'; 'Z' -> '2'; else -> c } }.joinToString("")
+    private fun digits(s: String) = s.map { c -> when (c) { 'l', 'I', 'i', '\\', '|' -> '1'; 'O', 'o' -> '0'; 'S' -> '5'; 'B' -> '8'; 'J' -> '3'; 'Z' -> '2'; else -> c } }.joinToString("")
 
     /** The lines with their misread words put right. */
     fun fix(lines: List<TextLine>, vocab: Vocabulary): List<TextLine> {

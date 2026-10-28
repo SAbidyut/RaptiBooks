@@ -21,7 +21,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
     heads that change with every section but carry the page number, "A BRIEF HISTORY ⏐ 3");
     titles printed twice for a shadow effect are read once;
   - headings from font-size levels, bold lines, "Chapter/অধ্যায়" and "2.3"-style numbering;
-  - paragraphs re-joined across lines, columns and page breaks, with de-hyphenation;
+  - paragraphs re-joined across lines, columns and page breaks, with de-hyphenation (a word
+    the book prints with its hyphen, "three-phase", keeps it at a line break); glossaries
+    whose entries hang from a bold term are one paragraph per entry;
   - lists (bullets, including vector-drawn ones; 1. / a) / ক) / ১। enumerators);
   - tables: ruled grids, rule-delimited tables and column-aligned text → real tables, plus a
     snapshot of the printed table;
@@ -33,7 +35,10 @@ screen. Bangla and English are both first-class, and everything runs offline.
   - **display equations**: stacked fractions, integral/sum limits, boxed and numbered formulas
     become one picture of the formula (an ink mask drawn in the theme's text colour, at the
     size of the body text, scrolling sideways when wider than the screen) with the equation
-    number beside it; stacked formulas are never mistaken for tables;
+    number beside it (also a number set between the rows it numbers, two numbered rows
+    become two formulas, and appendix numbers such as "(A.12)"); the pieces of a formula's
+    row set wide apart ("5i = 20  ⇒  i = 4 A") stay one line; stacked formulas are never
+    mistaken for tables;
   - **worked examples**: the steps of a calculation printed as a centred column ("I = V/R",
     "= 230/460", "= 0.5 A") become one picture of the whole derivation; the question,
     "প্রদত্ত/Given", "নির্ণেয়", "সমাধান" and "উত্তর/Answer" lines stay separate paragraphs; a
@@ -64,8 +69,10 @@ screen. Bangla and English are both first-class, and everything runs offline.
     pages;
   - **textbook layouts** (e.g. *Fundamentals of Electric Circuits*): section numbers printed
     apart from their titles ("1.2 | Systems of Units") and chapter openers ("c h a p t e r",
-    a huge "1" and the title) become proper headings; bold exercise numbers ("2.13") hang like
-    list markers; equation numbers stay with their formula; circuit diagrams (wires, resistor
+    a huge "1" and the title) become proper headings; bold exercise numbers ("2.13") and
+    chapter-dash numbers ("1-10.") hang like list markers, with every line of the problem;
+    an icon beside a problem ("e2d") is no bullet; an "Example 10.7" banner beside the first
+    line of its question comes before it; equation numbers stay with their formula; circuit diagrams (wires, resistor
     bars, arrowheads) are never read as tables; figures of a two-column exercise page stay in
     their own column; tables in the margin column, centred bold header cells, exponents such
     as 10⁻¹² and two-line captions ("TABLE 1.2" + description) are kept together;
@@ -113,7 +120,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
     printed with their numbers, and words the OCR misread the way OCRs do ("transfonner",
     "1lle", "nux", "detennine") are put right when the book prints the right word (or its
     family: "determined") elsewhere; such a book's per-page OCR fonts are parsed once, not
-    once a page, so it converts in steady memory;
+    once a page, so it converts in steady memory; dashes the OCR read as a hyphen and a gap
+    ("machines- both") are dashes again, and its junk set as big as a heading (a drawing's
+    labels) is no heading;
   - table of contents from the PDF outline, else from the printed contents page, else from
     detected headings;
   - tables keep superscripts and subscripts (10¹⁸, 10⁻³); wide tables scroll sideways with a

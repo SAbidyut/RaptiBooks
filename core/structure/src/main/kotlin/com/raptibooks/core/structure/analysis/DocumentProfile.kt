@@ -19,6 +19,9 @@ class DocumentStats {
     private var preBaseTotal = 0
     private var bengaliLetters = 0L
     private var latinLetters = 0L
+    /** Words joined by a hyphen inside a line ("three-phase"), and words as such, by count. */
+    private val compounds = HashMap<String, Int>()
+    private val words = HashMap<String, Int>()
     var pageCount = 0
         private set
     var pagesWithText = 0
@@ -54,6 +57,15 @@ class DocumentStats {
             val (bn, la) = BanglaText.scriptCounts(l.text)
             bengaliLetters += bn
             latinLetters += la
+            for (m in COMPOUND.findAll(l.text)) {
+                if (m.range.last >= l.text.trimEnd().length - 1) continue
+                val key = m.value.lowercase()
+                compounds[key] = (compounds[key] ?: 0) + 1
+            }
+            for (m in WORD.findAll(l.text)) {
+                val key = m.value.lowercase()
+                words[key] = (words[key] ?: 0) + 1
+            }
         }
         for (t in layout.tables) for (row in t.rows) for (cell in row) {
             val (bn, la) = BanglaText.scriptCounts(cell)
@@ -94,7 +106,9 @@ class DocumentStats {
             bengaliLetters + latinLetters == 0L -> "unknown"
             else -> "bn+en"
         }
-        return DocumentProfile(body, reps.take(3), repeated, visual, language, folio)
+        // ("three-phase" printed so, never "threephase": a hyphen at the end of a line in it stays)
+        val hyphenated = compounds.filter { (k, n) -> n >= 2 && (words[k.replace("-", "")] ?: 0) * 2 < n }.keys
+        return DocumentProfile(body, reps.take(3), repeated, visual, language, folio, hyphenated)
     }
 
     companion object {
@@ -106,6 +120,9 @@ class DocumentStats {
             l.bounds.top >= pageHeight * 0.9f -> "B|"
             else -> null
         }
+
+        private val COMPOUND = Regex("(?<![\\p{L}-])\\p{Ll}{2,}-\\p{Ll}{2,}(?![\\p{L}-])")
+        private val WORD = Regex("(?<![\\p{L}-])\\p{Ll}{4,}(?![\\p{L}-])")
 
         private val LEADING_NUMBER = Regex("^\\s*(\\d{1,4})(?!\\d|[.,]\\d)")
         private val TRAILING_NUMBER = Regex("(?<![\\d.,])(\\d{1,4})\\s*$")
@@ -126,7 +143,16 @@ class DocumentProfile(
     val language: String,
     /** Offsets (page number − page index) of the page numbers printed in running heads. */
     private val folioOffsets: Set<Int> = emptySet(),
+    /** Words the book prints with a hyphen ("three-phase"), never joined. */
+    private val hyphenated: Set<String> = emptySet(),
 ) {
+    /** Whether "[before]-" at the end of a line and "[after]" on the next are one hyphenated word. */
+    fun keepsHyphen(before: String, after: String): Boolean {
+        val a = before.takeLastWhile { it.isLetter() }
+        val b = after.takeWhile { it.isLetter() }
+        return a.length >= 2 && b.length >= 2 && "$a-$b".lowercase() in hyphenated
+    }
+
     fun headingLevelForSize(size: Float): Int? {
         if (size < bodySize * 1.15f) return null
         headingSizes.forEachIndexed { i, rep -> if (size >= rep * 0.94f) return i + 1 }

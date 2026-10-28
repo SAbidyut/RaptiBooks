@@ -151,7 +151,7 @@ class ConversionPipeline(
                 val batch = ArrayList<ContentBlock>(256)
                 // the word pictures of every page read so far (a paragraph may run on)
                 val pictures = HashMap<Int, PictureRegion>()
-                val engine = ReflowEngine({ pictures[it] }) { block ->
+                val engine = ReflowEngine({ pictures[it] }, profile::keepsHyphen) { block ->
                     batch += block
                     if (batch.size >= 200) {
                         content.insertBlocks(bookId, batch)
@@ -617,7 +617,7 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 10
+        const val LAYOUT_VERSION = 11
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60
