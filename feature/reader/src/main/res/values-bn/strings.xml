@@ -64,6 +64,13 @@
     <string name="table_show_original">ছাপানো রূপে দেখুন</string>
     <string name="table_show_text">সারণি হিসেবে দেখুন</string>
     <string name="image_close">বন্ধ</string>
+    <string name="image_text">লেখা কপি</string>
+    <string name="image_text_title">ছবির লেখা</string>
+    <string name="image_text_reading">লেখা পড়া হচ্ছে…</string>
+    <string name="image_text_none">ছবিতে কোনো লেখা পাওয়া যায়নি।</string>
+    <string name="image_text_book">বইয়ের লেখা থেকে</string>
+    <string name="text_copy">কপি</string>
+    <string name="text_copied">কপি হয়েছে</string>
     <string name="info_pages">পৃষ্ঠা</string>
     <string name="info_language">ভাষা</string>
     <string name="info_ocr">লেখা শনাক্তকরণ (OCR)</string>

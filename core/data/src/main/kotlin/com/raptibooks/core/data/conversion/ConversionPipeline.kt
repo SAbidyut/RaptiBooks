@@ -104,6 +104,13 @@ class ConversionPipeline(
                 if (pageCount == 0) throw ConversionException(context.getString(com.raptibooks.core.data.R.string.error_no_pages))
                 if (book.pageCount != pageCount) books.updateMetadata(bookId, null, null, pageCount)
                 val cacheDir = files.pageCache(bookId)
+                // Pages analysed by an older version (a conversion interrupted before an update)
+                // are analysed again.
+                val stamp = File(cacheDir, "version.txt")
+                if (runCatching { stamp.readText() }.getOrNull() != LAYOUT_VERSION.toString()) {
+                    cacheDir.listFiles()?.forEach { it.delete() }
+                    runCatching { stamp.writeText(LAYOUT_VERSION.toString()) }
+                }
                 val figuresDir = files.figures(bookId)
                 val stats = DocumentStats()
                 var usedOcr = false
@@ -199,8 +206,16 @@ class ConversionPipeline(
         val extraction = try {
             extractor.extractPage(index)
         } catch (e: OutOfMemoryError) {
+            // (once more with the memory collected: a page left without its text becomes a picture)
             System.gc()
-            null
+            try {
+                extractor.extractPage(index)
+            } catch (e: OutOfMemoryError) {
+                System.gc()
+                null
+            } catch (e: Exception) {
+                null
+            }
         } catch (e: Exception) {
             null
         }
@@ -260,11 +275,20 @@ class ConversionPipeline(
                 raw
             }
         }
-        var layout = try {
-            PageAnalyzer(bodySize, vocabulary).analyze(raw)
+        fun analyse(page: RawPage): PageLayout? = try {
+            PageAnalyzer(bodySize, vocabulary).analyze(page)
         } catch (e: Exception) {
-            PageLayout(index, w, h, emptyList(), emptyList(), emptyList(), raw.fromOcr, 0)
+            null
+        } catch (e: StackOverflowError) {
+            null
+        } catch (e: OutOfMemoryError) {
+            System.gc()
+            null
         }
+        // (a scan whose ink could not be read keeps its text: no picture of the whole page)
+        var layout = analyse(raw)
+            ?: raw.takeIf { it.ink != null }?.let { analyse(ScanPage.withoutInk(it)) }
+            ?: PageLayout(index, w, h, emptyList(), emptyList(), emptyList(), raw.fromOcr, 0)
         val hasContent = layout.lines.isNotEmpty() || layout.tables.isNotEmpty() || layout.figures.isNotEmpty()
         val visualOnly = raw.images.isNotEmpty() || raw.paths.size > 20 || extraction == null || wantOcr
         if ((!hasContent && visualOnly) || lowConfidence) {
@@ -272,7 +296,7 @@ class ConversionPipeline(
             layout = PageLayout(index, w, h, emptyList(), listOf(FigureRegion(Rect(0f, 0f, w, h), FigureKind.SCAN)), emptyList(), raw.fromOcr, 0)
         }
         try {
-            renderFigures(index, layout, renderer, pageBitmap, figuresDir, lowMemory)
+            renderFigures(index, layout, renderer, pageBitmap, figuresDir, lowMemory, scanned = raw.ink != null)
         } finally {
             pageBitmap?.recycle()
         }
@@ -328,7 +352,7 @@ class ConversionPipeline(
         }
     }
 
-    private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File, lowMemory: Boolean) {
+    private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File, lowMemory: Boolean, scanned: Boolean) {
         layout.figures.forEachIndexed { k, f ->
             val equation = f.kind == FigureKind.EQUATION
             val photo = f.kind != FigureKind.VECTOR && !equation
@@ -339,7 +363,7 @@ class ConversionPipeline(
                 f.kind == FigureKind.SCAN -> 2.2f
                 equation -> if (lowMemory) 4f else 7f
                 else -> if (lowMemory) 3f else 5f
-            }
+            }.let { if (scanned) minOf(it, SCAN_SCALE) else it }
             val maxWidth = when {
                 f.kind == FigureKind.SCAN -> 1400
                 lowMemory -> 1600
@@ -593,10 +617,16 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 9
+        const val LAYOUT_VERSION = 10
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60
+
+        /**
+         * Pixels per point of a scanned page's figures and formulas: a scan has no more detail
+         * than its 300 dpi, a larger picture only costs time and memory.
+         */
+        private const val SCAN_SCALE = 300f / 72f
 
         /** Pages read for the book's words (see [Vocabulary]). */
         private const val VOCABULARY_PAGES = 120

@@ -57,6 +57,12 @@ object ScanPage {
         )
     }
 
+    /** [page] without its [InkMap]: its text alone. */
+    fun withoutInk(page: RawPage): RawPage = RawPage(
+        page.index, page.width, page.height, page.fragments, page.images, page.paths, page.rotatedText, page.fromOcr,
+        page.ocrPictures, null, page.invisibleText,
+    )
+
     /** "(1-7)", "( 1-21)", "(I- 25b)", "(3--4)", "(1 -1 0)": an equation's number as the OCR read it. */
     private val EQ_NUMBER = Regex("^\\(\\s*[0-9IlA-Z]{1,2}\\s*[-–—−]+\\s*[0-9Il](?:\\s?[0-9Il]){0,2}[a-z]?\\s*\\)$")
 

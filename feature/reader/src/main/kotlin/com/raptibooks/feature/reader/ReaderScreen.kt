@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -83,7 +84,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.raptibooks.core.data.appContainer
+import com.raptibooks.core.model.ContentBlock
+import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.TableBlock
 import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.ui.RaptiIcons
@@ -129,7 +133,7 @@ private enum class Panel { NONE, CONTENTS, SETTINGS, SEARCH, INFO }
 private enum class NoteStep { CHOOSE, WRITE, RECORD }
 
 /** A picture opened full screen; [block] is where the user's drawing on it is kept. */
-private class ViewerState(val path: String, val caption: String?, val equation: Boolean, val block: Int, val pen: Boolean)
+private class ViewerState(val path: String, val caption: String?, val equation: Boolean, val block: Int, val pen: Boolean, val text: String? = null)
 
 /** A place in the book chosen for a new note. */
 private class NoteSpot(val block: Int, val page: Int, val x: Float, val y: Float)
@@ -277,12 +281,17 @@ private fun Reader(
                                 ),
                         ) {
                             Box(Modifier.fillMaxWidth().padding(end = strip)) {
-                                BlockView(
-                                    block, style, vm.highlight,
-                                    onContentsClick = { title ->
-                                        scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
-                                    },
-                                ) { path, caption, equation, blockIndex -> viewer = ViewerState(path, caption, equation, blockIndex, penMenu) }
+                                // (a long press selects words to copy)
+                                SelectionContainer {
+                                    BlockView(
+                                        block, style, vm.highlight,
+                                        onContentsClick = { title ->
+                                            scope.launch { vm.contentsTarget(title, block.index, ready.toc)?.let { listState.animateScrollToItem(it) } }
+                                        },
+                                    ) { path, caption, equation, blockIndex ->
+                                        viewer = ViewerState(path, caption, equation, blockIndex, penMenu, pictureBookText(source.peek(blockIndex)))
+                                    }
+                                }
                             }
                             if (!pins.isNullOrEmpty()) NotesLayer(pins, onOpen = { openNote = it }, modifier = Modifier.matchParentSize())
                         }
@@ -472,6 +481,8 @@ private fun Reader(
             onDraw = { color, line -> vm.addInk(v.block, color, line) },
             onErase = vm::eraseInk,
             onClose = { viewer = null },
+            bookText = v.text,
+            readText = { vm.pictureText(v.path) },
         )
     }
 }
@@ -575,4 +586,11 @@ internal fun Context.findActivity(): Activity? {
         c = c.baseContext
     }
     return null
+}
+
+/** The text the book's text layer has for a block shown as a picture: a formula's, a table's. */
+private fun pictureBookText(block: ContentBlock?): String? = when (block) {
+    is ImageBlock -> block.altText
+    is TableBlock -> block.rows.joinToString("\n") { r -> r.joinToString("\t") }
+    else -> null
 }

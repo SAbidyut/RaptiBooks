@@ -11,6 +11,17 @@ import kotlin.math.max
 class Vocabulary(private val counts: Map<String, Int>) {
     fun count(word: String): Int = counts[word.lowercase()] ?: 0
 
+    private val sorted: Array<String> by lazy { counts.keys.sorted().toTypedArray() }
+
+    /** How often words beginning with [prefix] occur ("determin": determined, determines...). */
+    fun countPrefix(prefix: String): Int {
+        val p = prefix.lowercase()
+        var i = sorted.binarySearch(p).let { if (it < 0) -it - 1 else it }
+        var n = 0
+        while (i < sorted.size && sorted[i].startsWith(p)) n += counts[sorted[i++]] ?: 0
+        return n
+    }
+
     val isEmpty: Boolean get() = counts.isEmpty()
 
     /** One word and its count per line, for a cache file. */
@@ -83,6 +94,10 @@ object OcrWords {
             while (i >= 0) {
                 val one = lower.substring(0, i) + "rm" + lower.substring(i + 2)
                 if (vocab.count(one) >= max(1, own / 10)) return cased(one)
+                // (a long word the pages read never print right: its family does, "detennine"
+                // beside "determined" and "determines")
+                val stem = one.dropLast(2)
+                if (stem.length >= 6 && i + 2 <= stem.length && vocab.countPrefix(stem) >= max(2, own / 10)) return cased(one)
                 i = lower.indexOf("nn", i + 1)
             }
         }
@@ -104,8 +119,8 @@ object OcrWords {
         return null
     }
 
-    /** "ofa", "ofthe": two words read as one. */
-    private val JOINED = Regex("^of(a|an|the)$", RegexOption.IGNORE_CASE)
+    /** "ofa", "ofthe", "ofMATLAB": two words read as one. */
+    private val JOINED = Regex("^(?:[Oo]f(?:a|an|the)|OF(?:A|AN|THE)|[Oo]f[A-Z][A-Za-z]+)$")
 
     /** A figure's label as the OCR read it: '""GURE l-S' for "FIGURE 1-5", "FlGURES-9" for "FIGURE 5-9", "H GURE 2-11", "fo'IGURE 1-8", '""GURE \-10', "FIGURE PI- IS" for "FIGURE P1-15", "HGURE )'1-3" for "FIGURE P1-3", '""GURE 7-1J' for "FIGURE 7-13". */
     private val FIGURE_LABEL = Regex("^\\s*\\S{0,4}\\s?GURE\\s*(P|\\)'?)?([0-9lIOSoBJZ\\\\|]{1,2})\\s*([-–—]+)\\s*([0-9lIOSoBJZ\\\\|]{1,3})(?![A-Za-z0-9])")
@@ -129,7 +144,7 @@ object OcrWords {
                 val b = m.range.last + 1
                 if ((a > 0 && l.text[a - 1].isLetterOrDigit()) || (b < l.text.length && l.text[b].isLetterOrDigit())) continue
                 val joined = JOINED.find(m.value)
-                val fixed = if (joined != null) m.value.substring(0, 2) + " " + joined.groupValues[1] else correct(m.value, vocab)
+                val fixed = if (joined != null) m.value.substring(0, 2) + " " + m.value.substring(2) else correct(m.value, vocab)
                 if (fixed != null && fixed != m.value) edits += Triple(a, b, fixed)
             }
             if (edits.isEmpty()) l else edit(l, edits)

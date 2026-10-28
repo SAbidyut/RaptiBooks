@@ -72,6 +72,7 @@ class ScanPageTest {
         mapOf(
             "transformer" to 30, "transfonner" to 25, "the" to 500, "this" to 80, "flux" to 40, "nux" to 4, "current" to 120,
             "term" to 2, "tenn" to 2, "now" to 50, "flow" to 60, "all" to 80, "alt" to 1, "annual" to 1, "turn" to 20, "tum" to 2,
+            "detennine" to 4, "determined" to 3, "determines" to 1, "charm" to 3, "channel" to 9,
         ),
     )
 
@@ -85,6 +86,9 @@ class ScanPageTest {
         assertEquals("current", OcrWords.correct("currenl", vocab))
         assertEquals("term", OcrWords.correct("tenn", vocab))
         assertEquals("turn", OcrWords.correct("tum", vocab))
+        // (never printed right on the pages read, but its family is)
+        assertEquals("determine", OcrWords.correct("detennine", vocab))
+        assertNull(OcrWords.correct("channel", vocab))
         // words of their own stay
         assertNull(OcrWords.correct("now", vocab))
         assertNull(OcrWords.correct("all", vocab))
@@ -94,11 +98,11 @@ class ScanPageTest {
 
     @Test
     fun stylesFollowTheWordsPutRight() {
-        val text = "1lle transfonner core ofa machine"
+        val text = "1lle transfonner core ofa machine ofMATLAB's"
         val bold = InlineStyle(5, 16, InlineStyle.BOLD)
         val line = TextLine(text, listOf(bold), Rect(65f, 400f, 300f, 413f), 410f, 12f, 0f, 0f, "Times")
         val fixed = OcrWords.fix(listOf(line), vocab).single()
-        assertEquals("The transformer core of a machine", fixed.text)
+        assertEquals("The transformer core of a machine of MATLAB's", fixed.text)
         val s = fixed.styles.single()
         assertEquals("transformer", fixed.text.substring(s.start, s.end))
     }

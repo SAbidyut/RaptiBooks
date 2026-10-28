@@ -111,7 +111,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
     invisible text): the page's ink shows what the text layer misses — drawings become figures
     with their captions (panels of one figure, ruled tables), display formulas are shown as
     printed with their numbers, and words the OCR misread the way OCRs do ("transfonner",
-    "1lle", "nux") are put right when the book prints the right word elsewhere;
+    "1lle", "nux", "detennine") are put right when the book prints the right word (or its
+    family: "determined") elsewhere; such a book's per-page OCR fonts are parsed once, not
+    once a page, so it converts in steady memory;
   - table of contents from the PDF outline, else from the printed contents page, else from
     detected headings;
   - tables keep superscripts and subscripts (10¹⁸, 10⁻³); wide tables scroll sideways with a
@@ -119,7 +121,10 @@ screen. Bangla and English are both first-class, and everything runs offline.
 - **Reader**: Light / Sepia / Dark / Black themes; bundled Tiro Bangla (serif) and Hind
   Siliguri (sans) fonts that cover Bangla and Latin, plus system fonts; text size, line
   spacing, margins, justification; contents, bookmarks,
-  in-book search with highlights; zoomable figures; **marking pen** (tap the right edge: red / blue / yellow / green and an eraser; draw along
+  in-book search with highlights; zoomable figures; **copying text**: a long press selects
+  words in any paragraph, heading, list or table to copy, and "Copy text" in the picture
+  viewer reads the text printed in a figure, formula or page kept as a picture (offline OCR)
+  and shows it to select or copy, beside the text the book's text layer has for it; **marking pen** (tap the right edge: red / blue / yellow / green and an eraser; draw along
   words or loop around a passage — in text, tables and answer options — to underline it in that colour; on pictures a
   finger draws freehand lines that stay where they were drawn; the menu can be dragged; all saved with the book); **notes**: pick the note button in the pen menu, tap
   anywhere in the book and leave a voice recording or a written note there, shown as a pin in the free strip beside the text with an arrow to the place, so the text stays readable; tap the pin to open it again;
@@ -127,8 +132,11 @@ screen. Bangla and English are both first-class, and everything runs offline.
   position; keep-screen-on; **original PDF page view** with pinch zoom and a jump back to the
   reflowed text at the same page.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page
-  analyses are cached on disk, images are never decoded during analysis, the reader loads
-  blocks in chunks and images are downsampled to the display size.
+  analyses are cached on disk, images are never decoded during analysis, fonts are kept only
+  softly (and one page's fonts are not held by the next), the reader loads blocks in chunks
+  and images are downsampled to the display size; a scan's figures are cut at its own
+  300 dpi, not larger. A page whose analysis fails keeps its text rather than becoming a
+  picture.
 - English and Bangla UI.
 
 ## Architecture
@@ -239,7 +247,7 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
   from text and stay as they were read; words shown as printed are not searchable.
 - In a scanned book with an OCR text layer, inline math inside sentences stays as the OCR read
   it (often garbled: "cp" for φ), and misread words the book never prints right elsewhere stay
-  misread.
+  misread. "Copy text" on a formula gives what the OCR reads, which for math is rough.
 - Password-protected PDFs (user password) are not supported yet; owner-password PDFs work.
 - The bundled Tesseract build (JavaCPP 1.5.9) is the last one with 32-bit ARM support; its
   native libraries are not 16 KB page aligned, so on 16 KB-page devices OCR may be unavailable

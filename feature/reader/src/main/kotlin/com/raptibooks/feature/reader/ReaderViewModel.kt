@@ -72,6 +72,9 @@ class ReaderViewModel(
         repo.ink(bookId).map { all -> all.groupBy { it.blockIndex } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    /** The text printed in a picture of the book, for copying (see [ReaderRepository.pictureText]). */
+    suspend fun pictureText(path: String): String? = repo.pictureText(path)
+
     fun addInk(block: Int, color: MarkColor, points: FloatArray) {
         viewModelScope.launch { repo.addInk(bookId, block, color, points) }
     }

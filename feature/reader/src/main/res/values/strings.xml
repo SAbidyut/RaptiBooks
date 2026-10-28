@@ -64,6 +64,13 @@
     <string name="table_show_original">Show as printed</string>
     <string name="table_show_text">Show as table</string>
     <string name="image_close">Close</string>
+    <string name="image_text">Copy text</string>
+    <string name="image_text_title">Text in the picture</string>
+    <string name="image_text_reading">Reading the text…</string>
+    <string name="image_text_none">No text found in the picture.</string>
+    <string name="image_text_book">From the book\'s text</string>
+    <string name="text_copy">Copy</string>
+    <string name="text_copied">Copied</string>
     <string name="info_pages">Pages</string>
     <string name="info_language">Language</string>
     <string name="info_ocr">Text recognition (OCR)</string>

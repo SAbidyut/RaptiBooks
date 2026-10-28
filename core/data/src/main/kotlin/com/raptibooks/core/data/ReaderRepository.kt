@@ -1,5 +1,6 @@
 package com.raptibooks.core.data
 
+import android.content.Context
 import android.graphics.Bitmap
 import com.raptibooks.core.database.BookDao
 import com.raptibooks.core.database.ContentDao
@@ -24,10 +25,13 @@ import java.io.File
 
 /** Read access to a converted book. Everything comes from the local database. */
 class ReaderRepository(
+    context: Context,
     private val books: BookDao,
     private val content: ContentDao,
     private val files: BookFiles,
 ) {
+    private val pictureText = PictureText(context)
+
     fun observeBook(id: Long): Flow<Book?> = books.observe(id)
 
     suspend fun book(id: Long): Book? = withContext(Dispatchers.IO) { books.get(id) }
@@ -89,6 +93,9 @@ class ReaderRepository(
     suspend fun firstBlockOfPage(id: Long, page: Int): Int? = withContext(Dispatchers.IO) { content.firstBlockAtOrAfterPage(id, page) }
 
     suspend fun pageOfBlock(id: Long, index: Int): Int? = withContext(Dispatchers.IO) { content.pageOfBlock(id, index) }
+
+    /** The text printed in a picture of the book, read with the OCR (null: none, or no OCR). */
+    suspend fun pictureText(path: String): String? = pictureText.read(path)
 
     /** Opens the original PDF for the page view. Close it when done. */
     suspend fun openOriginal(id: Long): OriginalPdf = withContext(Dispatchers.IO) {

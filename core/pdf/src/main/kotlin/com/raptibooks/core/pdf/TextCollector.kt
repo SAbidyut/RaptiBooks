@@ -108,7 +108,13 @@ internal class TextCollector : PDFTextStripper() {
         glyphsMapped = 0
         startPage = pageIndex + 1
         endPage = pageIndex + 1
-        getText(document)
+        try {
+            getText(document)
+        } finally {
+            // (a font is a page's own object: kept, every page's fonts would stay in memory, a
+            // scanned book's OCR layer has fonts of its own on each page)
+            styleCache.clear()
+        }
         removeShadows()
     }
 

@@ -18,7 +18,7 @@ class AppContainer(context: Context) {
     private val scheduler = ConversionScheduler(appContext)
     val pipeline = ConversionPipeline(appContext, bookDao, contentDao, files)
     val library = LibraryRepository(appContext, bookDao, contentDao, files, settings, scheduler)
-    val reader = ReaderRepository(bookDao, contentDao, files)
+    val reader = ReaderRepository(appContext, bookDao, contentDao, files)
 }
 
 /** Implemented by the Application so that workers and screens can reach the container. */
