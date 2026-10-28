@@ -138,7 +138,7 @@ fun ReaderRoute(
 
 private enum class Panel { NONE, CONTENTS, SETTINGS, SEARCH, INFO }
 
-private enum class NoteStep { CHOOSE, WRITE, RECORD }
+internal enum class NoteStep { CHOOSE, WRITE, RECORD }
 
 /** A picture opened full screen; [block] is where the user's drawing on it is kept. */
 private class ViewerState(val path: String, val caption: String?, val equation: Boolean, val block: Int, val pen: Boolean, val text: String? = null)
@@ -266,6 +266,7 @@ private fun Reader(
                     val pos = charAt(root, registry)
                     val held = pos?.let { p -> registry.targets[p.key]?.layout?.layoutInput?.text?.text?.let { Passage.around(it, p.offset) } }
                     val page = pos?.let { source.peek(MarkKey.block(it.key))?.pageIndex } ?: currentPage
+                    if (held != null) vm.prefetchOriginal(page)
                     onOpenOriginal(page, held)
                 })
                 .twoFingerSelect(selection, registry, listState, enabled = tool == MarkTool.NONE)

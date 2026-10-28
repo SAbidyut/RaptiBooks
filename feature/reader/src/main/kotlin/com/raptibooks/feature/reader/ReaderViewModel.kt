@@ -127,6 +127,11 @@ class ReaderViewModel(
             val boxes = BoxLookup(runCatching { repo.boxes(bookId) }.getOrDefault(emptyList()))
             repo.markOpened(bookId)
             load = Load.Ready(book, toc, source, start, boxes)
+            // The original's text read ahead (a moment later, not to slow the first page): a
+            // passage held here is then found on the original page at once.
+            delay(1500)
+            repo.holdOriginalText(bookId, source.peek(start.blockIndex)?.pageIndex)
+            holdingOriginal = true
         }
     }
 
@@ -208,7 +213,13 @@ class ReaderViewModel(
 
     suspend fun pageForBlock(index: Int): Int = repo.pageOfBlock(bookId, index) ?: 0
 
+    private var holdingOriginal = false
+
+    /** Reads the lines of an original page ahead, while the screen goes over to it. */
+    fun prefetchOriginal(page: Int) = repo.prefetchOriginalLines(bookId, page)
+
     override fun onCleared() {
+        if (holdingOriginal) repo.releaseOriginalText(bookId)
         // Let the library refresh reading progress once the reader closes.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { repo.publishPosition() }
     }

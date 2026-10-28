@@ -146,9 +146,12 @@ screen. Bangla and English are both first-class, and everything runs offline.
   where you arrive (the printed lines on the original page, the words in the reflowed text),
   so you see at once which part you came to look at; the original pages fill the screen
   (no title bar or status bar; the navigation bar stays visible), and a see-through bar at the
-  bottom (it fades away after a moment, a tap brings it back) shows the page, opens the
-  marking pen for drawing on the original pages, and turns the pages for reading across
-  (landscape) or back upright, while the screen's own bars stay where they are; a double tap
+  bottom of the pages (it fades away after a moment, a tap brings it back; in landscape it
+  turns with the pages) has a slider to move quickly through the book, the contents (a tap
+  on a chapter goes to its page), the marking pen and notes (voice or written, pinned to a
+  place on an original page), and turns the pages for reading across (landscape) or back
+  upright, while the screen's own bars stay where they are; the original's text is read
+  ahead in the background while the book is open, so the passage held lights up at once; a double tap
   on an original page zooms its printed part to the width of the screen (the tapped line stays
   put), another zooms back out.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page

@@ -136,6 +136,25 @@ internal fun NotesLayer(notes: List<Note>, onOpen: (Note) -> Unit, modifier: Mod
     }
 }
 
+/**
+ * The pins of an original page, each standing just above and left of its place (fractions of
+ * the page), with its point on the place, so the printed words stay readable.
+ */
+@Composable
+internal fun PagePins(notes: List<Note>, onOpen: (Note) -> Unit, modifier: Modifier = Modifier) {
+    val pin = with(LocalDensity.current) { PinSize.roundToPx() }
+    Layout(content = { for (n in notes) NotePin(n, PinSize) { onOpen(n) } }, modifier = modifier) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(Constraints.fixed(pin, pin)) }
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeables.forEachIndexed { i, p ->
+                val x = (notes[i].x.coerceIn(0f, 1f) * constraints.maxWidth - pin * 0.85f).roundToInt()
+                val y = (notes[i].y.coerceIn(0f, 1f) * constraints.maxHeight - pin * 0.85f).roundToInt()
+                p.place(x.coerceIn(0, max(0, constraints.maxWidth - pin)), y.coerceIn(0, max(0, constraints.maxHeight - pin)))
+            }
+        }
+    }
+}
+
 /** Top of each pin: level with its place, pushed down where two would overlap. */
 private fun pinTops(notes: List<Note>, height: Int, pin: Int, gap: Int): IntArray {
     val tops = IntArray(notes.size)

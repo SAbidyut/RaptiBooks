@@ -122,6 +122,24 @@ class PdfExtractor private constructor(private val document: PDDocument) : Close
         return PageExtraction(raw, textCollector.glyphsDrawn, textCollector.glyphsMapped)
     }
 
+    /** Only the text of one page (no pictures or drawing): quick, for finding a passage on it. */
+    fun extractText(index: Int): RawPage {
+        val transform = DisplayTransform(document.getPage(index))
+        textCollector.collect(document, index)
+        val w = transform.width
+        val h = transform.height
+        return RawPage(
+            index = index,
+            width = w,
+            height = h,
+            fragments = textCollector.fragments.filter { f ->
+                val cx = (f.left + f.right) / 2f
+                val cy = (f.top + f.bottom) / 2f
+                cx in 0f..w && cy in 0f..h
+            },
+        )
+    }
+
     fun pageSize(index: Int): Pair<Float, Float> {
         val t = DisplayTransform(document.getPage(index))
         return t.width to t.height

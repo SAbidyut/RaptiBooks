@@ -2,48 +2,19 @@ package com.raptibooks.feature.reader
 
 import android.graphics.Bitmap
 import android.util.LruCache
-import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.material.icons.filled.Create
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.raptibooks.core.data.PageLine
-import com.raptibooks.core.model.InkStroke
-import com.raptibooks.core.model.MarkColor
-import com.raptibooks.core.model.ReaderTheme
-import com.raptibooks.core.ui.ReaderColors
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
-import kotlin.math.abs
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Surface
-import androidx.compose.runtime.key
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.unit.Constraints
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -52,60 +23,105 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Create
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.raptibooks.core.data.OriginalPdf
+import com.raptibooks.core.data.PageLine
 import com.raptibooks.core.data.ReaderRepository
 import com.raptibooks.core.data.appContainer
+import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.MarkColor
+import com.raptibooks.core.model.Note
+import com.raptibooks.core.model.NoteKind
+import com.raptibooks.core.model.ReaderTheme
+import com.raptibooks.core.model.TocEntry
 import com.raptibooks.core.ui.RaptiIcons
+import com.raptibooks.core.ui.ReaderColors
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
+import java.io.File
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRepository) : ViewModel() {
@@ -116,6 +132,14 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
 
     /** How many pages' sizes are known (they are read in the background, ahead of the pages). */
     var sizesKnown by mutableIntStateOf(0)
+        private set
+
+    /** The chapters of the book (or the PDF's own outline), with their pages; null while read. */
+    var contents by mutableStateOf<List<TocEntry>?>(null)
+        private set
+
+    /** The printed lines of the passage held in the reflowed text, on its page. */
+    internal var arrival: Deferred<List<PageLine>>? = null
         private set
 
     /** Lines drawn on the original pages, by page (kept as block -(page + 1)). */
@@ -131,6 +155,28 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
         viewModelScope.launch { repo.eraseInk(ids) }
     }
 
+    /** Notes pinned to the original pages, by page (kept as block -(page + 1), like the lines). */
+    val notes: StateFlow<Map<Int, List<Note>>> =
+        repo.notes(bookId).map { all -> all.filter { it.blockIndex < 0 }.groupBy { -it.blockIndex - 1 } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun newVoiceFile(): File = repo.newVoiceFile(bookId)
+
+    fun addNote(page: Int, x: Float, y: Float, kind: NoteKind, text: String, audioPath: String?, durationMs: Long) {
+        viewModelScope.launch { repo.addNote(bookId, -(page + 1), page, x, y, kind, text, audioPath, durationMs) }
+    }
+
+    fun updateNoteText(noteId: Long, text: String) {
+        viewModelScope.launch { repo.updateNoteText(noteId, text) }
+    }
+
+    fun deleteNote(note: Note) {
+        viewModelScope.launch { repo.deleteNote(note) }
+    }
+
+    /** The printed lines of a page, to find the one held. */
+    suspend fun lines(page: Int): List<PageLine> = repo.originalLines(bookId, page)
+
     /** Recently rendered pages; old ones are dropped (not recycled, they may still be drawn). */
     private val cache = object : LruCache<String, Bitmap>(
         (Runtime.getRuntime().maxMemory() / 1024 / 6).toInt().coerceAtLeast(8 * 1024),
@@ -138,8 +184,14 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
     }
 
-    fun open(initialPage: Int) {
-        if (document != null || failed) return
+    private var opened = false
+
+    fun open(initialPage: Int, passage: String?) {
+        if (opened) return
+        opened = true
+        repo.holdOriginalText(bookId, initialPage)
+        // (looked for at once, while the pages are opened)
+        if (passage != null) arrival = viewModelScope.async { Passage.linesOf(repo.originalLines(bookId, initialPage), passage) }
         viewModelScope.launch {
             val doc = try {
                 repo.openOriginal(bookId)
@@ -153,6 +205,9 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
                 if (initialPage in 0 until doc.pageCount) doc.pageSize(initialPage)
             }
             document = doc
+            launch {
+                contents = repo.toc(bookId).filter { it.pageIndex >= 0 }.ifEmpty { repo.originalOutline(bookId) }
+            }
             withContext(Dispatchers.IO) {
                 for (i in 0 until doc.pageCount) {
                     yield()
@@ -208,10 +263,14 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
     }
 
     override fun onCleared() {
+        if (opened) repo.releaseOriginalText(bookId)
         cache.evictAll()
         document?.close()
     }
 }
+
+/** A place on an original page chosen for a new note (fractions of the page). */
+private class PageSpot(val page: Int, val x: Float, val y: Float)
 
 /**
  * The original PDF pages, full screen, with pinch zoom. [onReflow] returns to the reflowed text
@@ -233,9 +292,10 @@ fun OriginalPdfRoute(
         key = "original-$bookId",
         factory = viewModelFactory { initializer { OriginalPdfViewModel(bookId, context.appContainer().reader) } },
     )
-    LaunchedEffect(vm) { vm.open(initialPage) }
+    LaunchedEffect(vm) { vm.open(initialPage, passage) }
     val doc = vm.document
     val ink by vm.ink.collectAsStateWithLifecycle()
+    val notes by vm.notes.collectAsStateWithLifecycle()
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0))
     val current = listState.firstVisibleItemIndex
     val scope = rememberCoroutineScope()
@@ -249,9 +309,15 @@ fun OriginalPdfRoute(
     var poke by remember { mutableIntStateOf(0) }
     var penOpen by remember { mutableStateOf(false) }
     var tool by remember { mutableStateOf(MarkTool.NONE) }
-    LaunchedEffect(barShown, poke, penOpen) {
-        if (barShown && !penOpen) {
-            delay(2500)
+    var showContents by remember { mutableStateOf(false) }
+    // (the page the slider is dragged to, while it is)
+    var seeking by remember { mutableStateOf<Float?>(null) }
+    var spot by remember { mutableStateOf<PageSpot?>(null) }
+    var noteStep by remember { mutableStateOf(NoteStep.CHOOSE) }
+    var openNote by remember { mutableStateOf<Note?>(null) }
+    LaunchedEffect(barShown, poke, penOpen, seeking != null) {
+        if (barShown && !penOpen && seeking == null) {
+            delay(3000)
             barShown = false
         }
     }
@@ -293,10 +359,10 @@ fun OriginalPdfRoute(
                         val itemWidth = (viewport.width - padPx * 2f).coerceAtLeast(1f)
                         return Triple(item.index, (x - padPx) / itemWidth, (inList - item.offset).toFloat() / item.size)
                     }
-                    LaunchedEffect(doc, passage) {
-                        if (arrived || passage == null) return@LaunchedEffect
+                    LaunchedEffect(doc) {
+                        if (arrived) return@LaunchedEffect
+                        val hit = vm.arrival?.await().orEmpty()
                         arrived = true
-                        val hit = Passage.linesOf(doc.lines(initialPage), passage)
                         if (hit.isEmpty()) return@LaunchedEffect
                         val size = snapshotFlow { viewport }.first { it.width > 0f }
                         val (w, h) = vm.pageSize(initialPage)
@@ -304,9 +370,9 @@ fun OriginalPdfRoute(
                         val top = hit.minOf { it.top } * itemHeight
                         listState.scrollToItem(initialPage, (top - size.height * 0.3f).roundToInt().coerceAtLeast(0))
                         lit = initialPage to hit
-                        glow.snapTo(0.55f)
-                        delay(900)
-                        glow.animateTo(0f, tween(1400))
+                        glow.snapTo(0.6f)
+                        delay(700)
+                        glow.animateTo(0f, tween(1200))
                         lit = null
                     }
                     BoxWithConstraints(
@@ -321,7 +387,7 @@ fun OriginalPdfRoute(
                                     val place = pageAt(at)
                                     scope.launch {
                                         val line = place?.let { (page, fx, fy) ->
-                                            val lines = doc.lines(page)
+                                            val lines = vm.lines(page)
                                             lines.firstOrNull { fy in it.top..it.bottom && fx in it.left - 0.02f..it.right + 0.02f }
                                                 ?: lines.minByOrNull { abs((it.top + it.bottom) / 2f - fy) }?.takeIf { abs((it.top + it.bottom) / 2f - fy) < 0.05f }
                                         }
@@ -332,7 +398,7 @@ fun OriginalPdfRoute(
                             .pointerInput(Unit) {
                                 detectTapGestures(
                                     onTap = {
-                                        barShown = true
+                                        barShown = !barShown
                                         poke++
                                     },
                                     onDoubleTap = { tap ->
@@ -379,6 +445,7 @@ fun OriginalPdfRoute(
                                 val bitmap by produceState<Bitmap?>(null, index, widthPx) { value = vm.page(index, widthPx) }
                                 var pageSize by remember { mutableStateOf(Size.Zero) }
                                 val strokes = ink[index].orEmpty()
+                                val pins = notes[index].orEmpty()
                                 Box(
                                     Modifier
                                         .fillMaxWidth()
@@ -406,7 +473,33 @@ fun OriginalPdfRoute(
                                             }
                                         }
                                     }
-                                    if (tool != MarkTool.NONE) {
+                                    if (tool == MarkTool.NOTE) {
+                                        // Choosing a place for a note: the next tap on a page is it;
+                                        // scrolling still works.
+                                        Box(
+                                            Modifier.fillMaxSize().pointerInput(index) {
+                                                awaitEachGesture {
+                                                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                                    while (true) {
+                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                        if (event.changes.size > 1 || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) break
+                                                        if (change.changedToUp()) {
+                                                            change.consume()
+                                                            spot = PageSpot(
+                                                                index,
+                                                                (down.position.x / size.width).coerceIn(0f, 1f),
+                                                                (down.position.y / size.height).coerceIn(0f, 1f),
+                                                            )
+                                                            noteStep = NoteStep.CHOOSE
+                                                            tool = MarkTool.NONE
+                                                            break
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                        )
+                                    } else if (tool != MarkTool.NONE) {
                                         MarkOverlay(
                                             tool = tool,
                                             onStroke = { points, _ ->
@@ -420,6 +513,7 @@ fun OriginalPdfRoute(
                                             },
                                         )
                                     }
+                                    if (pins.isNotEmpty()) PagePins(pins, onOpen = { openNote = it }, modifier = Modifier.fillMaxSize())
                                 }
                             }
                         }
@@ -427,47 +521,200 @@ fun OriginalPdfRoute(
                 }
             }
             }
-        }
-        if (doc != null) {
-            // The page shown, the pen and the switch between reading upright and across, at the
-            // bottom of the screen in either; see-through, and away after a moment.
-            AnimatedVisibility(
-                barShown || penOpen,
-                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 10.dp),
-                enter = fadeIn(),
-                exit = fadeOut(tween(600)),
-            ) {
-                Surface(shape = RoundedCornerShape(20.dp), color = Color.Black.copy(alpha = 0.42f), contentColor = Color.White) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 14.dp)) {
-                        Text("${current + 1} / ${doc.pageCount}", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
-                        IconButton(onClick = {
+            if (doc != null) {
+                // The page shown, a slider to move through the book, the contents, the pen and the
+                // switch between reading upright and across: at the bottom of the pages, turned
+                // with them; see-through, and away after a moment.
+                AnimatedVisibility(
+                    barShown || penOpen,
+                    Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp, start = 12.dp, end = 12.dp),
+                    enter = fadeIn(),
+                    exit = fadeOut(tween(600)),
+                ) {
+                    PageBar(
+                        page = seeking?.roundToInt() ?: current,
+                        pageCount = doc.pageCount,
+                        hasContents = !vm.contents.isNullOrEmpty(),
+                        onSeek = { p ->
+                            seeking = p
+                            poke++
+                            scope.launch { listState.scrollToItem(p.roundToInt()) }
+                        },
+                        onSeekDone = { seeking = null },
+                        onContents = { showContents = true; poke++ },
+                        onPen = {
                             penOpen = !penOpen
                             if (!penOpen) tool = MarkTool.NONE
                             poke++
-                        }) {
-                            Icon(Icons.Default.Create, stringResource(R.string.original_pen), tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(20.dp))
-                        }
-                        TextButton(onClick = {
+                        },
+                        landscape = landscape,
+                        onTurn = {
                             landscape = !landscape
                             poke++
-                        }) {
-                            Icon(RaptiIcons.Rotate, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(18.dp))
-                            Text(
-                                " " + stringResource(if (landscape) R.string.original_portrait else R.string.original_landscape),
-                                color = Color.White.copy(alpha = 0.85f),
-                            )
-                        }
-                    }
+                        },
+                    )
+                }
+                // The colours of the pen and the note: a finger draws on the page while a colour is
+                // chosen; with the note, a tap on a page places one.
+                if (penOpen) {
+                    MarkPalette(
+                        tool = tool, colors = ReaderColors.of(ReaderTheme.DARK), onSelect = { tool = it },
+                        onClose = { penOpen = false; tool = MarkTool.NONE },
+                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
+                    )
+                }
+                AnimatedVisibility(
+                    tool == MarkTool.NOTE, Modifier.align(Alignment.TopCenter),
+                    enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut(),
+                ) {
+                    NoteHint(ReaderColors.of(ReaderTheme.DARK), onCancel = { tool = MarkTool.NONE })
                 }
             }
-            // The colours of the pen: a finger draws on the page while one is chosen.
-            if (penOpen) {
-                MarkPalette(
-                    tool = tool, colors = ReaderColors.of(ReaderTheme.DARK), onSelect = { tool = it },
-                    onClose = { penOpen = false; tool = MarkTool.NONE },
-                    withNote = false,
-                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
+        }
+    }
+
+    if (showContents) {
+        OriginalContents(
+            entries = vm.contents.orEmpty(),
+            currentPage = current,
+            onJump = { page ->
+                showContents = false
+                scope.launch { listState.scrollToItem(page.coerceIn(0, (doc?.pageCount ?: 1) - 1)) }
+            },
+            onDismiss = { showContents = false },
+        )
+    }
+
+    // Notes: place chosen -> voice or written note; a pin opens its note.
+    spot?.let { place ->
+        fun done() { spot = null }
+        when (noteStep) {
+            NoteStep.CHOOSE -> NoteChooserDialog(
+                onVoice = { noteStep = NoteStep.RECORD },
+                onText = { noteStep = NoteStep.WRITE },
+                onDismiss = ::done,
+            )
+            NoteStep.WRITE -> NoteEditorDialog(
+                initial = "", onDelete = null, onDismiss = ::done,
+                onSave = { text ->
+                    vm.addNote(place.page, place.x, place.y, NoteKind.TEXT, text, null, 0L)
+                    done()
+                },
+            )
+            NoteStep.RECORD -> VoiceRecordDialog(
+                newFile = vm::newVoiceFile, onDismiss = ::done,
+                onSaved = { file, duration ->
+                    vm.addNote(place.page, place.x, place.y, NoteKind.VOICE, "", file.absolutePath, duration)
+                    done()
+                },
+            )
+        }
+    }
+    openNote?.let { note ->
+        if (note.kind == NoteKind.VOICE) {
+            VoiceNoteDialog(note, onDelete = { vm.deleteNote(note); openNote = null }, onDismiss = { openNote = null })
+        } else {
+            NoteEditorDialog(
+                initial = note.text,
+                onSave = { text -> vm.updateNoteText(note.id, text); openNote = null },
+                onDelete = { vm.deleteNote(note); openNote = null },
+                onDismiss = { openNote = null },
+            )
+        }
+    }
+}
+
+/** The see-through bar over the original pages: page, slider, contents, pen, turn. */
+@Composable
+private fun PageBar(
+    page: Int,
+    pageCount: Int,
+    hasContents: Boolean,
+    onSeek: (Float) -> Unit,
+    onSeekDone: () -> Unit,
+    onContents: () -> Unit,
+    onPen: () -> Unit,
+    landscape: Boolean,
+    onTurn: () -> Unit,
+) {
+    val tint = Color.White.copy(alpha = 0.88f)
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = Color.Black.copy(alpha = 0.45f),
+        contentColor = Color.White,
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 6.dp)) {
+            if (pageCount > 1) {
+                Slider(
+                    value = page.toFloat().coerceIn(0f, (pageCount - 1).toFloat()),
+                    onValueChange = onSeek,
+                    onValueChangeFinished = onSeekDone,
+                    valueRange = 0f..(pageCount - 1).toFloat(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = Color.White.copy(alpha = 0.85f),
+                        inactiveTrackColor = Color.White.copy(alpha = 0.25f),
+                    ),
+                    modifier = Modifier.padding(horizontal = 10.dp).heightIn(max = 36.dp),
                 )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (hasContents) {
+                    IconButton(onClick = onContents) { Icon(RaptiIcons.Toc, stringResource(R.string.reader_contents), tint = tint, modifier = Modifier.size(20.dp)) }
+                }
+                Text(
+                    "${page + 1} / $pageCount",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = tint,
+                    modifier = Modifier.weight(1f).padding(start = if (hasContents) 0.dp else 12.dp),
+                )
+                IconButton(onClick = onPen) {
+                    Icon(Icons.Default.Create, stringResource(R.string.original_pen), tint = tint, modifier = Modifier.size(20.dp))
+                }
+                TextButton(onClick = onTurn) {
+                    Icon(RaptiIcons.Rotate, null, tint = tint, modifier = Modifier.size(18.dp))
+                    Text(" " + stringResource(if (landscape) R.string.original_portrait else R.string.original_landscape), color = tint)
+                }
+            }
+        }
+    }
+}
+
+/** The chapters of the book, a tap goes to the page of one. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OriginalContents(entries: List<TocEntry>, currentPage: Int, onJump: (Int) -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Text(
+            stringResource(R.string.reader_contents),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 20.dp, bottom = 8.dp),
+        )
+        val now = entries.indexOfLast { it.pageIndex <= currentPage }
+        val state = rememberLazyListState(initialFirstVisibleItemIndex = (now - 3).coerceAtLeast(0))
+        LazyColumn(state = state, contentPadding = PaddingValues(bottom = 32.dp), modifier = Modifier.heightIn(max = 640.dp)) {
+            items(entries.size) { i ->
+                val e = entries[i]
+                val selected = i == now
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onJump(e.pageIndex) }
+                        .background(if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f) else Color.Transparent)
+                        .padding(start = (20 + (e.level - 1).coerceIn(0, 4) * 18).dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        e.title,
+                        style = if (e.level == 1) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (e.level == 1 || selected) FontWeight.SemiBold else FontWeight.Normal,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text("${e.pageIndex + 1}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

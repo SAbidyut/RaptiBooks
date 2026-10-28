@@ -20,7 +20,10 @@ import com.raptibooks.core.pdf.PageRenderer
 import com.raptibooks.core.pdf.PdfExtractor
 import com.raptibooks.core.pdf.PdfSupport
 import com.raptibooks.core.structure.analysis.PageAnalyzer
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.Closeable
@@ -110,10 +113,123 @@ class ReaderRepository(
 
     /** Opens the original PDF for the page view. Close it when done. */
     suspend fun openOriginal(id: Long): OriginalPdf = withContext(Dispatchers.IO) {
-        OriginalPdf(PageRenderer.open(files.source(id), files.scratch(id))) {
-            PdfSupport.init(appContext)
-            PdfExtractor.open(files.source(id), files.scratch(id))
+        OriginalPdf(PageRenderer.open(files.source(id), files.scratch(id))) { originalLines(id, it) }
+    }
+
+    // (one book's original text at a time, read in order on one thread)
+    private val serial = Dispatchers.IO.limitedParallelism(1)
+    private val background = CoroutineScope(SupervisorJob() + serial)
+    private val originalText = OriginalText { id ->
+        PdfSupport.init(appContext)
+        PdfExtractor.open(files.source(id), files.scratch(id))
+    }
+
+    /**
+     * Keeps the text of book [id]'s original pages open while a screen of the book is shown, so
+     * a passage is found on them at once; opened now in the background, with [page] read ahead.
+     * Let go with [releaseOriginalText].
+     */
+    fun holdOriginalText(id: Long, page: Int?) {
+        background.launch {
+            originalText.acquire(id)
+            if (page != null) originalText.lines(id, page)
         }
+    }
+
+    fun releaseOriginalText(id: Long) {
+        background.launch { originalText.release(id) }
+    }
+
+    /** Reads the lines of an original page ahead, to be ready when the page is shown. */
+    fun prefetchOriginalLines(id: Long, page: Int) {
+        background.launch { originalText.lines(id, page) }
+    }
+
+    /** The printed lines of page [page] of book [id]'s original PDF. */
+    suspend fun originalLines(id: Long, page: Int): List<PageLine> =
+        originalText.cached(id, page) ?: withContext(serial) { originalText.lines(id, page) }
+
+    /** The bookmarks of the original PDF itself (its outline), by page. */
+    suspend fun originalOutline(id: Long): List<TocEntry> = withContext(serial) { originalText.outline(id) }
+}
+
+/**
+ * The text of the original pages of one book, kept open while screens of it use it (counted),
+ * with the lines of the pages read so far.
+ */
+private class OriginalText(private val open: (Long) -> PdfExtractor) {
+    private var bookId = -1L
+    private var users = 0
+    private var extractor: PdfExtractor? = null
+    private val lines = object : LinkedHashMap<Int, List<PageLine>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, List<PageLine>>?) = size > 48
+    }
+
+    private fun switchTo(id: Long) {
+        if (bookId == id) return
+        extractor?.close()
+        extractor = null
+        synchronized(lines) { lines.clear() }
+        bookId = id
+        users = 0
+    }
+
+    fun acquire(id: Long) {
+        switchTo(id)
+        users++
+    }
+
+    fun release(id: Long) {
+        if (bookId != id) return
+        users--
+        if (users <= 0) {
+            users = 0
+            extractor?.close()
+            extractor = null
+        }
+    }
+
+    fun cached(id: Long, page: Int): List<PageLine>? = if (bookId == id) synchronized(lines) { lines[page] } else null
+
+    private fun extractor(id: Long): PdfExtractor {
+        switchTo(id)
+        return extractor ?: open(id).also { extractor = it }
+    }
+
+    fun lines(id: Long, page: Int): List<PageLine> {
+        cached(id, page)?.let { return it }
+        val read = try {
+            val raw = extractor(id).extractText(page)
+            val w = raw.width.coerceAtLeast(1f)
+            val h = raw.height.coerceAtLeast(1f)
+            PageAnalyzer().analyze(raw).lines.map { l ->
+                PageLine(l.text, l.bounds.left / w, l.bounds.top / h, l.bounds.right / w, l.bounds.bottom / h)
+            }
+        } catch (e: Exception) {
+            emptyList()
+        } catch (e: OutOfMemoryError) {
+            emptyList()
+        }
+        synchronized(lines) { lines[page] = read }
+        // (nobody holds the book: not kept open)
+        if (users == 0) {
+            extractor?.close()
+            extractor = null
+        }
+        return read
+    }
+
+    fun outline(id: Long): List<TocEntry> {
+        val out = try {
+            extractor(id).outline().map { TocEntry(it.title, it.level + 1, -1, it.pageIndex) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        if (users == 0) {
+            extractor?.close()
+            extractor = null
+        }
+        return out
     }
 }
 
@@ -123,32 +239,11 @@ class PageLine(val text: String, val left: Float, val top: Float, val right: Flo
 /** Renders pages of the original PDF ("original view"). */
 class OriginalPdf internal constructor(
     private val renderer: PageRenderer,
-    private val openText: () -> PdfExtractor,
+    private val readLines: suspend (Int) -> List<PageLine>,
 ) : Closeable {
-    private var extractor: PdfExtractor? = null
-    private val lineCache = HashMap<Int, List<PageLine>>()
-
     /** The printed lines of page [index] (its text read as the conversion reads it), for finding a passage. */
-    suspend fun lines(index: Int): List<PageLine> = withContext(Dispatchers.IO) {
-        synchronized(lineCache) {
-            lineCache[index]?.let { return@withContext it }
-            val lines = try {
-                val ex = extractor ?: openText().also { extractor = it }
-                val page = ex.extractPage(index).page
-                val w = page.width.coerceAtLeast(1f)
-                val h = page.height.coerceAtLeast(1f)
-                PageAnalyzer().analyze(page).lines.map { l ->
-                    PageLine(l.text, l.bounds.left / w, l.bounds.top / h, l.bounds.right / w, l.bounds.bottom / h)
-                }
-            } catch (e: Exception) {
-                emptyList()
-            } catch (e: OutOfMemoryError) {
-                emptyList()
-            }
-            lineCache[index] = lines
-            lines
-        }
-    }
+    suspend fun lines(index: Int): List<PageLine> = readLines(index)
+
     val pageCount: Int get() = renderer.pageCount
     private val sizes = java.util.concurrent.ConcurrentHashMap<Int, Pair<Float, Float>>()
 
@@ -175,6 +270,5 @@ class OriginalPdf internal constructor(
 
     override fun close() {
         renderer.close()
-        synchronized(lineCache) { extractor?.close() }
     }
 }

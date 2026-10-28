@@ -388,7 +388,7 @@ class ContentDao(private val db: RaptiDatabase) {
     fun remapNotes(bookId: Long) {
         db.writableDatabase.execSQL(
             "UPDATE notes SET y = 0.05, block_idx = COALESCE((SELECT MIN(idx) FROM blocks b WHERE b.book_id = notes.book_id " +
-                "AND b.page >= notes.page), 0) WHERE book_id = ?",
+                "AND b.page >= notes.page), 0) WHERE book_id = ? AND block_idx >= 0",
             arrayOf<Any>(bookId),
         )
         db.notifyChanged(RaptiDatabase.NOTES)
