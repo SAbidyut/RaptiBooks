@@ -158,8 +158,8 @@ private fun Reader(
     var penMenu by rememberSaveable { mutableStateOf(false) }
     var tool by rememberSaveable { mutableStateOf(MarkTool.NONE) }
     var viewer by remember { mutableStateOf<ViewerState?>(null) }
-    // The text of a passage held with two fingers, to select or copy.
-    var copyText by remember { mutableStateOf<String?>(null) }
+    // The passage selected with two fingers, to copy.
+    val selection = remember { TwoFingerSelection() }
     var spot by remember { mutableStateOf<NoteSpot?>(null) }
     var noteStep by remember { mutableStateOf(NoteStep.CHOOSE) }
     var openNote by remember { mutableStateOf<Note?>(null) }
@@ -211,7 +211,7 @@ private fun Reader(
     val bookmarked = bookmarks.any { it.blockIndex in firstVisible..maxOf(firstVisible, lastVisible) }
     val progress = if (book.blockCount <= 1) 1f else firstVisible.toFloat() / (book.blockCount - 1)
 
-    CompositionLocalProvider(LocalMarks provides marks) {
+    CompositionLocalProvider(LocalMarks provides marks, LocalSelection provides selection) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val margin = settings.margin.dp
         val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -220,21 +220,17 @@ private fun Reader(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                // One finger held still for two seconds opens the original page (and the same there
-                // comes back); two fingers held on a passage give its text to copy.
-                .holdGestures(
-                    enabled = tool == MarkTool.NONE,
-                    onHold = { onOpenOriginal(currentPage) },
-                    onTwoFingerHold = { at ->
-                        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { at.y.roundToInt() in it.offset until it.offset + it.size }
-                        copyText = item?.let { pictureBookText(source.peek(it.index)) ?: source.peek(it.index)?.plainText }
-                            ?.trim()?.takeIf { it.isNotEmpty() }
-                    },
-                )
+                // One finger held still for a second opens the original page (and the same there
+                // comes back); two fingers dragged over the text select it to copy.
+                .holdGestures(enabled = tool == MarkTool.NONE, onHold = { onOpenOriginal(currentPage) })
+                .twoFingerSelect(selection, registry, listState, enabled = tool == MarkTool.NONE)
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = { pos ->
-                            if (pos.x > size.width * 0.8f) {
+                            if (selection.anchor != null) {
+                                // (a tap lets go of the selection)
+                                selection.clear()
+                            } else if (pos.x > size.width * 0.8f) {
                                 // Right edge: the pen menu.
                                 penMenu = !penMenu
                                 if (!penMenu) tool = MarkTool.NONE
@@ -329,6 +325,9 @@ private fun Reader(
                     }
                 },
         )
+
+        // The passage selected with two fingers: copy it, or let it go.
+        SelectionBar(selection, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp))
 
         // Minimal progress line while reading without chrome.
         AnimatedVisibility(!chrome, Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
@@ -481,7 +480,6 @@ private fun Reader(
         Panel.INFO -> BookInfoDialog(book, onDismiss = { panel = Panel.NONE })
         Panel.NONE -> Unit
     }
-    copyText?.let { TextCopyDialog(it, onClose = { copyText = null }) }
     viewer?.let { v ->
         ImageViewer(
             path = v.path, caption = v.caption, equation = v.equation,

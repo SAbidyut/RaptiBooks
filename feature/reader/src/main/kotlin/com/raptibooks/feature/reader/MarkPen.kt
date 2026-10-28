@@ -44,6 +44,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -132,18 +133,22 @@ internal fun MarkableText(
     }
     val thickness = with(LocalDensity.current) { 2.5.dp.toPx() }
     val drop = with(LocalDensity.current) { 3.dp.toPx() }
+    val selection = LocalSelection.current
+    val selected = style.color.takeOrElse { Color(0xFF3D7BD9) }.copy(alpha = 0.28f)
     Text(
         text, style = style,
         inlineContent = inlineContent,
         onTextLayout = { layout = it; target.layout = it },
         modifier = modifier
             .onGloballyPositioned { target.coords = it }
-            .then(
-                if (spans.isNullOrEmpty()) Modifier else Modifier.drawBehind {
-                    val l = layout ?: return@drawBehind
-                    for (m in spans) drawUnderline(l, text.text, m.start, m.end, Color(m.color.argb), thickness, drop)
-                },
-            ),
+            .drawBehind {
+                val l = layout ?: return@drawBehind
+                // (read while drawing: a selection being dragged redraws, no recomposition)
+                selection.rangeIn(key, text.length)?.let { r ->
+                    drawPath(l.getPathForRange(r.first, r.last + 1), selected)
+                }
+                if (!spans.isNullOrEmpty()) for (m in spans) drawUnderline(l, text.text, m.start, m.end, Color(m.color.argb), thickness, drop)
+            },
     )
 }
 

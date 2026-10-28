@@ -583,21 +583,6 @@ private fun PictureTextPanel(ocr: PictureOcr, bookText: String?, onClose: () -> 
     }
 }
 
-/** A passage of the book held with two fingers: its text, to select a part of or copy whole. */
-@Composable
-internal fun TextCopyDialog(text: String, onClose: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(stringResource(R.string.image_text)) },
-        text = {
-            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                CopyableText(text)
-            }
-        },
-        confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.image_close)) } },
-    )
-}
-
 /** Text that can be selected, with a button that copies all of it. */
 @Composable
 private fun CopyableText(text: String) {
