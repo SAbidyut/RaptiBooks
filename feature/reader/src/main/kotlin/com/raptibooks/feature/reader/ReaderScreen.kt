@@ -220,7 +220,7 @@ private fun Reader(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                // One finger held still for a second opens the original page (and the same there
+                // One finger held still for 0.6 s opens the original page (and the same there
                 // comes back); two fingers dragged over the text select it to copy.
                 .holdGestures(enabled = tool == MarkTool.NONE, onHold = { onOpenOriginal(currentPage) })
                 .twoFingerSelect(selection, registry, listState, enabled = tool == MarkTool.NONE)

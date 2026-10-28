@@ -13,13 +13,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 
 /** How long one finger is held still to switch between the reflowed text and the original page. */
-private const val HOLD_MS = 1000L
+private const val HOLD_MS = 600L
 
 /** How long two fingers are held still to copy the text under them. */
 private const val TWO_FINGER_HOLD_MS = 600L
 
 /**
- * One finger held still on the page for a second ([onHold]), or two fingers held still
+ * One finger held still on the page for 0.6 s ([onHold]), or two fingers held still
  * ([onTwoFingerHold], at the first finger). Scrolling, lifting a finger or a pinch is neither,
  * and taps go on to the page as before.
  */

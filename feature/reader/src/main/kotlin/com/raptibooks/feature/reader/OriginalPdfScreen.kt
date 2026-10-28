@@ -183,7 +183,7 @@ fun OriginalPdfRoute(bookId: Long, initialPage: Int, onBack: () -> Unit, onReflo
                         Modifier
                             .fillMaxSize()
                             .onSizeChanged { viewport = Size(it.width.toFloat(), it.height.toFloat()) }
-                            // One finger held still for a second goes back to the reflowed text, at the same page.
+                            // One finger held still for 0.6 s goes back to the reflowed text, at the same page.
                             .holdGestures(enabled = onReflow != null, onHold = { onReflow?.invoke(current) })
                             .pointerInput(Unit) {
                                 detectTapGestures(onDoubleTap = { tap ->

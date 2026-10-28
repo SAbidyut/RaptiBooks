@@ -141,7 +141,7 @@ screen. Bangla and English are both first-class, and everything runs offline.
   anywhere in the book and leave a voice recording or a written note there, shown as a pin in the free strip beside the text with an arrow to the place, so the text stays readable; tap the pin to open it again;
   status and navigation bars always stay visible, so swiping home never scrolls the page; horizontally scrollable tables; resume
   position; keep-screen-on; **original PDF page view** with pinch zoom and a jump back to the
-  reflowed text at the same page: one finger held still on the text for a second opens the
+  reflowed text at the same page: one finger held still on the text for 0.6 s opens the
   original page, and the same there comes back; a double tap on an original page zooms its printed part to the
   width of the screen (the tapped line stays put), another zooms back out.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page
