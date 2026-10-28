@@ -147,7 +147,7 @@ screen. Bangla and English are both first-class, and everything runs offline.
   so you see at once which part you came to look at; the original pages fill the screen
   (no title bar or status bar; the navigation bar stays visible), and a see-through bar at the
   bottom of the pages (it fades away after a moment, a tap brings it back; in landscape it
-  turns with the pages) has a slider to move quickly through the book, the contents (a tap
+  and the contents turn with the pages, which face whichever way the phone is held) has a slider to move quickly through the book, the contents (a tap
   on a chapter goes to its page), the marking pen and notes (voice or written, pinned to a
   place on an original page), and turns the pages for reading across (landscape) or back
   upright, while the screen's own bars stay where they are; the original's text is read

@@ -2,6 +2,8 @@ package com.raptibooks.feature.reader
 
 import android.graphics.Bitmap
 import android.util.LruCache
+import android.view.OrientationEventListener
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -40,17 +43,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -114,6 +115,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -225,15 +227,27 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
         return doc.knownSize(index) ?: doc.knownSize(0) ?: (595f to 842f)
     }
 
+    /** Pages being rendered: asked for twice (the list and the passage lit up), drawn once. */
+    private val rendering = HashMap<String, Deferred<Bitmap?>>()
+
     suspend fun page(index: Int, widthPx: Int): Bitmap? {
         val key = "$index@$widthPx"
         cache.get(key)?.let { return it }
-        val bmp = document?.render(index, widthPx) ?: return null
-        // (sent to the GPU now, not in the frame that first shows it)
-        bmp.prepareToDraw()
-        cache.put(key, bmp)
-        return bmp
+        val job = rendering.getOrPut(key) {
+            viewModelScope.async {
+                val bmp = document?.render(index, widthPx)
+                // (sent to the GPU now, not in the frame that first shows it)
+                bmp?.prepareToDraw()
+                if (bmp != null) cache.put(key, bmp)
+                rendering.remove(key)
+                bmp
+            }
+        }
+        return job.await()
     }
+
+    /** Reads the printed lines of a page ahead, so holding a line there goes back at once. */
+    fun prefetchLines(page: Int) = repo.prefetchOriginalLines(bookId, page)
 
     /** Where the print of a page starts and ends across it (fractions of its width), margins left out. */
     private val spans = HashMap<Int, ClosedFloatingPointRange<Float>>()
@@ -304,6 +318,9 @@ fun OriginalPdfRoute(
     NoStatusBar()
     // Pages turned a quarter for reading across; the screen itself (its bars) stays upright.
     var landscape by rememberSaveable { mutableStateOf(initialLandscape) }
+    // Which way: the right side of the phone up (1) or its left side (-1), as it is held.
+    var turn by rememberSaveable { mutableIntStateOf(1) }
+    if (landscape) PhoneSide { turn = it }
     // The bar at the bottom fades away after a moment; a tap brings it back.
     var barShown by remember { mutableStateOf(true) }
     var poke by remember { mutableIntStateOf(0) }
@@ -330,9 +347,9 @@ fun OriginalPdfRoute(
             Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.navigationBars)
-                .then(if (landscape) Modifier.quarterTurn() else Modifier),
+                .then(if (landscape) Modifier.quarterTurn(turn) else Modifier),
         ) {
-            key(landscape) {
+            key(landscape, turn) {
             when {
                 vm.failed -> Text(stringResource(R.string.original_error), color = Color.White, modifier = Modifier.align(Alignment.Center).padding(32.dp))
                 doc == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -359,21 +376,12 @@ fun OriginalPdfRoute(
                         val itemWidth = (viewport.width - padPx * 2f).coerceAtLeast(1f)
                         return Triple(item.index, (x - padPx) / itemWidth, (inList - item.offset).toFloat() / item.size)
                     }
+                    // Lines of the page in view read ahead, to go back from any of them at once.
                     LaunchedEffect(doc) {
-                        if (arrived) return@LaunchedEffect
-                        val hit = vm.arrival?.await().orEmpty()
-                        arrived = true
-                        if (hit.isEmpty()) return@LaunchedEffect
-                        val size = snapshotFlow { viewport }.first { it.width > 0f }
-                        val (w, h) = vm.pageSize(initialPage)
-                        val itemHeight = (size.width - padPx * 2f) * h / w
-                        val top = hit.minOf { it.top } * itemHeight
-                        listState.scrollToItem(initialPage, (top - size.height * 0.3f).roundToInt().coerceAtLeast(0))
-                        lit = initialPage to hit
-                        glow.snapTo(0.6f)
-                        delay(700)
-                        glow.animateTo(0f, tween(1200))
-                        lit = null
+                        snapshotFlow { listState.firstVisibleItemIndex }.collectLatest {
+                            delay(250)
+                            vm.prefetchLines(it)
+                        }
                     }
                     BoxWithConstraints(
                         Modifier
@@ -432,6 +440,24 @@ fun OriginalPdfRoute(
                         val base = with(density) { maxWidth.toPx().coerceAtMost(1600f).roundToInt() }
                         val widthPx = if (scale > 1.6f) (base * 2).coerceAtMost(3000) else base
                         SideEffect { renderWidth = base }
+                        LaunchedEffect(doc) {
+                            if (arrived) return@LaunchedEffect
+                            val hit = vm.arrival?.await().orEmpty()
+                            arrived = true
+                            if (hit.isEmpty()) return@LaunchedEffect
+                            val size = snapshotFlow { viewport }.first { it.width > 0f }
+                            val (w, h) = vm.pageSize(initialPage)
+                            val itemHeight = (size.width - padPx * 2f) * h / w
+                            val top = hit.minOf { it.top } * itemHeight
+                            listState.scrollToItem(initialPage, (top - size.height * 0.3f).roundToInt().coerceAtLeast(0))
+                            // lit up when the page itself shows, not over a blank one
+                            vm.page(initialPage, widthPx)
+                            lit = initialPage to hit
+                            glow.snapTo(0.6f)
+                            delay(700)
+                            glow.animateTo(0f, tween(1200))
+                            lit = null
+                        }
                         val minStep = with(density) { 2.5.dp.toPx() }
                         val eraseReach = with(density) { 14.dp.toPx() }
                         LazyColumn(
@@ -563,6 +589,18 @@ fun OriginalPdfRoute(
                         modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
                     )
                 }
+                // The contents over the pages, turned with them.
+                if (showContents) {
+                    OriginalContents(
+                        entries = vm.contents.orEmpty(),
+                        currentPage = current,
+                        onJump = { page ->
+                            showContents = false
+                            scope.launch { listState.scrollToItem(page.coerceIn(0, doc.pageCount - 1)) }
+                        },
+                        onDismiss = { showContents = false },
+                    )
+                }
                 AnimatedVisibility(
                     tool == MarkTool.NOTE, Modifier.align(Alignment.TopCenter),
                     enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut(),
@@ -571,18 +609,6 @@ fun OriginalPdfRoute(
                 }
             }
         }
-    }
-
-    if (showContents) {
-        OriginalContents(
-            entries = vm.contents.orEmpty(),
-            currentPage = current,
-            onJump = { page ->
-                showContents = false
-                scope.launch { listState.scrollToItem(page.coerceIn(0, (doc?.pageCount ?: 1) - 1)) }
-            },
-            onDismiss = { showContents = false },
-        )
     }
 
     // Notes: place chosen -> voice or written note; a pin opens its note.
@@ -681,42 +707,87 @@ private fun PageBar(
     }
 }
 
-/** The chapters of the book, a tap goes to the page of one. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * The chapters of the book over the pages, a tap goes to the page of one. Drawn in the pages'
+ * frame (not a sheet of its own), so it is turned with them when they are read across.
+ */
 @Composable
 private fun OriginalContents(entries: List<TocEntry>, currentPage: Int, onJump: (Int) -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Text(
-            stringResource(R.string.reader_contents),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(start = 20.dp, bottom = 8.dp),
-        )
-        val now = entries.indexOfLast { it.pageIndex <= currentPage }
-        val state = rememberLazyListState(initialFirstVisibleItemIndex = (now - 3).coerceAtLeast(0))
-        LazyColumn(state = state, contentPadding = PaddingValues(bottom = 32.dp), modifier = Modifier.heightIn(max = 640.dp)) {
-            items(entries.size) { i ->
-                val e = entries[i]
-                val selected = i == now
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onJump(e.pageIndex) }
-                        .background(if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f) else Color.Transparent)
-                        .padding(start = (20 + (e.level - 1).coerceIn(0, 4) * 18).dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        e.title,
-                        style = if (e.level == 1) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (e.level == 1 || selected) FontWeight.SemiBold else FontWeight.Normal,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text("${e.pageIndex + 1}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    BackHandler(onBack = onDismiss)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .padding(16.dp)
+                .widthIn(max = 520.dp)
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                // (a tap inside is not a tap on the dimmed pages)
+                .pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            Column {
+                Text(
+                    stringResource(R.string.reader_contents),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp),
+                )
+                val now = entries.indexOfLast { it.pageIndex <= currentPage }
+                val state = rememberLazyListState(initialFirstVisibleItemIndex = (now - 3).coerceAtLeast(0))
+                LazyColumn(state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
+                    items(entries.size) { i ->
+                        val e = entries[i]
+                        val selected = i == now
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onJump(e.pageIndex) }
+                                .background(if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f) else Color.Transparent)
+                                .padding(start = (20 + (e.level - 1).coerceIn(0, 4) * 18).dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                e.title,
+                                style = if (e.level == 1) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (e.level == 1 || selected) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text("${e.pageIndex + 1}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+/**
+ * Which side of the phone is up while it is held across: 1 for its right side, -1 for its left
+ * (the last one seen, while it lies flat or stands upright).
+ */
+@Composable
+private fun PhoneSide(onSide: (Int) -> Unit) {
+    val context = LocalContext.current
+    val latest by rememberUpdatedState(onSide)
+    DisposableEffect(context) {
+        val listener = object : OrientationEventListener(context) {
+            override fun onOrientationChanged(degrees: Int) {
+                when (degrees) {
+                    in 50..130 -> latest(-1)
+                    in 230..310 -> latest(1)
+                }
+            }
+        }
+        if (listener.canDetectOrientation()) listener.enable()
+        onDispose { listener.disable() }
     }
 }
 
@@ -733,12 +804,15 @@ private fun NoStatusBar() {
     }
 }
 
-/** The content turned a quarter to the left, filling the place (its width and height swapped). */
-private fun Modifier.quarterTurn(): Modifier = layout { measurable, constraints ->
+/**
+ * The content turned a quarter, to the right ([direction] 1: for the phone held with its right
+ * side up) or to the left (-1), filling the place (its width and height swapped).
+ */
+private fun Modifier.quarterTurn(direction: Int): Modifier = layout { measurable, constraints ->
     val turned = measurable.measure(
         Constraints(constraints.minHeight, constraints.maxHeight, constraints.minWidth, constraints.maxWidth),
     )
     layout(turned.height, turned.width) {
-        turned.placeWithLayer((turned.height - turned.width) / 2, (turned.width - turned.height) / 2) { rotationZ = -90f }
+        turned.placeWithLayer((turned.height - turned.width) / 2, (turned.width - turned.height) / 2) { rotationZ = 90f * direction }
     }
 }

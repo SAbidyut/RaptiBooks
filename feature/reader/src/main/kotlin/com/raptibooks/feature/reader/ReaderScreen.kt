@@ -207,16 +207,22 @@ private fun Reader(
                 // (in its own scope: consuming the jump restarts this effect)
                 scope.launch {
                     listState.scrollToItem(found)
-                    withFrameNanos { }
                     // the held line a third of the way down the screen, however long its paragraph
-                    val place = listPlace[0]
-                    val text = registry.targets.entries.filter { MarkKey.block(it.key) == found }
+                    // (as soon as its text is laid out: the block may still be loading)
+                    fun lineTop(): Float? = registry.targets.entries.filter { MarkKey.block(it.key) == found }
                         .firstNotNullOfOrNull { (_, t) ->
                             val l = t.layout ?: return@firstNotNullOfOrNull null
                             val c = t.coords?.takeIf { it.isAttached } ?: return@firstNotNullOfOrNull null
                             val r = Passage.rangeIn(l.layoutInput.text.text, line)?.second ?: return@firstNotNullOfOrNull null
                             c.positionInRoot().y + l.getLineTop(l.getLineForOffset(r.first))
                         }
+                    var text: Float? = null
+                    for (frame in 0 until 90) {
+                        withFrameNanos { }
+                        text = lineTop()
+                        if (text != null) break
+                    }
+                    val place = listPlace[0]
                     if (text != null && place != null && place.isAttached) {
                         val want = place.positionInRoot().y + listState.layoutInfo.viewportSize.height * 0.3f
                         listState.scrollBy(text - want)

@@ -104,9 +104,9 @@ internal class PassageFlash {
         this.line = line
         this.block = block
         try {
-            glow.snapTo(0.55f)
-            delay(500)
-            glow.animateTo(0f, tween(1400))
+            glow.snapTo(0.6f)
+            delay(700)
+            glow.animateTo(0f, tween(1200))
         } finally {
             this.block = -1
         }
