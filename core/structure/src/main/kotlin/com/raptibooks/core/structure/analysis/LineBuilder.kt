@@ -555,9 +555,10 @@ class LineBuilder(
      * English book run through Acrobat's ClearScan) are shown as printed: each run of them becomes
      * an [InlineStyle.PICTURE] character whose place on the page is in [TextLine.pictures]. A line
      * that is all such words (an Arabic line) becomes one picture per word, in right-to-left order.
-     * Only on a page with clear signs of such garbage. Returns the lines, changed where needed.
+     * Only on a page with clear signs of such garbage, or with lines of that script left as images
+     * ([foreignPage]). Returns the lines, changed where needed.
      */
-    fun pictureWords(lines: List<TextLine>): List<TextLine> {
+    fun pictureWords(lines: List<TextLine>, foreignPage: Boolean = false): List<TextLine> {
         val places = HashMap(charPlaces)
         charPlaces.clear()
         // Only where the text layer was made by an OCR (glyphs placed loosely) and holds such
@@ -565,7 +566,7 @@ class LineBuilder(
         // the text layer cannot name is not one.
         val tokens = lines.sumOf { l -> UnreadableText.tokens(l.text).size }
         val garbled = lines.sumOf { l -> UnreadableText.tokens(l.text).count { (_, t) -> UnreadableText.strong(t) } }
-        if (garbled < 3 || !(scannedPage || (garbled >= 10 && garbled >= tokens * 0.15f))) return lines
+        if (!foreignPage && (garbled < 3 || !(scannedPage || (garbled >= 10 && garbled >= tokens * 0.15f)))) return lines
         val out = lines.map { l ->
             val (lefts, rights) = places[l] ?: return@map l
             pictureLine(l, lefts, rights) ?: l
@@ -599,23 +600,49 @@ class LineBuilder(
             val row = foreign.filter { o -> o !in used && abs(o.baseline - l.baseline) < l.fontSize * 0.4f }.sortedByDescending { it.bounds.right }
             used += row
             if (row.size == 1) { out += l; continue }
-            val sb = StringBuilder().append(RTL_MARK)
-            val styles = ArrayList<InlineStyle>()
+            // the pieces' pictures, read from the right; pieces of one word read as two lines
+            // (its letters and the marks over them) overlap, and are one picture
             val pictures = ArrayList<Rect>()
             for (piece in row) {
-                // each piece: its markers in reading order, numbered anew
-                for (st in piece.styles.filter { it.picture }.sortedBy { it.start }) {
-                    if (sb.length > 1) sb.append(' ')
-                    styles += InlineStyle(sb.length, sb.length + 1, InlineStyle.pictureFlags(pictures.size))
-                    pictures += piece.pictures[InlineStyle.pictureId(st.flags)]
-                    sb.append(com.raptibooks.core.model.InlinePicture.MARKER)
+                for (st in piece.styles.filter { it.picture }) {
+                    var r = piece.pictures[InlineStyle.pictureId(st.flags)]
+                    var k = 0
+                    while (k < pictures.size) {
+                        val o = pictures[k]
+                        if (r.left < o.right - 0.5f && o.left < r.right - 0.5f) { r = r.union(o); pictures.removeAt(k); k = 0 } else k++
+                    }
+                    pictures += r
                 }
+            }
+            pictures.sortByDescending { it.right }
+            tile(pictures, l.fontSize)
+            val sb = StringBuilder().append(RTL_MARK)
+            val styles = ArrayList<InlineStyle>()
+            for (k in pictures.indices) {
+                if (k > 0) sb.append(' ')
+                styles += InlineStyle(sb.length, sb.length + 1, InlineStyle.pictureFlags(k))
+                sb.append(com.raptibooks.core.model.InlinePicture.MARKER)
             }
             val bounds = Rect.bounding(row.map { it.bounds })!!
             val first = row.first()
             out += TextLine(sb.toString(), styles, bounds, first.baseline, first.fontSize, first.boldRatio, first.italicRatio, first.fontName, emptyList(), pictures)
         }
         return out
+    }
+
+    /**
+     * The words of a line of the other script meet halfway across the gaps between them, so that
+     * nothing printed there (a letter the text layer missed) is lost; gaps between columns stay.
+     */
+    private fun tile(pictures: MutableList<Rect>, size: Float) {
+        val order = pictures.indices.sortedBy { pictures[it].left }
+        for ((a, b) in order.zipWithNext()) {
+            val gap = pictures[b].left - pictures[a].right
+            if (gap <= 0f || gap > size * 1.2f) continue
+            val mid = pictures[a].right + gap / 2f
+            pictures[a] = Rect(pictures[a].left, pictures[a].top, mid, pictures[a].bottom)
+            pictures[b] = Rect(mid, pictures[b].top, pictures[b].right, pictures[b].bottom)
+        }
     }
 
     private fun pictureLine(l: TextLine, lefts: FloatArray, rights: FloatArray, force: Boolean = false): TextLine? {
@@ -661,7 +688,8 @@ class LineBuilder(
             }
         }
         if (runs.isEmpty()) return null
-        val pictures = runs.map { rect(it) }
+        val pictures = runs.map { rect(it) }.toMutableList()
+        if (foreign) tile(pictures, size)
         // the line's text with one marker per picture
         val sb = StringBuilder()
         val newIndex = IntArray(l.text.length + 1) { -1 }

@@ -102,7 +102,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
     without Unicode): each garbled word is shown as printed, cut from the page as ink and set
     in the reflowed line like a word (in the theme's text colour); a line of such words is
     reflowed word by word from the right; the English text around them gets its own spaces
-    back (only the space glyphs part words on such pages);
+    back (only the space glyphs part words on such pages); lines the OCR left as images become
+    such lines too, while a grid of words (a drill's word list) and a table with a column of
+    them are shown as printed, whole;
   - **OCR** for scanned pages and broken text layers: Tesseract 5 with bundled `ben` + `eng`
     models, fully offline; text-as-outlines pages are detected too;
   - table of contents from the PDF outline, else from the printed contents page, else from

@@ -60,9 +60,12 @@ object UnreadableText {
 
     private val ODD = charArrayOf('\\', '¥', '→', '←', '|', '~', '^', '{', '}', '`')
 
-    /** A small letter, then punctuation, then a capital: "o.Jt", "c.JA", "Jt;", "U:a:J". */
+    /**
+     * A small letter, then punctuation, then a capital: "o.Jt", "c.JA", "Jt;", "U:a:J"; a bullet
+     * stuck to letters: "OC•", "(•.ull".
+     */
     private val MIXED = Regex(
-        "\\p{Ll}[.:;,=][\\p{Lu}]|\\p{L}[;:=]\\p{L}|[;:][.,;:]|[.,][;:]|_[;:.]|[;:.]_|\\d[,:;][,:;.]|\\p{L}=\\.|\\.{2,}\\p{L}|^\\.\\p{Lu}",
+        "\\p{Ll}[.:;,=][\\p{Lu}]|\\p{L}[;:=]\\p{L}|[;:][.,;:]|[.,][;:]|_[;:.]|[;:.]_|\\d[,:;][,:;.]|\\p{L}=\\.|\\.{2,}\\p{L}|^\\.\\p{Lu}|\\p{L}•|•[.,]\\p{L}",
     )
 
     /** Certainly garbage: unmapped glyphs inside a word, or a backslash among letters. */

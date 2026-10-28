@@ -1022,8 +1022,15 @@ class PageStructurer(private val profile: DocumentProfile) {
         val colLeft = column.left
         val colRight = textRight
         if (b.marker != null) {
-            // List item continuation lines are indented past the marker.
-            return cur.bounds.left > b.markerLeft + em * 0.4f
+            // List item continuation lines are indented past the marker, or go back under it:
+            // the item's second line in the middle of a sentence ("6. The office director's car
+            // (the car of the director / of the office).", "■ METHOD 1 Using the elimination
+            // technique, we add Eqs. (3.1.1) / and (3.1.2)."), and after it the lines of a
+            // paragraph.
+            if (cur.bounds.left > b.markerLeft + em * 0.4f) return true
+            if (abs(cur.bounds.left - b.markerLeft) > em * 0.6f) return false
+            if (b.lines.size == 1) return cur.text.firstOrNull()?.isLowerCase() == true && !Patterns.endsSentence(prev.text)
+            if (abs(prev.bounds.left - b.markerLeft) > em * 0.6f) return false
         }
         if (RtlText.rtlBase(prev.text) && RtlText.rtlBase(cur.text)) {
             // Right-to-left text, mirrored: a paragraph's first line is indented from the right,
@@ -1102,6 +1109,8 @@ class PageStructurer(private val profile: DocumentProfile) {
         val col = b.column
         val size = b.lines.map { it.size }.average().toFloat()
         val kind = when {
+            // (words of a right-to-left script shown as printed: their size is the OCR's guess)
+            text.startsWith('\u200F') -> ParagraphKind.BODY
             // Side notes in the margin column (smaller than the text): notes.
             aside && size < profile.bodySize * 0.97f -> ParagraphKind.NOTE
             b.lines.all { isCentered(it, col) } && b.lines.size <= 8 -> ParagraphKind.CENTERED

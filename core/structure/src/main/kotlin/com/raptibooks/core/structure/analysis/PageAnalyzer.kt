@@ -48,10 +48,17 @@ class PageAnalyzer(
             ruled.none { it.bounds.outset(1f).contains(cx, cy) }
         }
         val (bulleted, bulletPaths) = attachGraphicBullets(lineBuilder.build(remaining, splitColumns = true), page)
-        // Words whose text is garbage (Arabic read by a Latin-only OCR) are shown as printed.
-        val (builtLines, pictures) = if (page.fromOcr) bulleted to emptyList() else numberPictures(lineBuilder.pictureWords(bulleted), page.index)
-        // A table of symbols and formulas printed on a shaded panel is shown as printed.
-        val panels = if (page.fromOcr) emptyList() else formulaPanels(page, builtLines)
+        // Words whose text is garbage (Arabic read by a Latin-only OCR) are shown as printed, and
+        // so are the lines of that script the OCR left as images.
+        val imageLines = if (page.fromOcr) emptyList() else ForeignText.imageLines(page, bulleted)
+        val (builtLines, pictures) = if (page.fromOcr) bulleted to emptyList() else numberPictures(
+            ForeignText.joinCells(lineBuilder.pictureWords(bulleted, foreignPage = imageLines.isNotEmpty()) + imageLines.map { it.second }), page.index,
+        )
+        // Patches of the scan over such words are part of their pictures.
+        val usedImages = imageLines.map { it.first }.toSet() + ForeignText.patches(page.images, builtLines)
+        // A table of symbols and formulas printed on a shaded panel is shown as printed, and so is
+        // a grid of words of the other script.
+        val panels = if (page.fromOcr) emptyList() else formulaPanels(page, builtLines) + ForeignText.grids(builtLines)
         val allLines = if (panels.isEmpty()) builtLines else builtLines.filter { l -> panels.none { l in it.second } }
         val bodySize = bodySizeHint ?: typicalSize(allLines, page.width)
         // Display equations first: their stacked rows would otherwise look like table rows.
@@ -113,8 +120,9 @@ class PageAnalyzer(
         lines = lines.filter { it !in captionLines }
 
         val equationPaths = equations?.paths ?: emptySet()
-        val figurePage = if (bulletPaths.isEmpty() && equationPaths.isEmpty() && panels.isEmpty()) page else RawPage(
-            page.index, page.width, page.height, page.fragments, page.images,
+        val figurePage = if (bulletPaths.isEmpty() && equationPaths.isEmpty() && panels.isEmpty() && usedImages.isEmpty()) page else RawPage(
+            page.index, page.width, page.height, page.fragments,
+            page.images.filter { img -> img !in usedImages && panels.none { it.first.bounds.outset(1f).contains(img.bounds) } },
             page.paths.filter { p -> p !in bulletPaths && p !in equationPaths && panels.none { it.first.bounds.outset(1f).contains(p.bounds) } },
             page.rotatedText, page.fromOcr, page.ocrPictures,
         )
@@ -129,8 +137,11 @@ class PageAnalyzer(
         val body = pieces.filter { it !in whole.absorbed }
         val chars = allLines.sumOf { TextQuality.letterCount(it.text) } +
             ruled.sumOf { t -> t.rows.sumOf { r -> r.sumOf { TextQuality.letterCount(it) } } }
-        // A table with words shown as printed in its cells is shown as printed, whole.
-        val pictureTables = if (pictures.isEmpty()) emptyList() else whole.tables.filter { t -> t.rows.any { r -> r.any { InlinePicture.MARKER in it } } }
+        // A table with words shown as printed in its cells is shown as printed, whole, and so is
+        // one with a column of such words left as junk.
+        val pictureTables = if (pictures.isEmpty()) emptyList() else whole.tables.filter { t ->
+            t.rows.any { r -> r.any { InlinePicture.MARKER in it } } || ForeignText.unreadable(t)
+        }
         val outFigures = whole.figures + pictureTables.map { FigureRegion(it.bounds, FigureKind.VECTOR, it.caption) }
         val outTables = whole.tables - pictureTables.toSet()
         return PageLayout(
@@ -144,7 +155,8 @@ class PageAnalyzer(
 
     /**
      * Gives the words shown as printed their numbers in the book (page × 1024 + k), carried by
-     * the lines' picture styles, and keeps each picture clear of the lines above and below.
+     * the lines' picture styles, and keeps each picture clear of the lines above and below (the
+     * lines keep where their pictures are, no longer by number).
      */
     private fun numberPictures(lines: List<TextLine>, pageIndex: Int): Pair<List<TextLine>, List<PictureRegion>> {
         if (lines.none { it.pictures.isNotEmpty() }) return lines to emptyList()
@@ -152,6 +164,7 @@ class PageAnalyzer(
         val out = lines.map { l ->
             if (l.pictures.isEmpty()) return@map l
             val ids = IntArray(l.pictures.size)
+            val places = ArrayList<Rect>(l.pictures.size)
             for ((k, r) in l.pictures.withIndex()) {
                 var top = r.top
                 var bottom = r.bottom
@@ -163,9 +176,10 @@ class PageAnalyzer(
                 val id = pageIndex * 1024 + regions.size.coerceAtMost(1023)
                 ids[k] = id
                 regions += PictureRegion(id, Rect(r.left - 0.5f, top, r.right + 0.5f, bottom), l.fontSize)
+                places += regions.last().bounds
             }
             val styles = l.styles.map { st -> if (st.picture) InlineStyle(st.start, st.end, InlineStyle.pictureFlags(ids[InlineStyle.pictureId(st.flags)])) else st }
-            TextLine(l.text, styles, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, l.chunks)
+            TextLine(l.text, styles, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, l.chunks, places)
         }
         return out to regions
     }

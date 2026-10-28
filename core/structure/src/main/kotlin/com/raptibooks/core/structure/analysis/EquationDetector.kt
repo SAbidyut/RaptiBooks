@@ -171,8 +171,21 @@ class EquationDetector {
                         }
                         continue
                     }
-                    // (an option's label, "b.", belongs to the formula after it)
-                    if (sameRow && (f.fragment || f.seed) && hGap <= em * 2.5f && !(l.bounds.left >= r.bounds.right - 1f && OPTION_LABEL.matches(l.text.trim()))) {
+                    // (an option's label, "b.", belongs to the formula after it; the columns of a
+                    // system of equations without fractions, "I1(Z1 + ZL1)   − I2Zm12   + I3Zm13
+                    // = E1", are set wider apart)
+                    val rows = equationRows(r.lines)
+                    val column = rows >= 1 && f.words == 0 && hGap <= em * 6f && r.bars.isEmpty() && l.text.any { it in "+−=" } &&
+                        r.lines.any { abs(it.baseline - l.baseline) <= em * 0.08f } &&
+                        !OPTION_START.containsMatchIn(l.text) && !Patterns.listMarker.containsMatchIn(l.text) && !labelled(r) &&
+                        regions.none { o -> o.bars.isNotEmpty() && o.bounds.verticalOverlap(l.bounds) > 0f } &&
+                        (rows >= 2 || regions.any { o ->
+                            o !== r && equationRows(o.lines) >= 1 && o.bounds.horizontalOverlap(r.bounds) > 0f &&
+                                max(o.bounds.top - r.bounds.bottom, r.bounds.top - o.bounds.bottom) <= em * 0.8f
+                        })
+                    if (sameRow && (f.fragment || f.seed) && (hGap <= em * 2.5f || column) &&
+                        !(l.bounds.left >= r.bounds.right - 1f && OPTION_LABEL.matches(l.text.trim()))
+                    ) {
                         r.lines += l
                         r.bounds = r.bounds.union(l.bounds)
                         changed = true
@@ -192,6 +205,13 @@ class EquationDetector {
         }
 
         mergeDerivations(regions, lines, feats, bodySize)
+        // Pieces of math printed inside a derivation's picture are part of it (the columns of a
+        // system of equations whose rows were taken in one by one).
+        for (r in regions) for (l in lines) {
+            if (regions.any { l in it.lines || l === it.number }) continue
+            val f = feats.getValue(l)
+            if (f.words == 0 && !f.number && free(l.bounds) && l.bounds.coveredBy(r.bounds) >= 0.9f) r.lines += l
+        }
         if (absorbRowLabels(regions, lines, bodySize, proseLefts)) mergeOverlapping(regions, bodySize)
 
         val out = mutableListOf<FigureRegion>()
@@ -373,6 +393,23 @@ class EquationDetector {
         return rows
     }
 
+    /** Rows of a formula when each has a relation sign (the equations of a system), else 0. */
+    private fun equationRows(lines: Collection<TextLine>): Int {
+        var rows = 0
+        var last = Float.NEGATIVE_INFINITY
+        var related = false
+        for (l in lines.sortedBy { it.baseline }) {
+            if (l.baseline - last > l.fontSize * 0.45f) {
+                if (rows > 0 && !related) return 0
+                rows++
+                related = false
+            }
+            if (l.text.any { it in MathText.RELATIONS }) related = true
+            last = l.baseline
+        }
+        return if (related) rows else 0
+    }
+
     /** A one-row formula that is just a line of a paragraph (aligned with the prose around it). */
     private fun inParagraph(r: Region, lines: List<TextLine>, feats: Map<TextLine, Feat>, em: Float): Boolean {
         val first = r.lines.minByOrNull { it.bounds.left } ?: return false
@@ -433,6 +470,8 @@ class EquationDetector {
         val SENTENCE_START = Regex("^\\s*\\p{L}{2,}[,:]?\\s+\\p{Ll}{2,}[\\s,:]")
         /** "b.", "*f.", "(c)": the label of an option in a list of exercises. */
         val OPTION_LABEL = Regex("^\\*?\\(?\\p{Ll}[.)]$")
+        /** "a. (−0.001)²": an option of an exercise, with its label. */
+        val OPTION_START = Regex("^\\s*\\*?\\(?\\p{Ll}[.)]\\s")
         /** A connective opening a sentence before its formula: "Thus, I1 = …", "Since ω0 = …". */
         val OPENER = Regex(
             "^\\s*(?:that is|thus|hence|since|then|therefore|so|where|also|similarly|here|if|when|from|using|" +

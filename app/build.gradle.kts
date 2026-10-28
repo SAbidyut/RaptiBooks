@@ -14,8 +14,8 @@ android {
         applicationId = "com.raptibooks"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 9
-        versionName = "1.5.0"
+        versionCode = 10
+        versionName = "1.5.1"
 
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")

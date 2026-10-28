@@ -87,6 +87,9 @@ fun convert(pdf: File) {
         if (System.getenv("HARNESS_PATHS") != null) {
             e.page.paths.forEach { println("     path ${it.shape} ${it.bounds} stroked=${it.stroked} filled=${it.filled} light=${it.lightFill} seg=${it.segments}") }
         }
+        if (System.getenv("HARNESS_RAWIMAGES") != null) {
+            e.page.images.forEach { println("     image ${it.bounds}") }
+        }
         if (System.getenv("HARNESS_REGIONS") != null) {
             layout.figures.forEach { println("     FIGURE ${it.kind} ${it.bounds} ts=${it.textSize} caption=${it.caption}") }
             layout.pictures.forEach { println("     PICTURE ${it.id} ${it.bounds}") }
