@@ -182,6 +182,15 @@ class ReaderViewModel(
     suspend fun blockForPage(page: Int): Int? = repo.firstBlockOfPage(bookId, page)
 
     /**
+     * The block of the reflowed book that holds the printed [line] of [page] (a paragraph may
+     * have begun on the page before), or null when none does.
+     */
+    suspend fun findPassage(page: Int, line: String): Int? =
+        repo.blocksOfPages(bookId, (page - 1).coerceAtLeast(0), page)
+            .mapNotNull { b -> Passage.rangeIn(b.plainText, line)?.let { Triple(b.index, it.first, b.pageIndex == page) } }
+            .maxWithOrNull(compareBy({ it.second }, { it.third }))?.first
+
+    /**
      * Where a line of the printed contents (at block [from]) points to: the matching chapter in
      * the book's table of contents, or else the next place its title appears.
      */

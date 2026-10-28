@@ -142,11 +142,15 @@ screen. Bangla and English are both first-class, and everything runs offline.
   status and navigation bars always stay visible, so swiping home never scrolls the page; horizontally scrollable tables; resume
   position; keep-screen-on; **original PDF page view** with pinch zoom and a jump back to the
   reflowed text at the same page: one finger held still on the text for 0.6 s opens the
-  original page, and the same there comes back; the original pages fill the screen
-  (no title bar; the status and navigation bars stay visible), and a button at the bottom turns
-  the pages for reading across (landscape) or back upright, while the screen's own bars stay
-  where they are; a double tap on an original page zooms its printed part to the
-  width of the screen (the tapped line stays put), another zooms back out.
+  original page, and the same there comes back; the passage held lights up for a moment
+  where you arrive (the printed lines on the original page, the words in the reflowed text),
+  so you see at once which part you came to look at; the original pages fill the screen
+  (no title bar or status bar; the navigation bar stays visible), and a see-through bar at the
+  bottom (it fades away after a moment, a tap brings it back) shows the page, opens the
+  marking pen for drawing on the original pages, and turns the pages for reading across
+  (landscape) or back upright, while the screen's own bars stay where they are; a double tap
+  on an original page zooms its printed part to the width of the screen (the tapped line stays
+  put), another zooms back out.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page
   analyses are cached on disk, images are never decoded during analysis, fonts are kept only
   softly (and one page's fonts are not held by the next), the reader loads blocks in chunks

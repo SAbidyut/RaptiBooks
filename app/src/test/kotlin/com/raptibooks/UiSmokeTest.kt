@@ -31,7 +31,7 @@ class UiSmokeTest {
         for (theme in ReaderTheme.entries) {
             TestSupport.app.container.settings.update { it.copy(theme = theme, justify = theme != ReaderTheme.DARK) }
             activity.setContent {
-                RaptiTheme { ReaderRoute(bookId, jumpToPage = null, onJumpConsumed = {}, onBack = {}, onOpenOriginal = {}) }
+                RaptiTheme { ReaderRoute(bookId, jumpToPage = null, onJumpConsumed = {}, onBack = {}, onOpenOriginal = { _, _ -> }) }
             }
             TestSupport.pump()
         }
@@ -39,11 +39,30 @@ class UiSmokeTest {
         TestSupport.resourcePdf("math_textbook.pdf", TestSupport.app.container.files.source(bookId))
         for (landscape in listOf(false, true)) {
             activity.setContent {
-                RaptiTheme { OriginalPdfRoute(bookId, initialPage = 0, onBack = {}, onReflow = {}, initialLandscape = landscape) }
+                RaptiTheme { OriginalPdfRoute(bookId, initialPage = 0, onBack = {}, onReflow = { _, _ -> }, initialLandscape = landscape) }
             }
             TestSupport.pump()
         }
         controller.pause().stop().destroy()
+    }
+
+    @Test
+    fun passageHeldInOneViewIsFoundInTheOther() {
+        val bookId = TestSupport.seedLibrary()
+        val c = TestSupport.app.container
+        val vm = ReaderViewModel(bookId, c.reader, c.settings)
+        TestSupport.pumpUntil { vm.load is ReaderViewModel.Load.Ready }
+        // a printed line, back in the reflowed text
+        val found = runBlocking { vm.findPassage(2, "A quotation that stands") }
+        assertTrue(found != null)
+        val block = runBlocking { c.reader.blocks(bookId, found!!, found + 1) }.single()
+        assertTrue(block.plainText, block.plainText.startsWith("A quotation"))
+        assertEquals(null, runBlocking { vm.findPassage(2, "nothing of the kind here") })
+        // the printed lines of an original page, placed on it
+        TestSupport.resourcePdf("math_textbook.pdf", c.files.source(bookId))
+        val lines = runBlocking { c.reader.openOriginal(bookId).use { it.lines(0) } }
+        assertTrue(lines.isNotEmpty())
+        assertTrue(lines.all { it.left in 0f..1f && it.top in 0f..1f && it.bottom > it.top })
     }
 
     @Test

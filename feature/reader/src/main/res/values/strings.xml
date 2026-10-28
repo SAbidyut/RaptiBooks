@@ -88,6 +88,7 @@
     <string name="original_error">The original PDF could not be opened.</string>
     <string name="original_landscape">Landscape</string>
     <string name="original_portrait">Portrait</string>
+    <string name="original_pen">Marking pen</string>
     <string name="action_close">Close</string>
     <string name="equation_scroll_hint">← Swipe to see the whole formula →</string>
     <string name="table_scroll_hint">← Swipe sideways to see all columns →</string>

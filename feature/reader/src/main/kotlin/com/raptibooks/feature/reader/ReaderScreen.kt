@@ -94,6 +94,12 @@ import com.raptibooks.core.ui.ReaderColors
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import com.raptibooks.core.model.MarkKey
 import kotlin.math.roundToInt
 
 @Composable
@@ -102,7 +108,10 @@ fun ReaderRoute(
     jumpToPage: Int?,
     onJumpConsumed: () -> Unit,
     onBack: () -> Unit,
-    onOpenOriginal: (page: Int) -> Unit,
+    /** Opens the original page, with the text held there (to light it up on the page). */
+    onOpenOriginal: (page: Int, passage: String?) -> Unit,
+    /** A printed line of [jumpToPage] held on the original page: lit up on arrival. */
+    jumpPassage: String? = null,
 ) {
     val context = LocalContext.current
     val vm: ReaderViewModel = viewModel(
@@ -122,7 +131,7 @@ fun ReaderRoute(
             ReaderViewModel.Load.NotReady -> Column(Modifier.align(Alignment.Center).padding(32.dp)) {
                 Text(stringResource(R.string.reader_not_ready), color = colors.text)
             }
-            is ReaderViewModel.Load.Ready -> Reader(vm, load, settings, colors, jumpToPage, onJumpConsumed, onBack, onOpenOriginal)
+            is ReaderViewModel.Load.Ready -> Reader(vm, load, settings, colors, jumpToPage, jumpPassage, onJumpConsumed, onBack, onOpenOriginal)
         }
     }
 }
@@ -145,9 +154,10 @@ private fun Reader(
     settings: ReaderSettings,
     colors: ReaderColors,
     jumpToPage: Int?,
+    jumpPassage: String?,
     onJumpConsumed: () -> Unit,
     onBack: () -> Unit,
-    onOpenOriginal: (Int) -> Unit,
+    onOpenOriginal: (page: Int, passage: String?) -> Unit,
 ) {
     val book = ready.book
     val source = ready.source
@@ -168,6 +178,9 @@ private fun Reader(
     val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
     val highlights by vm.highlights.collectAsStateWithLifecycle()
     val registry = remember { MarkRegistry() }
+    val flash = remember { PassageFlash() }
+    // (where the page is on screen: the texts are placed in root coordinates)
+    val listPlace = remember { arrayOfNulls<LayoutCoordinates>(1) }
     val ink by vm.ink.collectAsStateWithLifecycle()
     val marks = remember(highlights, ink, registry) { ReaderMarks(highlights, ink, registry) }
     val density = LocalDensity.current.density
@@ -185,8 +198,32 @@ private fun Reader(
     }
     LaunchedEffect(jumpToPage) {
         if (jumpToPage != null) {
-            vm.blockForPage(jumpToPage)?.let { listState.scrollToItem(it) }
+            val line = jumpPassage
+            val found = line?.let { vm.findPassage(jumpToPage, it) }
             onJumpConsumed()
+            if (found == null) {
+                vm.blockForPage(jumpToPage)?.let { listState.scrollToItem(it) }
+            } else {
+                // (in its own scope: consuming the jump restarts this effect)
+                scope.launch {
+                    listState.scrollToItem(found)
+                    withFrameNanos { }
+                    // the held line a third of the way down the screen, however long its paragraph
+                    val place = listPlace[0]
+                    val text = registry.targets.entries.filter { MarkKey.block(it.key) == found }
+                        .firstNotNullOfOrNull { (_, t) ->
+                            val l = t.layout ?: return@firstNotNullOfOrNull null
+                            val c = t.coords?.takeIf { it.isAttached } ?: return@firstNotNullOfOrNull null
+                            val r = Passage.rangeIn(l.layoutInput.text.text, line)?.second ?: return@firstNotNullOfOrNull null
+                            c.positionInRoot().y + l.getLineTop(l.getLineForOffset(r.first))
+                        }
+                    if (text != null && place != null && place.isAttached) {
+                        val want = place.positionInRoot().y + listState.layoutInfo.viewportSize.height * 0.3f
+                        listState.scrollBy(text - want)
+                    }
+                    flash.show(found, line)
+                }
+            }
         }
     }
     DisposableEffect(Unit) {
@@ -211,7 +248,7 @@ private fun Reader(
     val bookmarked = bookmarks.any { it.blockIndex in firstVisible..maxOf(firstVisible, lastVisible) }
     val progress = if (book.blockCount <= 1) 1f else firstVisible.toFloat() / (book.blockCount - 1)
 
-    CompositionLocalProvider(LocalMarks provides marks, LocalSelection provides selection) {
+    CompositionLocalProvider(LocalMarks provides marks, LocalSelection provides selection, LocalFlash provides flash) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val margin = settings.margin.dp
         val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -222,7 +259,15 @@ private fun Reader(
                 .fillMaxSize()
                 // One finger held still for 0.6 s opens the original page (and the same there
                 // comes back); two fingers dragged over the text select it to copy.
-                .holdGestures(enabled = tool == MarkTool.NONE, onHold = { onOpenOriginal(currentPage) })
+                .onGloballyPositioned { listPlace[0] = it }
+                .holdGestures(enabled = tool == MarkTool.NONE, onHold = { at ->
+                    // the words under the finger go along, to be lit up on the page
+                    val root = listPlace[0]?.takeIf { it.isAttached }?.let { it.positionInRoot() + at } ?: at
+                    val pos = charAt(root, registry)
+                    val held = pos?.let { p -> registry.targets[p.key]?.layout?.layoutInput?.text?.text?.let { Passage.around(it, p.offset) } }
+                    val page = pos?.let { source.peek(MarkKey.block(it.key))?.pageIndex } ?: currentPage
+                    onOpenOriginal(page, held)
+                })
                 .twoFingerSelect(selection, registry, listState, enabled = tool == MarkTool.NONE)
                 .pointerInput(Unit) {
                     detectTapGestures(
@@ -353,7 +398,7 @@ private fun Reader(
                 onContents = { panel = Panel.CONTENTS },
                 onBookmark = { vm.toggleBookmark(firstVisible, maxOf(firstVisible, lastVisible)) },
                 onSettings = { panel = Panel.SETTINGS },
-                onOriginal = { onOpenOriginal(currentPage) },
+                onOriginal = { onOpenOriginal(currentPage, null) },
                 onInfo = { panel = Panel.INFO },
                 onMarker = { penMenu = true; chrome = false },
             )

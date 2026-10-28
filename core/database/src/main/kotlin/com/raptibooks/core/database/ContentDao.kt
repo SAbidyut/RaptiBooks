@@ -41,9 +41,10 @@ class ContentDao(private val db: RaptiDatabase) {
             delete("blocks", "book_id = ?", arrayOf(bookId.toString()))
             delete("toc", "book_id = ?", arrayOf(bookId.toString()))
             delete("boxes", "book_id = ?", arrayOf(bookId.toString()))
-            // Marks point into the old blocks; they cannot follow a re-conversion.
+            // Marks point into the old blocks; they cannot follow a re-conversion. (Lines drawn
+            // on the original pages, kept under the page as -(page + 1), stay.)
             delete("highlights", "book_id = ?", arrayOf(bookId.toString()))
-            delete("ink", "book_id = ?", arrayOf(bookId.toString()))
+            delete("ink", "book_id = ? AND block_idx >= 0", arrayOf(bookId.toString()))
         }
         db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC, RaptiDatabase.BOXES, RaptiDatabase.HIGHLIGHTS, RaptiDatabase.INK)
     }

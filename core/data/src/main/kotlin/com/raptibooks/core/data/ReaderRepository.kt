@@ -17,6 +17,9 @@ import com.raptibooks.core.model.SearchHit
 import com.raptibooks.core.model.BoxSpan
 import com.raptibooks.core.model.TocEntry
 import com.raptibooks.core.pdf.PageRenderer
+import com.raptibooks.core.pdf.PdfExtractor
+import com.raptibooks.core.pdf.PdfSupport
+import com.raptibooks.core.structure.analysis.PageAnalyzer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -30,6 +33,7 @@ class ReaderRepository(
     private val content: ContentDao,
     private val files: BookFiles,
 ) {
+    private val appContext = context.applicationContext
     private val pictureText = PictureText(context)
 
     fun observeBook(id: Long): Flow<Book?> = books.observe(id)
@@ -90,6 +94,13 @@ class ReaderRepository(
 
     suspend fun markOpened(id: Long) = withContext(Dispatchers.IO) { books.markOpened(id) }
 
+    /** The blocks printed on pages [from] to [to]. */
+    suspend fun blocksOfPages(id: Long, from: Int, to: Int): List<ContentBlock> = withContext(Dispatchers.IO) {
+        val first = content.firstBlockAtOrAfterPage(id, from) ?: return@withContext emptyList()
+        val after = content.firstBlockAtOrAfterPage(id, to + 1) ?: (first + 400)
+        content.blocks(id, first, maxOf(first + 1, after)).filter { it.pageIndex in from..to }
+    }
+
     suspend fun firstBlockOfPage(id: Long, page: Int): Int? = withContext(Dispatchers.IO) { content.firstBlockAtOrAfterPage(id, page) }
 
     suspend fun pageOfBlock(id: Long, index: Int): Int? = withContext(Dispatchers.IO) { content.pageOfBlock(id, index) }
@@ -99,19 +110,55 @@ class ReaderRepository(
 
     /** Opens the original PDF for the page view. Close it when done. */
     suspend fun openOriginal(id: Long): OriginalPdf = withContext(Dispatchers.IO) {
-        OriginalPdf(PageRenderer.open(files.source(id), files.scratch(id)))
+        OriginalPdf(PageRenderer.open(files.source(id), files.scratch(id))) {
+            PdfSupport.init(appContext)
+            PdfExtractor.open(files.source(id), files.scratch(id))
+        }
     }
 }
 
+/** A printed line of an original page, where it is as fractions of the page's width and height. */
+class PageLine(val text: String, val left: Float, val top: Float, val right: Float, val bottom: Float)
+
 /** Renders pages of the original PDF ("original view"). */
-class OriginalPdf internal constructor(private val renderer: PageRenderer) : Closeable {
+class OriginalPdf internal constructor(
+    private val renderer: PageRenderer,
+    private val openText: () -> PdfExtractor,
+) : Closeable {
+    private var extractor: PdfExtractor? = null
+    private val lineCache = HashMap<Int, List<PageLine>>()
+
+    /** The printed lines of page [index] (its text read as the conversion reads it), for finding a passage. */
+    suspend fun lines(index: Int): List<PageLine> = withContext(Dispatchers.IO) {
+        synchronized(lineCache) {
+            lineCache[index]?.let { return@withContext it }
+            val lines = try {
+                val ex = extractor ?: openText().also { extractor = it }
+                val page = ex.extractPage(index).page
+                val w = page.width.coerceAtLeast(1f)
+                val h = page.height.coerceAtLeast(1f)
+                PageAnalyzer().analyze(page).lines.map { l ->
+                    PageLine(l.text, l.bounds.left / w, l.bounds.top / h, l.bounds.right / w, l.bounds.bottom / h)
+                }
+            } catch (e: Exception) {
+                emptyList()
+            } catch (e: OutOfMemoryError) {
+                emptyList()
+            }
+            lineCache[index] = lines
+            lines
+        }
+    }
     val pageCount: Int get() = renderer.pageCount
-    private val sizes = HashMap<Int, Pair<Float, Float>>()
+    private val sizes = java.util.concurrent.ConcurrentHashMap<Int, Pair<Float, Float>>()
 
     @Synchronized
     fun pageSize(index: Int): Pair<Float, Float> = sizes.getOrPut(index) {
         runCatching { renderer.pageSize(index) }.getOrDefault(595f to 842f)
     }
+
+    /** The size of page [index] if already known: never waits for a page being rendered. */
+    fun knownSize(index: Int): Pair<Float, Float>? = sizes[index]
 
     suspend fun render(index: Int, widthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
         try {
@@ -126,5 +173,8 @@ class OriginalPdf internal constructor(private val renderer: PageRenderer) : Clo
         }
     }
 
-    override fun close() = renderer.close()
+    override fun close() {
+        renderer.close()
+        synchronized(lineCache) { extractor?.close() }
+    }
 }

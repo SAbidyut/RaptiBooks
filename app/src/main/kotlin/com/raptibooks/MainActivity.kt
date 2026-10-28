@@ -49,20 +49,29 @@ class MainActivity : ComponentActivity() {
                         val bookId = entry.arguments?.getLong("bookId") ?: return@composable
                         val handle = entry.savedStateHandle
                         val jump by handle.getStateFlow<Int?>(JUMP_TO_PAGE, null).collectAsStateWithLifecycle()
+                        val passage by handle.getStateFlow<String?>(JUMP_PASSAGE, null).collectAsStateWithLifecycle()
                         ReaderRoute(
                             bookId = bookId,
                             jumpToPage = jump,
-                            onJumpConsumed = { handle[JUMP_TO_PAGE] = null },
+                            jumpPassage = passage,
+                            onJumpConsumed = {
+                                handle[JUMP_TO_PAGE] = null
+                                handle[JUMP_PASSAGE] = null
+                            },
                             onBack = { nav.popBackStack() },
-                            onOpenOriginal = { page -> nav.navigate("original/$bookId/$page?fromReader=true") },
+                            onOpenOriginal = { page, held ->
+                                val q = held?.let { "&passage=" + Uri.encode(it) } ?: ""
+                                nav.navigate("original/$bookId/$page?fromReader=true$q")
+                            },
                         )
                     }
                     composable(
-                        "original/{bookId}/{page}?fromReader={fromReader}",
+                        "original/{bookId}/{page}?fromReader={fromReader}&passage={passage}",
                         arguments = listOf(
                             navArgument("bookId") { type = NavType.LongType },
                             navArgument("page") { type = NavType.IntType },
                             navArgument("fromReader") { type = NavType.BoolType; defaultValue = false },
+                            navArgument("passage") { type = NavType.StringType; nullable = true; defaultValue = null },
                         ),
                     ) { entry ->
                         val args = entry.arguments ?: return@composable
@@ -71,10 +80,15 @@ class MainActivity : ComponentActivity() {
                             bookId = args.getLong("bookId"),
                             initialPage = args.getInt("page"),
                             onBack = { nav.popBackStack() },
-                            onReflow = if (fromReader) { page ->
-                                nav.previousBackStackEntry?.savedStateHandle?.set(JUMP_TO_PAGE, page)
+                            onReflow = if (fromReader) { page, line ->
+                                nav.previousBackStackEntry?.savedStateHandle?.let {
+                                    // (the passage first: the reader moves when the page is set)
+                                    it[JUMP_PASSAGE] = line
+                                    it[JUMP_TO_PAGE] = page
+                                }
                                 nav.popBackStack()
                             } else null,
+                            passage = args.getString("passage"),
                         )
                     }
                 }
@@ -103,5 +117,6 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val JUMP_TO_PAGE = "jumpToPage"
+        const val JUMP_PASSAGE = "jumpPassage"
     }
 }
