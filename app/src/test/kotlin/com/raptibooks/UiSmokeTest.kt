@@ -3,6 +3,7 @@ package com.raptibooks
 import androidx.activity.compose.setContent
 import com.raptibooks.core.model.ReaderTheme
 import com.raptibooks.core.ui.RaptiTheme
+import com.raptibooks.feature.reader.OriginalPdfRoute
 import com.raptibooks.feature.reader.ReaderRoute
 import com.raptibooks.feature.reader.ReaderViewModel
 import kotlinx.coroutines.flow.first
@@ -31,6 +32,14 @@ class UiSmokeTest {
             TestSupport.app.container.settings.update { it.copy(theme = theme, justify = theme != ReaderTheme.DARK) }
             activity.setContent {
                 RaptiTheme { ReaderRoute(bookId, jumpToPage = null, onJumpConsumed = {}, onBack = {}, onOpenOriginal = {}) }
+            }
+            TestSupport.pump()
+        }
+        // The original pages, full screen, upright and turned for reading across.
+        TestSupport.resourcePdf("math_textbook.pdf", TestSupport.app.container.files.source(bookId))
+        for (landscape in listOf(false, true)) {
+            activity.setContent {
+                RaptiTheme { OriginalPdfRoute(bookId, initialPage = 0, onBack = {}, onReflow = {}, initialLandscape = landscape) }
             }
             TestSupport.pump()
         }

@@ -86,6 +86,8 @@
     <string name="original_title">মূল পিডিএফ</string>
     <string name="original_reflow">সাজানো লেখায় ফিরে যান</string>
     <string name="original_error">মূল পিডিএফ খোলা যায়নি।</string>
+    <string name="original_landscape">আড়াআড়ি</string>
+    <string name="original_portrait">লম্বালম্বি</string>
     <string name="action_close">বন্ধ</string>
     <string name="equation_scroll_hint">← পুরো সূত্র দেখতে পাশে সরান →</string>
     <string name="table_scroll_hint">← সব কলাম দেখতে পাশে সরান →</string>

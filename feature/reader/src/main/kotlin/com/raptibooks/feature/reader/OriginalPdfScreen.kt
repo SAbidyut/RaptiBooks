@@ -3,6 +3,17 @@ package com.raptibooks.feature.reader
 import android.graphics.Bitmap
 import android.util.LruCache
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -132,7 +143,14 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
 /** The original PDF pages, with pinch zoom. [onReflow] returns to the reflowed text at a page. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OriginalPdfRoute(bookId: Long, initialPage: Int, onBack: () -> Unit, onReflow: ((page: Int) -> Unit)?) {
+fun OriginalPdfRoute(
+    bookId: Long,
+    initialPage: Int,
+    onBack: () -> Unit,
+    onReflow: ((page: Int) -> Unit)?,
+    /** Start with the pages turned for reading across. */
+    initialLandscape: Boolean = false,
+) {
     val context = LocalContext.current
     val vm: OriginalPdfViewModel = viewModel(
         key = "original-$bookId",
@@ -141,28 +159,17 @@ fun OriginalPdfRoute(bookId: Long, initialPage: Int, onBack: () -> Unit, onReflo
     val doc = vm.document
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0))
     val current = listState.firstVisibleItemIndex
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(stringResource(R.string.original_title), style = MaterialTheme.typography.titleMedium)
-                        if (doc != null) Text(stringResource(R.string.reader_page, current + 1, doc.pageCount), style = MaterialTheme.typography.labelMedium)
-                    }
-                },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.reader_back)) } },
-                actions = {
-                    if (onReflow != null) {
-                        TextButton(onClick = { onReflow(current) }) {
-                            Icon(RaptiIcons.Article, null, modifier = Modifier.size(18.dp))
-                            Text(" " + stringResource(R.string.original_reflow))
-                        }
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding).background(Color(0xFF3A3936))) {
+    SystemBars(dark = true, restore = true)
+    // Pages turned a quarter for reading across; the screen itself (its bars) stays upright.
+    var landscape by rememberSaveable { mutableStateOf(initialLandscape) }
+    Box(Modifier.fillMaxSize().background(Color(0xFF3A3936))) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .then(if (landscape) Modifier.quarterTurn() else Modifier),
+        ) {
+            key(landscape) {
             when {
                 vm.failed -> Text(stringResource(R.string.original_error), color = Color.White, modifier = Modifier.align(Alignment.Center).padding(32.dp))
                 doc == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -238,6 +245,38 @@ fun OriginalPdfRoute(bookId: Long, initialPage: Int, onBack: () -> Unit, onReflo
                     }
                 }
             }
+            }
         }
+        if (doc != null) {
+            // The page shown and the switch between reading upright and across, at the bottom of
+            // the screen in either.
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color.Black.copy(alpha = 0.55f),
+                contentColor = Color.White,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 14.dp)) {
+                    Text("${current + 1} / ${doc.pageCount}", style = MaterialTheme.typography.labelLarge)
+                    TextButton(onClick = { landscape = !landscape }) {
+                        Icon(RaptiIcons.Rotate, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Text(
+                            " " + stringResource(if (landscape) R.string.original_portrait else R.string.original_landscape),
+                            color = Color.White,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The content turned a quarter to the left, filling the place (its width and height swapped). */
+private fun Modifier.quarterTurn(): Modifier = layout { measurable, constraints ->
+    val turned = measurable.measure(
+        Constraints(constraints.minHeight, constraints.maxHeight, constraints.minWidth, constraints.maxWidth),
+    )
+    layout(turned.height, turned.width) {
+        turned.placeWithLayer((turned.height - turned.width) / 2, (turned.width - turned.height) / 2) { rotationZ = -90f }
     }
 }

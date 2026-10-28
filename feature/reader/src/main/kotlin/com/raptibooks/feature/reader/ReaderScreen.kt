@@ -566,15 +566,24 @@ private fun BottomBar(colors: ReaderColors, chapter: String?, page: Int, pageCou
 
 /** Keeps the status and navigation bars visible (readable on the reading theme) while reading. */
 @Composable
-private fun SystemBars(dark: Boolean) {
+internal fun SystemBars(dark: Boolean, restore: Boolean = false) {
     val view = LocalView.current
     val activity = view.context.findActivity() ?: return
     DisposableEffect(dark) {
         val controller = WindowCompat.getInsetsController(activity.window, view)
+        // ([restore]: the screen under this one gets its look back, the dark original pages
+        // opened over a light library)
+        val lightStatus = controller.isAppearanceLightStatusBars
+        val lightNavigation = controller.isAppearanceLightNavigationBars
         controller.isAppearanceLightStatusBars = !dark
         controller.isAppearanceLightNavigationBars = !dark
         controller.show(WindowInsetsCompat.Type.systemBars())
-        onDispose { }
+        onDispose {
+            if (restore) {
+                controller.isAppearanceLightStatusBars = lightStatus
+                controller.isAppearanceLightNavigationBars = lightNavigation
+            }
+        }
     }
 }
 
