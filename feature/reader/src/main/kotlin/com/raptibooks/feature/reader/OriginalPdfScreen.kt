@@ -31,8 +31,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -94,6 +96,33 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
         return bmp
     }
 
+    /** Where the print of a page starts and ends across it (fractions of its width), margins left out. */
+    private val spans = HashMap<Int, ClosedFloatingPointRange<Float>>()
+
+    fun contentSpan(index: Int, widthPx: Int): ClosedFloatingPointRange<Float>? {
+        spans[index]?.let { return it }
+        val bmp = cache.get("$index@$widthPx") ?: return null
+        val w = bmp.width
+        val row = IntArray(w)
+        var left = w
+        var right = -1
+        // (every few rows is enough to find the edges of the text)
+        for (y in 0 until bmp.height step 6) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val c = row[x]
+                if (((c shr 16 and 0xFF) * 299 + (c shr 8 and 0xFF) * 587 + (c and 0xFF) * 114) / 1000 < 200) {
+                    if (x < left) left = x
+                    if (x > right) right = x
+                }
+            }
+        }
+        if (right <= left) return null
+        val span = (left.toFloat() / w)..((right + 1).toFloat() / w)
+        spans[index] = span
+        return span
+    }
+
     override fun onCleared() {
         cache.evictAll()
         document?.close()
@@ -146,18 +175,44 @@ fun OriginalPdfRoute(bookId: Long, initialPage: Int, onBack: () -> Unit, onReflo
                         // The pages never slide off the screen sideways or out of the top/bottom.
                         offset = if (scale == 1f) Offset.Zero else clampOffset(offset + pan, viewport, viewport, scale)
                     }
+                    val density = LocalDensity.current
+                    val padPx = with(density) { 12.dp.toPx() }
+                    // (the width the pages are rendered at, to find the one tapped)
+                    var renderWidth by remember { mutableIntStateOf(0) }
                     BoxWithConstraints(
                         Modifier
                             .fillMaxSize()
                             .onSizeChanged { viewport = Size(it.width.toFloat(), it.height.toFloat()) }
+                            // A sideways swipe goes back to the reflowed text, at the same page.
+                            .horizontalSwipe(enabled = onReflow != null && scale == 1f) { onReflow?.invoke(current) }
                             .pointerInput(Unit) {
-                                detectTapGestures(onDoubleTap = {
-                                    if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2f
+                                detectTapGestures(onDoubleTap = { tap ->
+                                    if (scale > 1f) {
+                                        scale = 1f
+                                        offset = Offset.Zero
+                                    } else {
+                                        // The printed part of the page under the finger fills the
+                                        // width of the screen; the tapped line stays where it is.
+                                        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { tap.y.roundToInt() in it.offset..it.offset + it.size }
+                                        val itemWidth = viewport.width - padPx * 2f
+                                        val span = item?.let { vm.contentSpan(it.index, renderWidth) }
+                                        val left = padPx + (span?.start ?: 0.1f) * itemWidth - padPx * 0.5f
+                                        val right = padPx + (span?.endInclusive ?: 0.9f) * itemWidth + padPx * 0.5f
+                                        val target = (viewport.width / (right - left).coerceAtLeast(1f)).coerceIn(1.2f, 4f)
+                                        val cx = viewport.width / 2f
+                                        val cy = viewport.height / 2f
+                                        scale = target
+                                        offset = clampOffset(
+                                            Offset(-((left + right) / 2f - cx) * target, (tap.y - cy) * (1f - target)),
+                                            viewport, viewport, target,
+                                        )
+                                    }
                                 })
                             }
                             .transformable(zoom, canPan = { scale > 1f }),
                     ) {
-                        val widthPx = with(LocalDensity.current) { (maxWidth.toPx() * 1.5f).roundToInt() }
+                        val widthPx = with(density) { (maxWidth.toPx() * 1.5f).roundToInt() }
+                        SideEffect { renderWidth = widthPx }
                         LazyColumn(
                             state = listState,
                             contentPadding = PaddingValues(12.dp),

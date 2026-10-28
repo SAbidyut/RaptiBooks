@@ -219,6 +219,8 @@ private fun Reader(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                // A sideways swipe opens the original page (and a swipe there comes back).
+                .horizontalSwipe(enabled = tool == MarkTool.NONE) { onOpenOriginal(currentPage) }
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = { pos ->
