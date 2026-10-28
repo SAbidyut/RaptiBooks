@@ -144,17 +144,23 @@ object ForeignText {
 
     /**
      * A table with a column of the other script that the text layer holds only as junk
-     * ("/'.u'l ylUJI", ". 6.. t:l.-..i"): no English word in the cell, marks among its letters.
+     * ("/'.u'l ylUJI", ". 6.. t:l.-..i"): marks among the letters of the cell, and hardly a word
+     * like English (junk can look like one: ".ljti.-").
+     * On a page with no words shown as printed ([foreignPage] false), only with plain garbage
+     * ("bl•l", ".l:JI", "lAI\") in two rows or more.
      */
-    fun unreadable(t: TableRegion): Boolean {
+    fun unreadable(t: TableRegion, foreignPage: Boolean = true): Boolean {
         if (t.rows.isEmpty()) return false
         val rows = t.rows.count { r ->
             r.any { cell ->
                 val tokens = UnreadableText.tokens(cell)
-                tokens.isNotEmpty() && tokens.none { UnreadableText.englishLike(it.second) } &&
-                    tokens.any { UnreadableText.garbled(it.second) || UnreadableText.junk(it.second) } && cell.any { it.isLetter() }
+                val bad = tokens.count { UnreadableText.garbled(it.second) || UnreadableText.junk(it.second) }
+                bad >= 1 && tokens.count { UnreadableText.englishLike(it.second) } * 3 <= bad && cell.any { it.isLetter() }
             }
         }
-        return rows * 2 >= t.rows.size
+        if (rows * 2 < t.rows.size) return false
+        if (foreignPage) return true
+        val garbled = t.rows.map { r -> r.sumOf { cell -> UnreadableText.tokens(cell).count { UnreadableText.garbled(it.second) } } }
+        return garbled.sum() >= 3 && garbled.count { it > 0 } >= 2
     }
 }

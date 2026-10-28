@@ -77,12 +77,24 @@ class ForeignTextTest {
             0, true,
         )
         assertTrue(ForeignText.unreadable(junk))
+        // on a page with no words shown as printed, plain garbage tells (junk can look like a word)
+        val restaurant = TableRegion(
+            Rect(60f, 536f, 563f, 656f),
+            listOf(
+                listOf("1. If you go to that restaurant, you will eat superb Arabic food.", "_,c. t..ta.l:. h .. I m I 4 I} . ' .ljti.-"),
+                listOf("2. If you go to that restaurant, you will never eat superb Arabic food.", "_,c. t..ta.l:. JSb 0ii I I 4 IJ ·\" .ljti.-"),
+                listOf("3. If you go to that restaurant, eat superb Arabic food.", ".ljti.- _,c. l.ta.l:. , -(\$! F-!1 I 4 .r"),
+            ),
+            0, true,
+        )
+        assertTrue(ForeignText.unreadable(restaurant, foreignPage = false))
         val values = TableRegion(
             Rect(72f, 300f, 460f, 360f),
             listOf(listOf("Resistor", "Value"), listOf("R1", "10 kΩ"), listOf("R2", "2.2 kΩ"), listOf("Ratio", "I/R")),
             1, true,
         )
         assertFalse(ForeignText.unreadable(values))
+        assertFalse(ForeignText.unreadable(values, foreignPage = false))
     }
 
     @Test

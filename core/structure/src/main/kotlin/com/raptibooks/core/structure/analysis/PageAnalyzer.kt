@@ -139,8 +139,8 @@ class PageAnalyzer(
             ruled.sumOf { t -> t.rows.sumOf { r -> r.sumOf { TextQuality.letterCount(it) } } }
         // A table with words shown as printed in its cells is shown as printed, whole, and so is
         // one with a column of such words left as junk.
-        val pictureTables = if (pictures.isEmpty()) emptyList() else whole.tables.filter { t ->
-            t.rows.any { r -> r.any { InlinePicture.MARKER in it } } || ForeignText.unreadable(t)
+        val pictureTables = whole.tables.filter { t ->
+            (pictures.isNotEmpty() && t.rows.any { r -> r.any { InlinePicture.MARKER in it } }) || ForeignText.unreadable(t, foreignPage = pictures.isNotEmpty())
         }
         val outFigures = whole.figures + pictureTables.map { FigureRegion(it.bounds, FigureKind.VECTOR, it.caption) }
         val outTables = whole.tables - pictureTables.toSet()
