@@ -69,6 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -91,6 +92,7 @@ import com.raptibooks.core.model.BookStatus
 import com.raptibooks.core.model.OcrMode
 import com.raptibooks.core.ui.RaptiFonts
 import com.raptibooks.core.ui.RaptiIcons
+import com.raptibooks.core.ui.SystemBarIcons
 import com.raptibooks.core.ui.rememberLocalImage
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -124,6 +126,8 @@ fun LibraryRoute(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LibraryScreen(vm: LibraryViewModel, onOpenBook: (Long) -> Unit, onOpenOriginal: (Long) -> Unit) {
+    // (the reader may have left its own icons on the bars: the library's are set again)
+    SystemBarIcons(darkBackground = MaterialTheme.colorScheme.background.luminance() < 0.5f)
     val context = LocalContext.current
     val books by vm.books.collectAsStateWithLifecycle()
     val ocrMode by vm.defaultOcrMode.collectAsStateWithLifecycle()

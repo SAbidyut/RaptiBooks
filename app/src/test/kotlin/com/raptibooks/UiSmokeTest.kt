@@ -3,12 +3,15 @@ package com.raptibooks
 import androidx.activity.compose.setContent
 import com.raptibooks.core.model.ReaderTheme
 import com.raptibooks.core.ui.RaptiTheme
+import androidx.core.view.WindowCompat
+import com.raptibooks.feature.library.LibraryRoute
 import com.raptibooks.feature.reader.OriginalPdfRoute
 import com.raptibooks.feature.reader.ReaderRoute
 import com.raptibooks.feature.reader.ReaderViewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -63,6 +66,25 @@ class UiSmokeTest {
         val lines = runBlocking { c.reader.openOriginal(bookId).use { it.lines(0) } }
         assertTrue(lines.isNotEmpty())
         assertTrue(lines.all { it.left in 0f..1f && it.top in 0f..1f && it.bottom > it.top })
+    }
+
+    @Test
+    fun barIconsFollowTheScreenShown() {
+        val bookId = TestSupport.seedLibrary()
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        TestSupport.pump()
+        val activity = controller.get()
+        val bars = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+        // a dark reading theme: light icons
+        TestSupport.app.container.settings.update { it.copy(theme = ReaderTheme.DARK) }
+        activity.setContent { RaptiTheme { ReaderRoute(bookId, jumpToPage = null, onJumpConsumed = {}, onBack = {}, onOpenOriginal = { _, _ -> }) } }
+        TestSupport.pumpUntil { !bars.isAppearanceLightStatusBars }
+        assertFalse(bars.isAppearanceLightStatusBars)
+        // back in the (light) library: its own dark icons, not the reader's
+        activity.setContent { RaptiTheme(darkTheme = false) { LibraryRoute(onOpenBook = {}, onOpenOriginal = {}, pendingImport = null, onPendingImportConsumed = {}) } }
+        TestSupport.pump()
+        assertTrue(bars.isAppearanceLightStatusBars)
+        controller.pause().stop().destroy()
     }
 
     @Test

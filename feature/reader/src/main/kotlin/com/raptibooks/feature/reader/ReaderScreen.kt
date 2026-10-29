@@ -91,6 +91,7 @@ import com.raptibooks.core.model.NoteKind
 import com.raptibooks.core.model.ReaderSettings
 import com.raptibooks.core.ui.RaptiIcons
 import com.raptibooks.core.ui.ReaderColors
+import com.raptibooks.core.ui.SystemBarIcons
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
@@ -357,10 +358,10 @@ private fun Reader(
             }
         }
 
-        // The status and navigation bars stay on screen. Text scrolls away under a soft cover,
+        // The status and navigation bars stay on screen. Text scrolls away under a cover the colour of the page (pictures never show behind the icons),
         // and touches in the strip along the bottom edge are not given to the page, so a swipe
         // up to go home never scrolls the book.
-        Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(topInset).background(colors.background.copy(alpha = 0.96f)))
+        Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(topInset).background(colors.background))
         Box(
             Modifier
                 .align(Alignment.BottomCenter)
@@ -616,26 +617,18 @@ private fun BottomBar(colors: ReaderColors, chapter: String?, page: Int, pageCou
     }
 }
 
-/** Keeps the status and navigation bars visible (readable on the reading theme) while reading. */
+/**
+ * Keeps the status and navigation bars visible while reading, their icons readable on the
+ * reading theme ([dark]: a dark page).
+ */
 @Composable
-internal fun SystemBars(dark: Boolean, restore: Boolean = false) {
+internal fun SystemBars(dark: Boolean) {
+    SystemBarIcons(darkBackground = dark)
     val view = LocalView.current
     val activity = view.context.findActivity() ?: return
-    DisposableEffect(dark) {
-        val controller = WindowCompat.getInsetsController(activity.window, view)
-        // ([restore]: the screen under this one gets its look back, the dark original pages
-        // opened over a light library)
-        val lightStatus = controller.isAppearanceLightStatusBars
-        val lightNavigation = controller.isAppearanceLightNavigationBars
-        controller.isAppearanceLightStatusBars = !dark
-        controller.isAppearanceLightNavigationBars = !dark
-        controller.show(WindowInsetsCompat.Type.systemBars())
-        onDispose {
-            if (restore) {
-                controller.isAppearanceLightStatusBars = lightStatus
-                controller.isAppearanceLightNavigationBars = lightNavigation
-            }
-        }
+    DisposableEffect(Unit) {
+        WindowCompat.getInsetsController(activity.window, view).show(WindowInsetsCompat.Type.systemBars())
+        onDispose { }
     }
 }
 
