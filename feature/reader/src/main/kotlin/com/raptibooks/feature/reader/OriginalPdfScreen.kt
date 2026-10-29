@@ -1,11 +1,19 @@
 package com.raptibooks.feature.reader
 
 import android.graphics.Bitmap
+import android.content.pm.ActivityInfo
 import android.util.LruCache
 import android.view.OrientationEventListener
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.animateDecay
+import androidx.compose.animation.core.exponentialDecay
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -316,6 +324,7 @@ fun OriginalPdfRoute(
     val density = LocalDensity.current
     SystemBars(dark = true, restore = true)
     NoStatusBar()
+    UprightOnly()
     // Pages turned a quarter for reading across; the screen itself (its bars) stays upright.
     var landscape by rememberSaveable { mutableStateOf(initialLandscape) }
     // Which way: the right side of the phone up (1) or its left side (-1), as it is held.
@@ -342,11 +351,16 @@ fun OriginalPdfRoute(
     var arrived by rememberSaveable { mutableStateOf(passage == null) }
     var lit by remember { mutableStateOf<Pair<Int, List<PageLine>>?>(null) }
     val glow = remember { Animatable(0f) }
+    // How fast the finger moved on the screen as it is (not turned), for a fling of the turned
+    // pages: measured inside the turn, a quick swipe could fling them the wrong way.
+    val swipe = remember { FloatArray(1) }
+    val turnedFling = remember(turn) { TurnedFling { swipe[0] * turn } }
     Box(Modifier.fillMaxSize().background(Color(0xFF3A3936))) {
         Box(
             Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.navigationBars)
+                .then(if (landscape) Modifier.swipeSpeed(swipe) else Modifier)
                 .then(if (landscape) Modifier.quarterTurn(turn) else Modifier),
         ) {
             key(landscape, turn) {
@@ -460,8 +474,10 @@ fun OriginalPdfRoute(
                         }
                         val minStep = with(density) { 2.5.dp.toPx() }
                         val eraseReach = with(density) { 14.dp.toPx() }
+                        val fling = if (landscape) turnedFling.also { it.scale = scale } else ScrollableDefaults.flingBehavior()
                         LazyColumn(
                             state = listState,
+                            flingBehavior = fling,
                             contentPadding = PaddingValues(12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
@@ -788,6 +804,61 @@ private fun PhoneSide(onSide: (Int) -> Unit) {
         }
         if (listener.canDetectOrientation()) listener.enable()
         onDispose { listener.disable() }
+    }
+}
+
+/**
+ * The screen kept upright over the original pages (they are turned for reading across by the
+ * app itself): the phone offers no "rotate" button when it is tilted.
+ */
+@Composable
+private fun UprightOnly() {
+    val activity = LocalView.current.context.findActivity() ?: return
+    DisposableEffect(activity) {
+        val before = activity.requestedOrientation
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onDispose { activity.requestedOrientation = before }
+    }
+}
+
+/** Keeps in [out] the speed across the screen (pixels a second) of the last swipe of one finger. */
+private fun Modifier.swipeSpeed(out: FloatArray): Modifier = pointerInput(out) {
+    val tracker = VelocityTracker()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        tracker.resetTracking()
+        tracker.addPosition(down.uptimeMillis, down.position)
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            tracker.addPosition(change.uptimeMillis, change.position)
+            if (!change.pressed) break
+        }
+        out[0] = tracker.calculateVelocity().x
+    }
+}
+
+/**
+ * The fling of the pages turned a quarter, from the speed of the swipe across the screen
+ * ([speed]: positive when the pages should go on): the list's own measure, taken inside the
+ * turn, may point the wrong way after a quick swipe.
+ */
+private class TurnedFling(private val speed: () -> Float) : FlingBehavior {
+    var scale = 1f
+    private val decay = exponentialDecay<Float>()
+
+    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+        var velocity = speed() / scale
+        if (abs(velocity) < 1f) return 0f
+        var last = 0f
+        AnimationState(0f, velocity).animateDecay(decay) {
+            val delta = value - last
+            val used = scrollBy(delta)
+            last = value
+            velocity = this.velocity
+            if (abs(delta - used) > 0.5f) cancelAnimation()
+        }
+        return velocity
     }
 }
 
