@@ -85,6 +85,10 @@ internal object Passage {
     }
 }
 
+/** How long a passage stays lit up where the user arrives, before it fades (in [FLASH_FADE_MS]). */
+internal const val FLASH_HOLD_MS = 2000L
+internal const val FLASH_FADE_MS = 1500
+
 /** The colour a passage lights up in where the user arrives from the other view. */
 internal val PASSAGE_GLOW = Color(0xFFFFB300)
 
@@ -105,8 +109,8 @@ internal class PassageFlash {
         this.block = block
         try {
             glow.snapTo(0.6f)
-            delay(700)
-            glow.animateTo(0f, tween(1200))
+            delay(FLASH_HOLD_MS)
+            glow.animateTo(0f, tween(FLASH_FADE_MS))
         } finally {
             this.block = -1
         }

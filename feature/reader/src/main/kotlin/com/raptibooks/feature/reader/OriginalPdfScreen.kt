@@ -538,8 +538,8 @@ fun OriginalPdfRoute(
                             vm.page(initialPage, widthPx)
                             lit = initialPage to hit
                             glow.snapTo(0.6f)
-                            delay(700)
-                            glow.animateTo(0f, tween(1200))
+                            delay(FLASH_HOLD_MS)
+                            glow.animateTo(0f, tween(FLASH_FADE_MS))
                             lit = null
                         }
                         val minStep = with(density) { 2.5.dp.toPx() }
