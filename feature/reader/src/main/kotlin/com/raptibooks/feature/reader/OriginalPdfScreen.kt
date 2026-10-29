@@ -392,7 +392,7 @@ fun OriginalPdfRoute(
     val current = listState.firstVisibleItemIndex
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    SystemBars(dark = true, restore = true)
+    SystemBars(dark = true)
     NoStatusBar()
     UprightOnly()
     // Pages turned a quarter for reading across; the screen itself (its bars) stays upright.

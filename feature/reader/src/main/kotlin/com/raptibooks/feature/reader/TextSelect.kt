@@ -6,7 +6,16 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.ScrollableState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -80,6 +89,29 @@ internal class TwoFingerSelection {
     fun remember(key: Long, text: String) {
         texts[key] = text
     }
+
+    /** Keeps the texts on screen that are in the selection, to copy them later. */
+    fun rememberTexts(registry: MarkRegistry) {
+        val (from, to) = bounds() ?: return
+        for ((key, t) in registry.targets) {
+            if (key in from.key..to.key) t.layout?.let { remember(key, it.layoutInput.text.text) }
+        }
+    }
+
+    /** The first ([start]) or the last character of the selection moved to [to] (not past the other end). */
+    fun moveEdge(start: Boolean, to: TextPos) {
+        val (from, end) = bounds() ?: return
+        if (start) {
+            anchor = if (to < end) to else end
+            focus = end
+        } else {
+            anchor = from
+            focus = if (to > from) to else from
+        }
+    }
+
+    /** The first and last character selected, in order. */
+    fun edges(): Pair<TextPos, TextPos>? = bounds()
 
     fun clear() {
         anchor = null
@@ -188,11 +220,7 @@ internal fun Modifier.twoFingerSelect(selection: TwoFingerSelection, registry: M
                     if (at.y < edge) list.dispatchRawDelta(-(edge - at.y) * 0.4f)
                     if (at.y > size.height - edge) list.dispatchRawDelta((at.y - size.height + edge) * 0.4f)
                     charAt(root(at), registry)?.let { selection.extend(it) }
-                    val from = minOf(selection.anchor!!.key, selection.focus!!.key)
-                    val to = maxOf(selection.anchor!!.key, selection.focus!!.key)
-                    for ((key, t) in registry.targets) {
-                        if (key in from..to) t.layout?.let { selection.remember(key, it.layoutInput.text.text) }
-                    }
+                    selection.rememberTexts(registry)
                 }
                 event = awaitPointerEvent(PointerEventPass.Initial)
             }
@@ -202,6 +230,76 @@ internal fun Modifier.twoFingerSelect(selection: TwoFingerSelection, registry: M
     }
 }
 
+
+private val HandleColor = Color(0xFF3D7BD9)
+private val HandleSize = 22.dp
+
+/**
+ * The two handles of a selection, under its first and last characters: dragged with one
+ * finger, they make the selection longer or shorter, across paragraphs (the page scrolls when
+ * one reaches the top or bottom edge). [place] is where the page (the list) is on screen;
+ * the handles are placed in the same box.
+ */
+@Composable
+internal fun SelectionHandles(selection: TwoFingerSelection, registry: MarkRegistry, list: ScrollableState, listState: LazyListState, place: () -> LayoutCoordinates?) {
+    if (!selection.active) return
+    for (start in listOf(true, false)) {
+        // (where the finger is, root coordinates, while it drags this handle)
+        val finger = remember { arrayOf(Offset.Zero) }
+        Box(
+            Modifier
+                .offset {
+                    // (read so the handle follows the page as it scrolls)
+                    listState.firstVisibleItemIndex
+                    listState.firstVisibleItemScrollOffset
+                    val at = handleAt(selection, registry, start, place()) ?: return@offset IntOffset(-10_000, -10_000)
+                    val size = HandleSize.roundToPx()
+                    IntOffset((if (start) at.x - size else at.x).roundToInt(), at.y.roundToInt())
+                }
+                .size(HandleSize)
+                .background(HandleColor, if (start) RoundedCornerShape(50, 0, 50, 50) else RoundedCornerShape(0, 50, 50, 50))
+                .pointerInput(selection, start) {
+                    val edge = 56.dp.toPx()
+                    detectDragGestures(
+                        onDragStart = {
+                            val origin = place()?.takeIf { it.isAttached }?.positionInRoot() ?: Offset.Zero
+                            val at = handleAt(selection, registry, start, place()) ?: return@detectDragGestures
+                            // (the line just above the handle: where the finger points)
+                            finger[0] = origin + at - Offset(0f, HandleSize.toPx() * 0.6f)
+                            selection.dragging = true
+                        },
+                        onDragEnd = { selection.dragging = false },
+                        onDragCancel = { selection.dragging = false },
+                        onDrag = { change, delta ->
+                            change.consume()
+                            finger[0] += delta
+                            val box = place()?.takeIf { it.isAttached }
+                            if (box != null) {
+                                val y = finger[0].y - box.positionInRoot().y
+                                val height = box.size.height
+                                if (y < edge) list.dispatchRawDelta(-(edge - y) * 0.4f)
+                                if (y > height - edge) list.dispatchRawDelta((y - height + edge) * 0.4f)
+                            }
+                            charAt(finger[0], registry)?.let { selection.moveEdge(start, it) }
+                            selection.rememberTexts(registry)
+                        },
+                    )
+                },
+        )
+    }
+}
+
+/** Where a handle goes (in [place]'s coordinates): under the start or the end of the selection. */
+private fun handleAt(selection: TwoFingerSelection, registry: MarkRegistry, start: Boolean, place: LayoutCoordinates?): Offset? {
+    val (from, to) = selection.edges() ?: return null
+    val pos = if (start) from else to
+    val t = registry.targets[pos.key] ?: return null
+    val c = t.coords?.takeIf { it.isAttached } ?: return null
+    val l = t.layout ?: return null
+    val box = place?.takeIf { it.isAttached } ?: return null
+    val cursor = l.getCursorRect(pos.offset.coerceIn(0, l.layoutInput.text.length))
+    return c.positionInRoot() - box.positionInRoot() + Offset(cursor.left, cursor.bottom)
+}
 
 /** Over the page while a passage is selected: copy it, or let it go. */
 @Composable
