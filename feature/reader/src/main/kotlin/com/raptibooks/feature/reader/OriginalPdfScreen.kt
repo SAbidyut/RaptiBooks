@@ -80,6 +80,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -109,7 +110,12 @@ import com.raptibooks.core.data.OriginalPdf
 import com.raptibooks.core.data.PageLine
 import com.raptibooks.core.data.ReaderRepository
 import com.raptibooks.core.data.appContainer
+import com.raptibooks.core.model.ContentBlock
+import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.InkStroke
+import com.raptibooks.core.model.ListItemBlock
+import com.raptibooks.core.model.ParagraphBlock
+import com.raptibooks.core.model.ParagraphKind
 import com.raptibooks.core.model.MarkColor
 import com.raptibooks.core.model.Note
 import com.raptibooks.core.model.NoteKind
@@ -124,6 +130,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -157,8 +165,12 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
         repo.ink(bookId).map { all -> all.filter { it.blockIndex < 0 }.groupBy { -it.blockIndex - 1 } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    /** A pen stroke on a page, made straight along the printed lines it was drawn on (see [PageMarks.snap]). */
     fun addInk(page: Int, color: MarkColor, points: FloatArray) {
-        viewModelScope.launch { repo.addInk(bookId, -(page + 1), color, points) }
+        viewModelScope.launch {
+            val lines = repo.originalLines(bookId, page)
+            for (line in PageMarks.snap(points, lines)) repo.addInk(bookId, -(page + 1), color, line)
+        }
     }
 
     fun eraseInk(ids: List<Long>) {
@@ -186,6 +198,48 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
 
     /** The printed lines of a page, to find the one held. */
     suspend fun lines(page: Int): List<PageLine> = repo.originalLines(bookId, page)
+
+    // ---------------------------------------------------------------- marks made in the reflowed text
+
+    private val highlights = repo.highlights(bookId).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    private val textNotes = repo.notes(bookId).map { all -> all.filter { it.blockIndex >= 0 } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Changes when the underlines or notes of the reflowed text change (the pages show them too). */
+    val textMarksVersion: StateFlow<Int> = combine(highlights, textNotes) { _, _ -> Unit }
+        .runningFold(0) { n, _ -> n + 1 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    private val blocksOnPage = HashMap<Int, List<ContentBlock>>()
+
+    /**
+     * The underlines and notes made in the reflowed text that are on [page], placed on its
+     * printed words (the notes at their place in their paragraph).
+     */
+    internal suspend fun textMarksOn(page: Int): Pair<List<PageUnderline>, List<Note>> {
+        val hs = highlights.value
+        val ns = textNotes.value
+        if (hs.isEmpty() && ns.isEmpty()) return emptyList<PageUnderline>() to emptyList()
+        val blocks = blocksOnPage[page] ?: repo.blocksOfPages(bookId, (page - 1).coerceAtLeast(0), page).also { blocksOnPage[page] = it }
+        val texts = blocks.mapNotNull { b -> markedText(b)?.let { b.index to it } }.toMap()
+        val onPage = hs.filter { it.part == 0 && it.blockIndex in texts }
+        val notesHere = ns.filter { it.blockIndex in texts }
+        if (onPage.isEmpty() && notesHere.isEmpty()) return emptyList<PageUnderline>() to emptyList()
+        val lines = repo.originalLines(bookId, page)
+        if (lines.isEmpty()) return emptyList<PageUnderline>() to emptyList()
+        return withContext(Dispatchers.Default) {
+            val underlines = PageMarks.underlines(lines, texts, onPage)
+            val pins = notesHere.mapNotNull { n ->
+                PageMarks.notePlace(lines, texts.getValue(n.blockIndex), n.x, n.y)?.let { (x, y) -> n.copy(x = x, y = y) }
+            }
+            underlines to pins
+        }
+    }
+
+    /** Erases, from the reflowed text, an underline shown on a page. */
+    internal fun eraseTextMark(u: PageUnderline) {
+        viewModelScope.launch { repo.mark(bookId, mapOf(u.key to listOf(u.range)), null) }
+    }
 
     /** Recently rendered pages; old ones are dropped (not recycled, they may still be drawn). */
     private val cache = object : LruCache<String, Bitmap>(
@@ -289,6 +343,22 @@ class OriginalPdfViewModel(private val bookId: Long, private val repo: ReaderRep
         cache.evictAll()
         document?.close()
     }
+}
+
+/** Whether the eraser at [p] (pixels of a page [page] large) touches the underline [u]. */
+private fun underlineHit(u: PageUnderline, p: Offset, page: Size, reach: Float): Boolean {
+    val y = u.y * page.height
+    val x1 = u.x1 * page.width
+    val x2 = u.x2 * page.width
+    return abs(p.y - y) <= reach && p.x >= x1 - reach && p.x <= x2 + reach
+}
+
+/** The text of a block that its underlines are counted in (see [MarkableText]), if it has one. */
+internal fun markedText(block: ContentBlock): String? = when (block) {
+    is ParagraphBlock -> block.text.takeIf { block.kind != ParagraphKind.FORMULA }
+    is HeadingBlock -> block.text
+    is ListItemBlock -> block.text
+    else -> null
 }
 
 /** A place on an original page chosen for a new note (fractions of the page). */
@@ -474,6 +544,8 @@ fun OriginalPdfRoute(
                         }
                         val minStep = with(density) { 2.5.dp.toPx() }
                         val eraseReach = with(density) { 14.dp.toPx() }
+                        val underlineWidth = with(density) { 2.5.dp.toPx() }
+                        val textMarksVersion by vm.textMarksVersion.collectAsStateWithLifecycle()
                         val fling = if (landscape) turnedFling.also { it.scale = scale } else ScrollableDefaults.flingBehavior()
                         LazyColumn(
                             state = listState,
@@ -487,7 +559,10 @@ fun OriginalPdfRoute(
                                 val bitmap by produceState<Bitmap?>(null, index, widthPx) { value = vm.page(index, widthPx) }
                                 var pageSize by remember { mutableStateOf(Size.Zero) }
                                 val strokes = ink[index].orEmpty()
-                                val pins = notes[index].orEmpty()
+                                val textMarks by produceState(emptyList<PageUnderline>() to emptyList<Note>(), index, textMarksVersion) {
+                                    value = vm.textMarksOn(index)
+                                }
+                                val pins = notes[index].orEmpty() + textMarks.second
                                 Box(
                                     Modifier
                                         .fillMaxWidth()
@@ -503,6 +578,20 @@ fun OriginalPdfRoute(
                                         CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
                                     }
                                     if (strokes.isNotEmpty()) InkCanvas(strokes, Modifier.fillMaxSize())
+                                    // what was underlined in the reflowed text, under the same words here
+                                    if (textMarks.first.isNotEmpty()) {
+                                        Canvas(Modifier.fillMaxSize()) {
+                                            for (u in textMarks.first) {
+                                                drawLine(
+                                                    Color(u.color.argb).copy(alpha = 0.92f),
+                                                    Offset(u.x1 * size.width, u.y * size.height),
+                                                    Offset(u.x2 * size.width, u.y * size.height),
+                                                    strokeWidth = maxOf(underlineWidth, size.width * 0.006f),
+                                                    cap = StrokeCap.Round,
+                                                )
+                                            }
+                                        }
+                                    }
                                     val shine = lit?.takeIf { it.first == index }?.second
                                     if (shine != null) {
                                         Canvas(Modifier.fillMaxSize()) {
@@ -551,6 +640,9 @@ fun OriginalPdfRoute(
                                                     if (line.size >= 2) vm.addInk(index, color, line)
                                                 } else {
                                                     vm.eraseInk(inkHitIds(strokes, points, pageSize, eraseReach))
+                                                    for (u in textMarks.first) {
+                                                        if (points.any { p -> underlineHit(u, p, pageSize, eraseReach) }) vm.eraseTextMark(u)
+                                                    }
                                                 }
                                             },
                                         )

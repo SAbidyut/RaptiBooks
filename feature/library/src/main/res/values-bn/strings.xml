@@ -14,6 +14,8 @@
     <string name="action_delete">মুছে ফেলুন</string>
     <string name="action_cancel">বাতিল</string>
     <string name="action_retry">আবার চেষ্টা</string>
+    <string name="action_convert">মোবাইলের জন্য সাজান</string>
+    <string name="status_original_only">মূল পিডিএফ, এখনও সাজানো হয়নি</string>
     <string name="action_close">বন্ধ</string>
     <string name="menu_ocr_mode">লেখা শনাক্তকরণ (OCR)</string>
     <string name="menu_about">অ্যাপ সম্পর্কে</string>

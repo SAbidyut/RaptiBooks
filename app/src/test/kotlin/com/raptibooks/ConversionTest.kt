@@ -11,7 +11,14 @@ import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ListItemBlock
 import com.raptibooks.core.model.ParagraphBlock
 import com.raptibooks.core.model.TableBlock
+import android.net.Uri
+import androidx.lifecycle.viewModelScope
+import com.raptibooks.core.model.Highlight
+import com.raptibooks.core.model.MarkColor
+import com.raptibooks.feature.reader.ReaderViewModel
+import java.io.File
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,6 +73,38 @@ class ConversionTest {
         assertEquals(content.firstBlockAtOrAfterPage(id, 3), again.position.blockIndex)
         assertEquals(content.firstBlockAtOrAfterPage(id, 3), runBlocking { content.observeBookmarks(id).first().single().blockIndex })
         assertTrue(app.container.bookDao.outdated(ConversionPipeline.LAYOUT_VERSION).isEmpty())
+    }
+
+    @Test
+    fun marksMadeOnTheOriginalShowInTheReflowedText() {
+        val (id, content) = convert("english_book.pdf")
+        val c = TestSupport.app.container
+        // a line of body text on a page, underlined there
+        val (page, line) = (0 until 4).firstNotNullOf { p ->
+            val lines = runBlocking { c.reader.originalLines(id, p) }
+            lines.firstOrNull { l -> l.text.split(' ').size >= 6 && content.blocks(id, 0, 10_000).any { it.plainText.contains(l.text.trim()) } }?.let { p to it }
+        }
+        val y = line.bottom + (line.bottom - line.top) * 0.12f
+        content.addInk(id, -(page + 1), MarkColor.GREEN, floatArrayOf(line.left, y, line.right, y))
+        val vm = ReaderViewModel(id, c.reader, c.settings)
+        var shown: List<Highlight> = emptyList()
+        val watch = vm.viewModelScope.launch { vm.highlights.collect { all -> shown = all.values.flatten().filter { it.id < 0 } } }
+        TestSupport.pumpUntil { shown.isNotEmpty() }
+        watch.cancel()
+        val h = shown.single()
+        val text = content.blocks(id, h.blockIndex, h.blockIndex + 1).single().plainText
+        assertEquals(line.text.trim(), text.substring(h.start, h.end))
+        assertEquals(MarkColor.GREEN, h.color)
+    }
+
+    @Test
+    fun aPdfOpenedFromAnotherAppIsNotConverted() {
+        val lib = TestSupport.app.container.library
+        val file = TestSupport.resourcePdf("english_book.pdf", File(TestSupport.app.cacheDir, "shared/english_book.pdf"))
+        val id = runBlocking { lib.importPdf(Uri.fromFile(file), convert = false) }
+        assertEquals(BookStatus.ORIGINAL_ONLY, TestSupport.app.container.bookDao.get(id)!!.status)
+        // opened again: the same book
+        assertEquals(id, runBlocking { lib.importPdf(Uri.fromFile(file), convert = false) })
     }
 
     @Test

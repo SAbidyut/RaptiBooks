@@ -149,11 +149,17 @@ screen. Bangla and English are both first-class, and everything runs offline.
   bottom of the pages (it fades away after a moment, a tap brings it back; in landscape it
   and the contents turn with the pages, which face whichever way the phone is held) has a slider to move quickly through the book, the contents (a tap
   on a chapter goes to its page), the marking pen and notes (voice or written, pinned to a
-  place on an original page), and turns the pages for reading across (landscape) or back
+  place on an original page; a stroke drawn along or through printed lines becomes a straight
+  underline of their words, a ring round some lines underlines each of them; underlines and
+  notes made in either view show in the other at the same words, and erasing one there
+  erases it in both), and turns the pages for reading across (landscape) or back
   upright, while the screen's own bars stay where they are; the original's text is read
   ahead in the background while the book is open, so the passage held lights up at once; a double tap
   on an original page zooms its printed part to the width of the screen (the tapped line stays
   put), another zooms back out.
+- **PDFs opened from other apps** ("Open with" / "Share") are shown as they are, in the
+  original page view, without converting them; the library offers "Convert for phone" for
+  them when wanted. Opening the same file again opens the same book.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page
   analyses are cached on disk, images are never decoded during analysis, fonts are kept only
   softly (and one page's fonts are not held by the next), the reader loads blocks in chunks

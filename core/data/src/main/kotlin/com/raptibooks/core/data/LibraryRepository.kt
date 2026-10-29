@@ -38,8 +38,13 @@ class LibraryRepository(
 
     fun observeBook(id: Long): Flow<Book?> = books.observe(id)
 
-    /** Copies the PDF into private storage, creates the book and schedules conversion. */
-    suspend fun importPdf(uri: Uri): Long = withContext(Dispatchers.IO) {
+    /**
+     * Copies the PDF into private storage, creates the book and schedules conversion; with
+     * [convert] false (a PDF opened from another app) it is only kept to be read as it is,
+     * and converted when the user asks ([retry]). The same file opened that way again is the
+     * same book.
+     */
+    suspend fun importPdf(uri: Uri, convert: Boolean = true): Long = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         val displayName = queryDisplayName(uri) ?: "Document.pdf"
         val tmp = File(files.importDir, "import-${System.nanoTime()}.pdf")
@@ -58,6 +63,12 @@ class LibraryRepository(
         if (!looksLikePdf(tmp)) {
             tmp.delete()
             throw ImportException(context.getString(R.string.import_error_not_pdf))
+        }
+        if (!convert) {
+            books.all().firstOrNull { it.fileName == displayName && it.fileSize == tmp.length() && File(it.pdfPath).isFile }?.let {
+                tmp.delete()
+                return@withContext it.id
+            }
         }
 
         PdfSupport.init(context)
@@ -89,7 +100,11 @@ class LibraryRepository(
                 coverPath = null,
                 pageCount = pageCount,
                 fileSize = tmp.length(),
-                status = if (error == null) BookStatus.QUEUED else BookStatus.FAILED,
+                status = when {
+                    error != null -> BookStatus.FAILED
+                    convert -> BookStatus.QUEUED
+                    else -> BookStatus.ORIGINAL_ONLY
+                },
                 errorMessage = error,
                 ocrMode = settings.defaultOcrMode.value,
             ),
@@ -101,7 +116,7 @@ class LibraryRepository(
         }
         val cover = if (error == null) renderCover(dest, files.cover(id)) else null
         books.updateFiles(id, dest.absolutePath, cover?.absolutePath)
-        if (error == null) scheduler.enqueue(id)
+        if (error == null && convert) scheduler.enqueue(id)
         id
     }
 

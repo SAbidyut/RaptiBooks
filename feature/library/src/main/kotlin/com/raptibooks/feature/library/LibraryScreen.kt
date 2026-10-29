@@ -113,7 +113,8 @@ fun LibraryRoute(
     )
     LaunchedEffect(pendingImport) {
         if (pendingImport != null) {
-            vm.import(pendingImport)
+            // (opened from another app: shown as it is; converted only when asked)
+            vm.openShared(pendingImport, onOpenOriginal)
             onPendingImportConsumed()
         }
     }
@@ -216,6 +217,7 @@ private fun LibraryScreen(vm: LibraryViewModel, onOpenBook: (Long) -> Unit, onOp
                             when {
                                 book.isReadable -> onOpenBook(book.id)
                                 book.isConverting -> scope.launch { snackbar.showSnackbar(stillConverting) }
+                                book.status == BookStatus.ORIGINAL_ONLY -> onOpenOriginal(book.id)
                                 else -> Unit
                             }
                         },
@@ -368,6 +370,16 @@ private fun BookCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            BookStatus.ORIGINAL_ONLY -> {
+                Text(
+                    stringResource(R.string.status_original_only),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(onClick = onRetry, contentPadding = PaddingValues(horizontal = 0.dp)) { Text(stringResource(R.string.action_convert)) }
             }
             BookStatus.FAILED, BookStatus.CANCELLED -> {
                 Text(

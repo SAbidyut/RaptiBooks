@@ -29,7 +29,7 @@ class ConversionWorker(appContext: Context, params: WorkerParameters) : Coroutin
         if (bookId < 0) return Result.failure()
         val books = container.bookDao
         val book = books.get(bookId) ?: return Result.failure()
-        if (book.status == BookStatus.CANCELLED || book.status == BookStatus.READY) return Result.success()
+        if (book.status == BookStatus.CANCELLED || book.status == BookStatus.READY || book.status == BookStatus.ORIGINAL_ONLY) return Result.success()
 
         val notificationId = NOTIFICATION_BASE + bookId.toInt()
         ensureChannel(applicationContext)

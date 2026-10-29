@@ -26,7 +26,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -58,13 +61,69 @@ class ReaderViewModel(
         repo.bookmarks(bookId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** The user's underlined passages, by text (see [MarkKey]). */
-    val highlights: StateFlow<Map<Long, List<Highlight>>> =
-        repo.highlights(bookId).map { all -> all.groupBy { MarkKey.of(it.blockIndex, it.part) } }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+    val highlights: StateFlow<Map<Long, List<Highlight>>> by lazy {
+        combine(repo.highlights(bookId), fromPages) { all, pages ->
+            val own = all.groupBy { MarkKey.of(it.blockIndex, it.part) }
+            if (pages.spans.isEmpty()) own else (own.keys + pages.spans.keys).associateWith { own[it].orEmpty() + pages.spans[it].orEmpty() }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+    }
 
     /** Underlines [edits] (character ranges per text) in [color]; a null colour erases them. */
     fun mark(edits: Map<Long, List<IntRange>>, color: MarkColor?) {
-        viewModelScope.launch { repo.mark(bookId, edits, color) }
+        viewModelScope.launch {
+            repo.mark(bookId, edits, color)
+            if (color == null) {
+                // (an underline made on the original page is erased there)
+                val lines = edits.flatMap { (key, ranges) ->
+                    fromPages.value.spans[key].orEmpty().filter { h -> ranges.any { it.first < h.end && it.last + 1 > h.start } }.map { -it.id }
+                }
+                if (lines.isNotEmpty()) repo.eraseInk(lines.distinct())
+            }
+        }
+    }
+
+    /** Marks made on the original pages, as they show in the reflowed text. */
+    private class FromPages(val spans: Map<Long, List<Highlight>>, val notes: Map<Int, List<Note>>)
+
+    /**
+     * The underlines and notes made on the original pages, found in the reflowed text by their
+     * words: an underline as a highlight (with the negative id of its line), a note moved to its
+     * paragraph.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val fromPages: StateFlow<FromPages> =
+        combine(repo.ink(bookId), repo.notes(bookId)) { ink, notes -> ink.filter { it.blockIndex < 0 } to notes.filter { it.blockIndex < 0 } }
+            .mapLatest { (ink, notes) -> pageMarks(ink, notes) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, FromPages(emptyMap(), emptyMap()))
+
+    private suspend fun pageMarks(ink: List<InkStroke>, notes: List<Note>): FromPages {
+        if (ink.isEmpty() && notes.isEmpty()) return FromPages(emptyMap(), emptyMap())
+        val spans = ArrayList<Highlight>()
+        val moved = ArrayList<Note>()
+        val pages = (ink.map { -it.blockIndex - 1 } + notes.map { -it.blockIndex - 1 }).distinct()
+        for (page in pages) {
+            val lines = repo.originalLines(bookId, page)
+            if (lines.isEmpty()) continue
+            val texts = repo.blocksOfPages(bookId, (page - 1).coerceAtLeast(0), page).mapNotNull { b -> markedText(b)?.let { b.index to it } }
+            fun locate(line: com.raptibooks.core.data.PageLine, chars: IntRange): Pair<Int, IntRange>? =
+                texts.mapNotNull { (index, text) -> PageMarks.inText(text, line, chars)?.let { Triple(index, it.first, it.second) } }
+                    .maxByOrNull { it.second }?.let { it.first to it.third }
+            for (stroke in ink) {
+                if (-stroke.blockIndex - 1 != page) continue
+                val (line, chars) = PageMarks.underlined(stroke.points, lines) ?: continue
+                val (block, range) = locate(line, chars) ?: continue
+                spans += Highlight(-stroke.id, bookId, block, range.first, range.last + 1, stroke.color)
+            }
+            for (note in notes) {
+                if (-note.blockIndex - 1 != page) continue
+                val (line, chars) = PageMarks.wordAt(lines, note.x, note.y) ?: continue
+                val (block, range) = locate(line, chars) ?: continue
+                val length = texts.first { it.first == block }.second.length.coerceAtLeast(1)
+                val across = ((note.x - line.left) / (line.right - line.left).coerceAtLeast(1e-4f)).coerceIn(0f, 1f)
+                moved += note.copy(blockIndex = block, x = across, y = range.first.toFloat() / length)
+            }
+        }
+        return FromPages(spans.groupBy { MarkKey.of(it.blockIndex, it.part) }, moved.groupBy { it.blockIndex })
     }
 
     /** The user's freehand lines on pictures, by block. */
@@ -84,9 +143,12 @@ class ReaderViewModel(
     }
 
     /** The user's pinned notes, by block. */
-    val notes: StateFlow<Map<Int, List<Note>>> =
-        repo.notes(bookId).map { all -> all.groupBy { it.blockIndex } }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+    val notes: StateFlow<Map<Int, List<Note>>> by lazy {
+        combine(repo.notes(bookId), fromPages) { all, pages ->
+            val own = all.filter { it.blockIndex >= 0 }.groupBy { it.blockIndex }
+            if (pages.notes.isEmpty()) own else (own.keys + pages.notes.keys).associateWith { own[it].orEmpty() + pages.notes[it].orEmpty() }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+    }
 
     fun newVoiceFile() = repo.newVoiceFile(bookId)
 
@@ -114,6 +176,9 @@ class ReaderViewModel(
     private var searchJob: Job? = null
 
     init {
+        // The original's text kept open while the book is read (marks made on its pages are
+        // shown here, and a passage held here is found there).
+        repo.holdOriginalText(bookId, null)
         viewModelScope.launch {
             val book = repo.book(bookId)
             if (book == null || !book.isReadable) {
@@ -127,11 +192,10 @@ class ReaderViewModel(
             val boxes = BoxLookup(runCatching { repo.boxes(bookId) }.getOrDefault(emptyList()))
             repo.markOpened(bookId)
             load = Load.Ready(book, toc, source, start, boxes)
-            // The original's text read ahead (a moment later, not to slow the first page): a
+            // The original's page read ahead (a moment later, not to slow the first page): a
             // passage held here is then found on the original page at once.
             delay(1500)
-            repo.holdOriginalText(bookId, source.peek(start.blockIndex)?.pageIndex)
-            holdingOriginal = true
+            source.peek(start.blockIndex)?.pageIndex?.let { repo.prefetchOriginalLines(bookId, it) }
         }
     }
 
@@ -213,13 +277,11 @@ class ReaderViewModel(
 
     suspend fun pageForBlock(index: Int): Int = repo.pageOfBlock(bookId, index) ?: 0
 
-    private var holdingOriginal = false
-
     /** Reads the lines of an original page ahead, while the screen goes over to it. */
     fun prefetchOriginal(page: Int) = repo.prefetchOriginalLines(bookId, page)
 
     override fun onCleared() {
-        if (holdingOriginal) repo.releaseOriginalText(bookId)
+        repo.releaseOriginalText(bookId)
         // Let the library refresh reading progress once the reader closes.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { repo.publishPosition() }
     }
