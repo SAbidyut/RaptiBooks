@@ -5,6 +5,7 @@ import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.text.BanglaText
 import com.raptibooks.core.structure.text.TextQuality
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /** Accumulates cross-page statistics during the first pass (constant memory per page). */
@@ -12,10 +13,15 @@ class DocumentStats {
     private val sizeChars = HashMap<Int, Long>()
     private val sizePages = HashMap<Int, Int>()
     private val edgePages = HashMap<String, Int>()
+    /** Pages on which an edge line starts or ends with (page index + offset), by offset. */
+    private val folioOffsets = HashMap<Int, Int>()
     private var visualImpossible = 0
     private var preBaseTotal = 0
     private var bengaliLetters = 0L
     private var latinLetters = 0L
+    /** Words joined by a hyphen inside a line ("three-phase"), and words as such, by count. */
+    private val compounds = HashMap<String, Int>()
+    private val words = HashMap<String, Int>()
     var pageCount = 0
         private set
     var pagesWithText = 0
@@ -27,8 +33,11 @@ class DocumentStats {
         if (lines.isNotEmpty()) pagesWithText++
         val seenSizes = HashSet<Int>()
         val seenEdges = HashSet<String>()
+        val seenOffsets = HashSet<Int>()
         for (l in lines) {
             if (Patterns.tocEntry.containsMatchIn(l.text)) continue // contents lines aren't headings
+            // (nor is a huge chapter number or a page number)
+            if (l.text.isNotBlank() && l.text.all { it.isDigit() || it.isWhitespace() } && l.fontSize > 14f) continue
             val key = sizeKey(l.fontSize)
             val letters = TextQuality.letterCount(l.text)
             sizeChars[key] = (sizeChars[key] ?: 0L) + letters
@@ -38,6 +47,7 @@ class DocumentStats {
                     val sig = zone + Patterns.signature(l.text)
                     if (seenEdges.add(sig)) edgePages[sig] = (edgePages[sig] ?: 0) + 1
                 }
+                for (n in folios(l.text)) if (seenOffsets.add(n - layout.index)) folioOffsets[n - layout.index] = (folioOffsets[n - layout.index] ?: 0) + 1
             }
             if (!layout.fromOcr) {
                 val (imp, total) = BanglaText.visualOrderEvidence(l.text)
@@ -47,6 +57,15 @@ class DocumentStats {
             val (bn, la) = BanglaText.scriptCounts(l.text)
             bengaliLetters += bn
             latinLetters += la
+            for (m in COMPOUND.findAll(l.text)) {
+                if (m.range.last >= l.text.trimEnd().length - 1) continue
+                val key = m.value.lowercase()
+                compounds[key] = (compounds[key] ?: 0) + 1
+            }
+            for (m in WORD.findAll(l.text)) {
+                val key = m.value.lowercase()
+                words[key] = (words[key] ?: 0) + 1
+            }
         }
         for (t in layout.tables) for (row in t.rows) for (cell in row) {
             val (bn, la) = BanglaText.scriptCounts(cell)
@@ -76,6 +95,9 @@ class DocumentStats {
             else -> Int.MAX_VALUE
         }
         val repeated = edgePages.filter { it.value >= minEdgeRepeats }.keys
+        // Page numbers printed in the running heads ("A BRIEF HISTORY ⏐⏐⏐ 3"): a number that
+        // follows the page index on many pages.
+        val folio = folioOffsets.filter { it.value >= max(minEdgeRepeats, pagesWithText / 10) }.keys
         val visual = visualImpossible >= 3 && visualImpossible >= preBaseTotal * 0.12
         val total = (bengaliLetters + latinLetters).coerceAtLeast(1)
         val language = when {
@@ -84,7 +106,9 @@ class DocumentStats {
             bengaliLetters + latinLetters == 0L -> "unknown"
             else -> "bn+en"
         }
-        return DocumentProfile(body, reps.take(3), repeated, visual, language)
+        // ("three-phase" printed so, never "threephase": a hyphen at the end of a line in it stays)
+        val hyphenated = compounds.filter { (k, n) -> n >= 2 && (words[k.replace("-", "")] ?: 0) * 2 < n }.keys
+        return DocumentProfile(body, reps.take(3), repeated, visual, language, folio, hyphenated)
     }
 
     companion object {
@@ -96,6 +120,16 @@ class DocumentStats {
             l.bounds.top >= pageHeight * 0.9f -> "B|"
             else -> null
         }
+
+        private val COMPOUND = Regex("(?<![\\p{L}-])\\p{Ll}{2,}-\\p{Ll}{2,}(?![\\p{L}-])")
+        private val WORD = Regex("(?<![\\p{L}-])\\p{Ll}{4,}(?![\\p{L}-])")
+
+        private val LEADING_NUMBER = Regex("^\\s*(\\d{1,4})(?!\\d|[.,]\\d)")
+        private val TRAILING_NUMBER = Regex("(?<![\\d.,])(\\d{1,4})\\s*$")
+
+        /** The numbers a header or footer line starts or ends with ("12 ⏐ Chapter", "Title 13"). */
+        fun folios(text: String): List<Int> =
+            listOfNotNull(LEADING_NUMBER.find(text), TRAILING_NUMBER.find(text)).mapNotNull { it.groupValues[1].toIntOrNull() }.distinct()
     }
 }
 
@@ -107,16 +141,28 @@ class DocumentProfile(
     /** Bangla text layer is in visual glyph order and must be reordered. */
     val visualOrder: Boolean,
     val language: String,
+    /** Offsets (page number − page index) of the page numbers printed in running heads. */
+    private val folioOffsets: Set<Int> = emptySet(),
+    /** Words the book prints with a hyphen ("three-phase"), never joined. */
+    private val hyphenated: Set<String> = emptySet(),
 ) {
+    /** Whether "[before]-" at the end of a line and "[after]" on the next are one hyphenated word. */
+    fun keepsHyphen(before: String, after: String): Boolean {
+        val a = before.takeLastWhile { it.isLetter() }
+        val b = after.takeWhile { it.isLetter() }
+        return a.length >= 2 && b.length >= 2 && "$a-$b".lowercase() in hyphenated
+    }
+
     fun headingLevelForSize(size: Float): Int? {
         if (size < bodySize * 1.15f) return null
         headingSizes.forEachIndexed { i, rep -> if (size >= rep * 0.94f) return i + 1 }
         return (headingSizes.size + 1).coerceAtMost(3)
     }
 
-    fun isRunningHeaderOrFooter(line: TextLine, pageHeight: Float): Boolean {
+    fun isRunningHeaderOrFooter(line: TextLine, pageHeight: Float, pageIndex: Int = -1): Boolean {
         val zone = DocumentStats.edgeZone(line, pageHeight) ?: return false
         if (Patterns.pageNumber.matches(line.text.trim())) return true
+        if (pageIndex >= 0 && DocumentStats.folios(line.text).any { it - pageIndex in folioOffsets }) return true
         return (zone + Patterns.signature(line.text)) in repeatedEdges
     }
 

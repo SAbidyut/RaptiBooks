@@ -56,6 +56,22 @@ class LibraryViewModel(
         }
     }
 
+    /** A PDF opened from another app: kept as it is (not converted) and shown at once. */
+    fun openShared(uri: Uri, onOpen: (Long) -> Unit) {
+        viewModelScope.launch {
+            importing = true
+            try {
+                onOpen(library.importPdf(uri, convert = false))
+            } catch (e: ImportException) {
+                _messages.send(LibraryMessage.Failed(e.message ?: ""))
+            } catch (e: Exception) {
+                _messages.send(LibraryMessage.Failed(e.message ?: e.javaClass.simpleName))
+            } finally {
+                importing = false
+            }
+        }
+    }
+
     fun delete(book: Book) = viewModelScope.launch { library.delete(book.id) }
 
     fun reconvert(book: Book, mode: OcrMode) = viewModelScope.launch { library.reconvert(book.id, mode) }

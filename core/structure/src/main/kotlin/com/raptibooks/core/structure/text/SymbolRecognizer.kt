@@ -55,13 +55,13 @@ object SymbolRecognizer {
                 ) ?: continue
                 replaced[i] = TextFragment(
                     c.toString(), f.left, f.top, f.right, f.bottom, f.baseline, f.fontSize, f.fontName,
-                    f.bold, f.italic, f.spaceWidth,
+                    f.bold, f.italic, f.spaceWidth, f.glyph,
                 )
             }
         }
         if (replaced.isEmpty()) return page
         val fragments = page.fragments.mapIndexed { i, f -> replaced[i] ?: f }
-        return RawPage(page.index, page.width, page.height, fragments, page.images, page.paths, page.rotatedText, page.fromOcr, page.ocrPictures)
+        return RawPage(page.index, page.width, page.height, fragments, page.images, page.paths, page.rotatedText, page.fromOcr, page.ocrPictures, page.ink, page.invisibleText)
     }
 
     /** Converts ARGB pixels to grey levels (white background assumed for transparency). */

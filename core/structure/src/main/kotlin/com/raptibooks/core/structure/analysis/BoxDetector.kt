@@ -19,6 +19,59 @@ class BoxDetector {
 
     fun detect(page: RawPage, lines: List<TextLine>, tables: List<TableRegion>): List<BoxRegion> {
         if (lines.isEmpty()) return emptyList()
+        val tinted = tintedBoxes(page, lines, tables)
+        return tinted + ruledExamples(page, lines, tinted)
+    }
+
+    /**
+     * Worked examples set between two rules across the column, the "EXAMPLE 1.4" label right
+     * under the first: the rules are the example's box.
+     */
+    private fun ruledExamples(page: RawPage, lines: List<TextLine>, boxes: List<BoxRegion>): List<BoxRegion> {
+        val rules = page.paths.filter { it.shape == PathShape.HORIZONTAL_LINE && it.bounds.width >= page.width * 0.35f }
+            .sortedBy { it.bounds.top }
+        if (rules.isEmpty()) return emptyList()
+        val margin = page.height * 0.07f
+        val body = lines.filter { it.bounds.top > margin && it.bounds.bottom < page.height - margin }
+        val out = mutableListOf<BoxRegion>()
+        for ((k, rule) in rules.withIndex()) {
+            val top = rule.bounds
+            fun under(l: TextLine) = l.bounds.top >= top.bottom - 1f && l.bounds.horizontalOverlap(top) >= l.bounds.width * 0.5f
+            // (the label may have a formula beside it, whose numerator is printed higher)
+            val first = body.filter { under(it) && it.bounds.top - top.bottom <= it.fontSize * 2.5f }
+                .firstOrNull { EXAMPLE_START.containsMatchIn(it.text) } ?: continue
+            if (body.any { l -> l.bounds.top < first.bounds.top - first.fontSize && under(l) && l.text.count { it.isLetter() } >= 4 }) continue
+            // (a label in a margin column, beside the text of the example, is not under the rule's text)
+            if (body.any { it !== first && it.bounds.verticalOverlap(first.bounds) > 0f && it.text.count { c -> c.isLetter() } >= 4 }) continue
+            // Without a closing rule the example ends before the next section's heading (or the next
+            // example); one that runs on to the next page is left to the reader's example card,
+            // which follows it there.
+            val stop = body.filter { l ->
+                under(l) && l.bounds.top > first.bounds.bottom &&
+                    // (a heading starts the column's lines: not the "." on a calculator key)
+                    ((l.isBold && l.fontSize >= first.fontSize * 1.1f && l.text.count { it.isLetter() } >= 3 &&
+                        abs(l.bounds.left - top.left) <= l.fontSize * 1.5f) || EXAMPLE_START.containsMatchIn(l.text))
+            }.minByOrNull { it.bounds.top }
+            val close = rules.drop(k + 1).firstOrNull {
+                abs(it.bounds.left - top.left) <= 4f && abs(it.bounds.right - top.right) <= 4f && it.bounds.top < (stop?.bounds?.top ?: Float.MAX_VALUE)
+            }
+            val bottom = close?.bounds?.bottom ?: stop?.let { it.bounds.top - 2f } ?: continue
+            val rect = Rect(top.left, top.top, top.right, bottom)
+            // (one rule may close an example and open the next)
+            if (boxes.any { it.bounds.intersects(rect) } || out.any { it.bounds.intersects(rect, -2f) }) continue
+            val accent = rule.color.takeIf { it >= 0 && saturation(it) >= 60 } ?: EXAMPLE_ACCENT
+            out += BoxRegion(rect, if (accent == EXAMPLE_ACCENT) EXAMPLE_FILL else lighten(accent), accent, openBottom = false)
+        }
+        return out
+    }
+
+    /** [rgb] mixed with much white: a light tint of the same hue. */
+    private fun lighten(rgb: Int): Int {
+        fun ch(c: Int) = (c + (255 - c) * 0.88f).toInt().coerceIn(0, 255)
+        return (ch(rgb shr 16 and 0xFF) shl 16) or (ch(rgb shr 8 and 0xFF) shl 8) or ch(rgb and 0xFF)
+    }
+
+    private fun tintedBoxes(page: RawPage, lines: List<TextLine>, tables: List<TableRegion>): List<BoxRegion> {
         val pageArea = page.width * page.height
         val candidates = page.paths.filter { p ->
             val b = p.bounds
@@ -45,6 +98,12 @@ class BoxDetector {
             out += BoxRegion(b, fill, accent, openTop, openBottom)
         }
         return out
+    }
+
+    private companion object {
+        val EXAMPLE_START = Regex("^\\s*(?:worked\\s+)?(?:example|উদাহরণ)\\s*[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*(?![0-9০-৯])", RegexOption.IGNORE_CASE)
+        const val EXAMPLE_FILL = 0xFFF1E0
+        const val EXAMPLE_ACCENT = 0xE07800
     }
 
     /** A light, visibly coloured fill (not white paper, not a dark banner). */

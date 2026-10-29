@@ -8,10 +8,15 @@ object Patterns {
         "fig\\.?|figure|chart|diagram|graph|plate|illustration|image|photo|picture|map|table|exhibit|" +
             "চিত্র|ছবি|রেখাচিত্র|নকশা|মানচিত্র|সারণি|সারণী|টেবিল|ডায়াগ্রাম|লেখচিত্র"
 
-    /** "Figure 3:", "Fig. 2.1", "চিত্র ৪ -", "Table 1." */
+    /** "Figure 1.6 shows the voltage…": a sentence about a figure, not its caption. */
+    private const val REFERENCE =
+        "\\s*(?:fig\\.?|figure|table)\\s*$NUM+(?:[.\\-]$NUM+)*(?:\\s*\\([a-z]\\))?\\s+" +
+            "(?:shows?|illustrates|depicts|is|are|was|gives|presents|represents|displays|contains|has|can|will|summarizes|lists|compares|provides)\\b"
+
+    /** "Figure 3:", "Fig. 2.1", "চিত্র ৪ -", "Table 1.", "FIGURE P1-14", "Table A-1" */
     val caption = Regex(
-        "^\\s*(?:$CAPTION_WORDS)\\s*(?:$NUM+(?:[.\\-]$NUM+)*|[IVXivx]+)?\\s*[:.।\\-–—)]|" +
-            "^\\s*(?:$CAPTION_WORDS)\\s+$NUM+",
+        "^(?!$REFERENCE)(?:\\s*(?:$CAPTION_WORDS)\\s*(?:(?:[A-Z]-?)?$NUM+(?:[.\\-]$NUM+)*|[IVXivx]+)?\\s*[:.।\\-–—)]|" +
+            "\\s*(?:$CAPTION_WORDS)\\s+(?:[A-Z]-?)?$NUM+)",
         RegexOption.IGNORE_CASE,
     )
 
@@ -22,7 +27,7 @@ object Patterns {
     val listMarker = Regex(
         "^\\s*(" +
             "[•●○◦▪▫■□♦◆◇►▸▹➢➤✓✔☐☑❖✦✧*·]" +
-            "|\\(?$NUM{1,3}[.)।]" +
+            "|\\*?\\(?$NUM{1,3}[.)।]" + // ("*3." marks a challenging exercise)
             "|\\($NUM{1,3}\\)" +
             "|\\(?[a-z][.)]" +
             "|\\([a-zA-Z]\\)" +
@@ -88,7 +93,7 @@ object Patterns {
         RegexOption.IGNORE_CASE,
     )
 
-    private val terminal = Regex("[.!?।॥…:;]['\"”’)\\]]*\\s*$")
+    private val terminal = Regex("[.!?।॥…:;؟؛۔]['\"”’)\\]]*\\s*$")
 
     fun endsSentence(text: String): Boolean = terminal.containsMatchIn(text)
 

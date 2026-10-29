@@ -1,6 +1,7 @@
 package com.raptibooks.core.model
 
-enum class BookStatus { QUEUED, PROCESSING, READY, FAILED, CANCELLED }
+/** (stored by name: new values may go anywhere) [ORIGINAL_ONLY]: opened from another app, not converted until asked. */
+enum class BookStatus { QUEUED, PROCESSING, READY, FAILED, CANCELLED, ORIGINAL_ONLY }
 
 /** How OCR is used while converting a book. */
 enum class OcrMode {

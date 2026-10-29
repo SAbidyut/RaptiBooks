@@ -19,15 +19,18 @@ import com.raptibooks.core.reflow.ReflowEngine
 import com.raptibooks.core.reflow.TocBuilder
 import com.raptibooks.core.structure.analysis.DocumentStats
 import com.raptibooks.core.structure.analysis.OcrDecision
+import com.raptibooks.core.structure.analysis.ScanPage
 import com.raptibooks.core.structure.analysis.PageAnalyzer
 import com.raptibooks.core.structure.analysis.PageStructurer
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.layout.FigureKind
 import com.raptibooks.core.structure.layout.FigureRegion
 import com.raptibooks.core.structure.layout.PageLayout
+import com.raptibooks.core.structure.layout.PictureRegion
 import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.text.GrayImage
 import com.raptibooks.core.structure.text.SymbolRecognizer
+import com.raptibooks.core.structure.text.Vocabulary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -101,6 +104,13 @@ class ConversionPipeline(
                 if (pageCount == 0) throw ConversionException(context.getString(com.raptibooks.core.data.R.string.error_no_pages))
                 if (book.pageCount != pageCount) books.updateMetadata(bookId, null, null, pageCount)
                 val cacheDir = files.pageCache(bookId)
+                // Pages analysed by an older version (a conversion interrupted before an update)
+                // are analysed again.
+                val stamp = File(cacheDir, "version.txt")
+                if (runCatching { stamp.readText() }.getOrNull() != LAYOUT_VERSION.toString()) {
+                    cacheDir.listFiles()?.forEach { it.delete() }
+                    runCatching { stamp.writeText(LAYOUT_VERSION.toString()) }
+                }
                 val figuresDir = files.figures(bookId)
                 val stats = DocumentStats()
                 var usedOcr = false
@@ -125,7 +135,7 @@ class ConversionPipeline(
                         }
                     }
                     onProgress(Progress(0.08f + 0.77f * i / pageCount, msg(com.raptibooks.core.data.R.string.progress_page, i + 1, pageCount)))
-                    val layout = analysePage(i, pageCount, extractor, renderer, book.ocrMode, lowMemory, figuresDir, survey.bodySize, survey.digital, ::ocrEngine) { message ->
+                    val layout = analysePage(i, pageCount, extractor, renderer, book.ocrMode, lowMemory, figuresDir, survey.bodySize, survey.digital, survey.vocabulary, ::ocrEngine) { message ->
                         onProgress(Progress(0.08f + 0.77f * i / pageCount, message))
                     }
                     usedOcr = usedOcr || layout.fromOcr
@@ -139,7 +149,9 @@ class ConversionPipeline(
                 val profile = stats.profile()
                 val structurer = PageStructurer(profile)
                 val batch = ArrayList<ContentBlock>(256)
-                val engine = ReflowEngine { block ->
+                // the word pictures of every page read so far (a paragraph may run on)
+                val pictures = HashMap<Int, PictureRegion>()
+                val engine = ReflowEngine({ pictures[it] }, profile::keepsHyphen) { block ->
                     batch += block
                     if (batch.size >= 200) {
                         content.insertBlocks(bookId, batch)
@@ -149,6 +161,7 @@ class ConversionPipeline(
                 for (i in 0 until pageCount) {
                     currentCoroutineContext().ensureActive()
                     val layout = runCatching { PageLayout.read(pageFile(cacheDir, i)) }.getOrNull() ?: continue
+                    layout.pictures.forEach { pictures[it.id] = it }
                     engine.addPage(structurer.structure(layout))
                     if (i % 25 == 0) onProgress(Progress(0.86f + 0.12f * i / pageCount, context.getString(com.raptibooks.core.data.R.string.progress_layout)))
                 }
@@ -186,14 +199,23 @@ class ConversionPipeline(
         figuresDir: File,
         bodySize: Float?,
         digital: Boolean,
+        vocabulary: Vocabulary?,
         ocrEngine: () -> OcrEngine?,
         report: suspend (String) -> Unit,
     ): PageLayout {
         val extraction = try {
             extractor.extractPage(index)
         } catch (e: OutOfMemoryError) {
+            // (once more with the memory collected: a page left without its text becomes a picture)
             System.gc()
-            null
+            try {
+                extractor.extractPage(index)
+            } catch (e: OutOfMemoryError) {
+                System.gc()
+                null
+            } catch (e: Exception) {
+                null
+            }
         } catch (e: Exception) {
             null
         }
@@ -244,11 +266,29 @@ class ConversionPipeline(
                 raw
             }
         }
-        var layout = try {
-            PageAnalyzer(bodySize).analyze(raw)
-        } catch (e: Exception) {
-            PageLayout(index, w, h, emptyList(), emptyList(), emptyList(), raw.fromOcr, 0)
+        if (!raw.fromOcr && renderer != null && ScanPage.isScan(raw)) {
+            // A scan under an OCR text layer: where its ink is shows its drawings and formulas.
+            raw = try {
+                ScanPage.withInk(raw) { region, scale -> renderGray(renderer, index, region, scale) }
+            } catch (e: OutOfMemoryError) {
+                System.gc()
+                raw
+            }
         }
+        fun analyse(page: RawPage): PageLayout? = try {
+            PageAnalyzer(bodySize, vocabulary).analyze(page)
+        } catch (e: Exception) {
+            null
+        } catch (e: StackOverflowError) {
+            null
+        } catch (e: OutOfMemoryError) {
+            System.gc()
+            null
+        }
+        // (a scan whose ink could not be read keeps its text: no picture of the whole page)
+        var layout = analyse(raw)
+            ?: raw.takeIf { it.ink != null }?.let { analyse(ScanPage.withoutInk(it)) }
+            ?: PageLayout(index, w, h, emptyList(), emptyList(), emptyList(), raw.fromOcr, 0)
         val hasContent = layout.lines.isNotEmpty() || layout.tables.isNotEmpty() || layout.figures.isNotEmpty()
         val visualOnly = raw.images.isNotEmpty() || raw.paths.size > 20 || extraction == null || wantOcr
         if ((!hasContent && visualOnly) || lowConfidence) {
@@ -256,14 +296,63 @@ class ConversionPipeline(
             layout = PageLayout(index, w, h, emptyList(), listOf(FigureRegion(Rect(0f, 0f, w, h), FigureKind.SCAN)), emptyList(), raw.fromOcr, 0)
         }
         try {
-            renderFigures(index, layout, renderer, pageBitmap, figuresDir, lowMemory)
+            renderFigures(index, layout, renderer, pageBitmap, figuresDir, lowMemory, scanned = raw.ink != null)
         } finally {
             pageBitmap?.recycle()
         }
+        renderPictures(index, layout, renderer, figuresDir, lowMemory)
         return layout
     }
 
-    private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File, lowMemory: Boolean) {
+    /**
+     * Words shown as printed (unreadable script in the text layer): cut from the page rendered
+     * once, as ink, the height of their line so that they sit level in the reflowed text.
+     */
+    private fun renderPictures(index: Int, layout: PageLayout, renderer: PageRenderer?, dir: File, lowMemory: Boolean) {
+        if (layout.pictures.isEmpty() || renderer == null) return
+        val scale = if (lowMemory) 2.5f else 3.5f
+        val page = try {
+            renderer.renderRegion(index, Rect(0f, 0f, layout.width, layout.height), scale)
+        } catch (e: OutOfMemoryError) {
+            System.gc()
+            null
+        } catch (e: Exception) {
+            null
+        } catch (e: LinkageError) {
+            null
+        } ?: return
+        try {
+            for ((k, p) in layout.pictures.withIndex()) {
+                var bmp = image(index, p.bounds, renderer, page, layout.width, scale) ?: continue
+                val pxPerPt = bmp.width / p.bounds.width
+                // (only the empty space at the sides goes: every word keeps the height of its line)
+                val ink = inkBounds(bmp, scale)
+                if (ink == null) {
+                    bmp.recycle()
+                    continue
+                }
+                if (ink.left > 0 || ink.right < bmp.width) {
+                    val b = p.bounds
+                    val cropped = Bitmap.createBitmap(bmp, ink.left, 0, ink.width(), bmp.height)
+                    if (cropped !== bmp) bmp.recycle()
+                    bmp = cropped
+                    p.bounds = Rect(b.left + ink.left / pxPerPt, b.top, b.left + ink.right / pxPerPt, b.bottom)
+                }
+                bmp = inkMask(bmp)
+                val file = File(dir, "p$index-w$k.png")
+                if (save(bmp, file, photo = false)) {
+                    p.imagePath = file.absolutePath
+                    p.imageWidth = bmp.width
+                    p.imageHeight = bmp.height
+                }
+                bmp.recycle()
+            }
+        } finally {
+            page.recycle()
+        }
+    }
+
+    private fun renderFigures(index: Int, layout: PageLayout, renderer: PageRenderer?, pageBitmap: Bitmap?, dir: File, lowMemory: Boolean, scanned: Boolean) {
         layout.figures.forEachIndexed { k, f ->
             val equation = f.kind == FigureKind.EQUATION
             val photo = f.kind != FigureKind.VECTOR && !equation
@@ -274,7 +363,7 @@ class ConversionPipeline(
                 f.kind == FigureKind.SCAN -> 2.2f
                 equation -> if (lowMemory) 4f else 7f
                 else -> if (lowMemory) 3f else 5f
-            }
+            }.let { if (scanned) minOf(it, SCAN_SCALE) else it }
             val maxWidth = when {
                 f.kind == FigureKind.SCAN -> 1400
                 lowMemory -> 1600
@@ -401,8 +490,11 @@ class ConversionPipeline(
      * Body text size of the whole book: the size that carries the most characters, from up to
      * [SAMPLE_PAGES] pages spread over the book. Cached so a resumed conversion skips it.
      */
-    /** What the survey learns: the body text size, and whether the book has a real text layer. */
-    private class Survey(val bodySize: Float?, val digital: Boolean)
+    /**
+     * What the survey learns: the body text size, whether the book has a real text layer, and
+     * its words (to put right the words an OCR misread).
+     */
+    private class Survey(val bodySize: Float?, val digital: Boolean, val vocabulary: Vocabulary?)
 
     private suspend fun documentBodySize(
         extractor: PdfExtractor,
@@ -411,19 +503,26 @@ class ConversionPipeline(
         report: suspend (Int, Int) -> Unit,
     ): Survey {
         val cache = File(cacheDir, "body-size.txt")
-        cache.takeIf { it.exists() }?.readText()?.split(' ')?.let { parts ->
+        val words = File(cacheDir, "vocabulary.txt")
+        cache.takeIf { it.exists() && words.exists() }?.readText()?.split(' ')?.let { parts ->
             val size = parts.getOrNull(0)?.toFloatOrNull()
             val digital = parts.getOrNull(1)?.toBooleanStrictOrNull()
-            if (size != null && digital != null) return Survey(size.takeIf { it > 0f }, digital)
+            val vocabulary = runCatching { Vocabulary.read(words.readText()) }.getOrNull()
+            if (size != null && digital != null) return Survey(size.takeIf { it > 0f }, digital, vocabulary)
         }
+        val vocabulary = Vocabulary.Builder()
         var textPages = 0
         var sampled = 0
         val pages = if (pageCount <= SAMPLE_PAGES) (0 until pageCount).toList()
         else List(SAMPLE_PAGES) { it * (pageCount - 1) / (SAMPLE_PAGES - 1) }.distinct()
+        // (more pages for the words, whose counts must tell common from rare)
+        val wordPages = if (pageCount <= VOCABULARY_PAGES) (0 until pageCount).toSet()
+        else List(VOCABULARY_PAGES) { it * (pageCount - 1) / (VOCABULARY_PAGES - 1) }.toSet()
         val chars = HashMap<Int, Long>()
-        for ((n, i) in pages.withIndex()) {
+        val all = (pages + wordPages).distinct().sorted()
+        for ((n, i) in all.withIndex()) {
             currentCoroutineContext().ensureActive()
-            if (n % 5 == 0) report(n, pages.size)
+            if (n % 5 == 0) report(n, all.size)
             val page = try {
                 extractor.extractPage(i).page
             } catch (e: Exception) {
@@ -432,6 +531,8 @@ class ConversionPipeline(
                 System.gc()
                 continue
             }
+            if (i in wordPages) vocabulary.add(page.fragments)
+            if (i !in pages) continue
             var pageChars = 0
             for (f in page.fragments) {
                 if (f.isSpace) continue
@@ -445,8 +546,12 @@ class ConversionPipeline(
         val body = chars.maxByOrNull { it.value }?.key?.let { it / 2f }
         // Most pages carry real text: a born-digital book, not a scan.
         val digital = sampled >= 3 && textPages * 10 >= sampled * 7
-        runCatching { cache.writeText("${body ?: 0f} $digital") }
-        return Survey(body, digital)
+        val learned = vocabulary.build()
+        runCatching {
+            words.writeText(learned.write())
+            cache.writeText("${body ?: 0f} $digital")
+        }
+        return Survey(body, digital, learned)
     }
 
     private fun image(
@@ -512,10 +617,19 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 4
+        const val LAYOUT_VERSION = 11
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60
+
+        /**
+         * Pixels per point of a scanned page's figures and formulas: a scan has no more detail
+         * than its 300 dpi, a larger picture only costs time and memory.
+         */
+        private const val SCAN_SCALE = 300f / 72f
+
+        /** Pages read for the book's words (see [Vocabulary]). */
+        private const val VOCABULARY_PAGES = 120
 
         /** One conversion at a time keeps memory use predictable on low-end phones. */
         private val lock = Mutex()

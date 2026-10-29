@@ -141,6 +141,25 @@ class PageAnalysisTest {
     }
 
     @Test
+    fun systemOfEquationsInColumnsIsOnePicture() {
+        val frags = TestPages.paragraph(TestPages.LOREM, 60f, 100f, 450f, size = 10f).first.toMutableList()
+        frags += words("In determinant form,", 60f, 250f, size = 10f)
+        val rows = listOf(
+            listOf("I1(Z1 + ZL1) − I2Zm12", "+ I3Zm13", "= E1"),
+            listOf("−I1Zm12", "+ I2(Z2 + ZL2) + 0", "= 0"),
+            listOf("I1Zm13", "+ 0 + I3(Z3 + ZL3)", "= 0"),
+        )
+        for ((r, row) in rows.withIndex()) {
+            for ((c, piece) in row.withIndex()) frags += words(piece, listOf(94f, 223f, 300f)[c] - (if (c == 1 && r > 0) 72f else 0f), 275f + r * 14f, size = 10f)
+        }
+        frags += TestPages.paragraph(TestPages.LOREM, 60f, 340f, 450f, size = 10f).first
+        val layout = analyzer.analyze(RawPage(0, 594f, 783f, frags))
+        val eq = layout.figures.single { it.kind == com.raptibooks.core.structure.layout.FigureKind.EQUATION }
+        assertTrue("${eq.bounds} ${layout.lines}", eq.bounds.left <= 95f && eq.bounds.right >= 315f && eq.bounds.height >= 30f)
+        assertTrue("${eq.bounds} ${layout.lines}", layout.lines.none { "Zm1" in it.text || it.text.trim().startsWith("= ") })
+    }
+
+    @Test
     fun centeredShortLinesAreCentered() {
         val frags = words("A short centered line", 230f, 300f) + words("another one here", 240f, 315f)
         val layout = analyzer.analyze(RawPage(0, 595f, 842f, frags + TestPages.paragraph(TestPages.LOREM, 72f, 400f, 450f).first))

@@ -17,9 +17,13 @@ screen. Bangla and English are both first-class, and everything runs offline.
 - **Conversion** (background, WorkManager foreground job with a progress notification,
   resumable after the app is killed):
   - text with positions and font styles (bold, italic incl. synthetic, superscript);
-  - running headers/footers and page numbers removed (repetition across pages);
+  - running headers/footers and page numbers removed (repetition across pages; also running
+    heads that change with every section but carry the page number, "A BRIEF HISTORY ⏐ 3");
+    titles printed twice for a shadow effect are read once;
   - headings from font-size levels, bold lines, "Chapter/অধ্যায়" and "2.3"-style numbering;
-  - paragraphs re-joined across lines, columns and page breaks, with de-hyphenation;
+  - paragraphs re-joined across lines, columns and page breaks, with de-hyphenation (a word
+    the book prints with its hyphen, "three-phase", keeps it at a line break); glossaries
+    whose entries hang from a bold term are one paragraph per entry;
   - lists (bullets, including vector-drawn ones; 1. / a) / ক) / ১। enumerators);
   - tables: ruled grids, rule-delimited tables and column-aligned text → real tables, plus a
     snapshot of the printed table;
@@ -31,7 +35,10 @@ screen. Bangla and English are both first-class, and everything runs offline.
   - **display equations**: stacked fractions, integral/sum limits, boxed and numbered formulas
     become one picture of the formula (an ink mask drawn in the theme's text colour, at the
     size of the body text, scrolling sideways when wider than the screen) with the equation
-    number beside it; stacked formulas are never mistaken for tables;
+    number beside it (also a number set between the rows it numbers, two numbered rows
+    become two formulas, and appendix numbers such as "(A.12)"); the pieces of a formula's
+    row set wide apart ("5i = 20  ⇒  i = 4 A") stay one line; stacked formulas are never
+    mistaken for tables;
   - **worked examples**: the steps of a calculation printed as a centred column ("I = V/R",
     "= 230/460", "= 0.5 A") become one picture of the whole derivation; the question,
     "প্রদত্ত/Given", "নির্ণেয়", "সমাধান" and "উত্তর/Answer" lines stay separate paragraphs; a
@@ -41,22 +48,81 @@ screen. Bangla and English are both first-class, and everything runs offline.
     box runs over a page break; a frame around running text is never read as a table;
   - **diagrams split into pieces** (thin-line circuits whose wires look like a table, loose
     labels) are put back together above their caption, with the drawing's own title;
-  - **math symbols without Unicode mapping** (the "=", "×", "+" of Mathematical-Pi-style fonts,
-    which otherwise vanish from the text) are identified from their printed shape; "Δ"
-    printed with a "¢" code is repaired;
-  - printed **contents pages** with or without dot leaders (also as tables) become tappable
-    contents entries, and the reader's Contents panel follows the book's own contents when
-    it can be tied to the pages;
+  - **math symbols of "pi fonts"** (Linotype Mathematical Pi, Greek-keyboard and operator
+    fonts of engineering textbooks) are read from their glyph names and known layouts: the
+    "=", "≠", "±", "∠", "Δ", "Π", "ω", "θ", "Ω", "π", "≈", "≅", "″" that otherwise vanish or turn
+    into "¢", "ß", "u", "p", "6"; any other symbol without Unicode mapping is identified from
+    its printed shape;
+  - **worked examples and practice problems** ("Example 2.3", "Practice Problem 2.3",
+    "উদাহরণ ৪.১", also examples set between two rules and labels printed at the start of the
+    question, "EXAMPLE 6.11 Determine…") become cards of their own, up to the answer or the
+    next section;
+  - **calculator keys** ("2ND", "√", "ENTER" drawn as key caps) and the display after them are
+    one picture per row;
+  - derivations with words on their rows ("so that", "and", "resulting in") stay one picture;
+    a sentence with inline math ("That is, VW = 0∠0°…") stays text and an equation picture
+    never takes in a sliver of the text line above it; fractions of words ("Effect =
+    cause / opposition") are formulas; columns of "A = 1.0" values are a table;
+  - printed **contents pages** with or without dot leaders (also as tables, also two columns
+    of "1.2  Systems of Units 4" with wrapped titles) become tappable contents entries, and
+    the reader's Contents panel follows the book's own contents when it can be tied to the
+    pages;
+  - **textbook layouts** (e.g. *Fundamentals of Electric Circuits*): section numbers printed
+    apart from their titles ("1.2 | Systems of Units") and chapter openers ("c h a p t e r",
+    a huge "1" and the title) become proper headings; bold exercise numbers ("2.13") and
+    chapter-dash numbers ("1-10.") hang like list markers, with every line of the problem;
+    an icon beside a problem ("e2d") is no bullet; an "Example 10.7" banner beside the first
+    line of its question comes before it; equation numbers stay with their formula; circuit diagrams (wires, resistor
+    bars, arrowheads) are never read as tables; figures of a two-column exercise page stay in
+    their own column; tables in the margin column, centred bold header cells, exponents such
+    as 10⁻¹² and two-line captions ("TABLE 1.2" + description) are kept together;
+  - **exercise pages**: problems, figures and their "Figure 2.48 For Prob. 2.31" captions stay
+    in their own column and order; problem text is never swallowed by a figure, while the
+    values printed beside a circuit ("10 V", "5 Ω") stay in the drawing; "Review Questions"
+    pages read column by column; margin captions printed on the baselines of the text are
+    split off; "Solution:" beside a margin figure stays text;
+  - section titles wrapped over two lines ("1.1 ELECTRICAL MACHINES, / TRANSFORMERS, AND
+    DAILY LIFE") are one heading; "Section 2.4 Kirchhoff's Laws" over the exercises is a
+    minor heading; numbered or bulleted points set in bold are list items, not headings; a
+    chapter number printed over the word ("CHAPT1E R") is read;
+  - printer's marks outside the crop box (file-name slug, crop marks) are ignored, and shapes
+    are measured inside their clipping area;
+  - Latin words set without space glyphs in tightly justified lines keep their spaces;
   - hidden 1-pt text (bookmark markers) is ignored; "ভাগ করে…"/"অধ্যায় ১৬-এর…" inside a
     sentence is not a chapter title; answer options split by a page break are joined;
   - in a book with a real text layer, a page that is one big picture (cover, poster) is kept
     as that picture instead of being OCR'd;
-  - margin columns (side notes) are read after the main text next to them;
-  - multi-column reading order;
+  - margin columns (side notes, figures, tables, captions) are placed right after the
+    paragraph printed beside them, also when the gutter is only one character wide; a
+    paragraph continues across the page break past them;
+  - multi-column reading order, also on pages that change layout half way (a column of text
+    over two columns of exercises); subscripts are kept with their line when a figure in the
+    other column has labels on the same baseline;
   - **Bangla**: visual→logical glyph order repair (ি ে ৈ, reph), ActualText clusters,
     Bijoy/SutonnyMJ (ANSI) → Unicode conversion;
+  - **Arabic and other right-to-left scripts** (Persian, Urdu, Hebrew): lines drawn in visual
+    order are put into reading order (numbers and Latin words keep theirs, marks stay on their
+    letters, presentation forms become plain letters); Arabic paragraphs read and align from
+    the right, also inside English text;
+  - **words a scan's OCR could not read** (Arabic in an English book run through a Latin-only
+    OCR such as Acrobat ClearScan, where the text layer holds junk like `y\:iSll` or glyphs
+    without Unicode): each garbled word is shown as printed, cut from the page as ink and set
+    in the reflowed line like a word (in the theme's text colour); a line of such words is
+    reflowed word by word from the right; the English text around them gets its own spaces
+    back (only the space glyphs part words on such pages); lines the OCR left as images become
+    such lines too, while a grid of words (a drill's word list) and a table with a column of
+    them are shown as printed, whole;
   - **OCR** for scanned pages and broken text layers: Tesseract 5 with bundled `ben` + `eng`
     models, fully offline; text-as-outlines pages are detected too;
+  - **scanned books with an OCR text layer** (Acrobat, CVISION: the picture of each page under
+    invisible text): the page's ink shows what the text layer misses — drawings become figures
+    with their captions (panels of one figure, ruled tables), display formulas are shown as
+    printed with their numbers, and words the OCR misread the way OCRs do ("transfonner",
+    "1lle", "nux", "detennine") are put right when the book prints the right word (or its
+    family: "determined") elsewhere; such a book's per-page OCR fonts are parsed once, not
+    once a page, so it converts in steady memory; dashes the OCR read as a hyphen and a gap
+    ("machines- both") are dashes again, and its junk set as big as a heading (a drawing's
+    labels) is no heading;
   - table of contents from the PDF outline, else from the printed contents page, else from
     detected headings;
   - tables keep superscripts and subscripts (10¹⁸, 10⁻³); wide tables scroll sideways with a
@@ -64,16 +130,42 @@ screen. Bangla and English are both first-class, and everything runs offline.
 - **Reader**: Light / Sepia / Dark / Black themes; bundled Tiro Bangla (serif) and Hind
   Siliguri (sans) fonts that cover Bangla and Latin, plus system fonts; text size, line
   spacing, margins, justification; contents, bookmarks,
-  in-book search with highlights; zoomable figures; **marking pen** (tap the right edge: red / blue / yellow / green and an eraser; draw along
+  in-book search with highlights; zoomable figures; **copying text**: two fingers dragged over
+  the text select it, from where they came down to where they are dragged, across paragraphs
+  (the page scrolls on at its top or bottom edge), then "Copy" copies it (one finger never
+  selects, so reading and scrolling stay undisturbed), and "Copy text" in the picture
+  viewer reads the text printed in a figure, formula or page kept as a picture (offline OCR)
+  and shows it to select or copy, beside the text the book's text layer has for it; **marking pen** (tap the right edge: red / blue / yellow / green and an eraser; draw along
   words or loop around a passage — in text, tables and answer options — to underline it in that colour; on pictures a
   finger draws freehand lines that stay where they were drawn; the menu can be dragged; all saved with the book); **notes**: pick the note button in the pen menu, tap
   anywhere in the book and leave a voice recording or a written note there, shown as a pin in the free strip beside the text with an arrow to the place, so the text stays readable; tap the pin to open it again;
   status and navigation bars always stay visible, so swiping home never scrolls the page; horizontally scrollable tables; resume
   position; keep-screen-on; **original PDF page view** with pinch zoom and a jump back to the
-  reflowed text at the same page.
+  reflowed text at the same page: one finger held still on the text for 0.6 s opens the
+  original page, and the same there comes back; the passage held lights up for a moment
+  where you arrive (the printed lines on the original page, the words in the reflowed text),
+  so you see at once which part you came to look at; the original pages fill the screen
+  (no title bar or status bar; the navigation bar stays visible), and a see-through bar at the
+  bottom of the pages (it fades away after a moment, a tap brings it back; in landscape it
+  and the contents turn with the pages, which face whichever way the phone is held) has a slider to move quickly through the book, the contents (a tap
+  on a chapter goes to its page), the marking pen and notes (voice or written, pinned to a
+  place on an original page; a stroke drawn along or through printed lines becomes a straight
+  underline of their words, a ring round some lines underlines each of them; underlines and
+  notes made in either view show in the other at the same words, and erasing one there
+  erases it in both), and turns the pages for reading across (landscape) or back
+  upright, while the screen's own bars stay where they are; the original's text is read
+  ahead in the background while the book is open, so the passage held lights up at once; a double tap
+  on an original page zooms its printed part to the width of the screen (the tapped line stays
+  put), another zooms back out.
+- **PDFs opened from other apps** ("Open with" / "Share") are shown as they are, in the
+  original page view, without converting them; the library offers "Convert for phone" for
+  them when wanted. Opening the same file again opens the same book.
 - **Large PDFs / low RAM**: PdfBox spills to disk, pages are processed one at a time, page
-  analyses are cached on disk, images are never decoded during analysis, the reader loads
-  blocks in chunks and images are downsampled to the display size.
+  analyses are cached on disk, images are never decoded during analysis, fonts are kept only
+  softly (and one page's fonts are not held by the next), the reader loads blocks in chunks
+  and images are downsampled to the display size; a scan's figures are cut at its own
+  300 dpi, not larger. A page whose analysis fails keeps its text rather than becoming a
+  picture.
 - English and Bangla UI.
 
 ## Architecture
@@ -148,6 +240,7 @@ python3 tools/offline-build/rbuild.py test      # JVM unit tests (structure, ref
 python3 tools/offline-build/rbuild.py robotest  # Robolectric tests (DB, pipeline, UI)
 python3 tools/pdf-harness/harness.py some.pdf   # print the reflowed book of a PDF (desktop)
 HARNESS_IMAGES=/tmp/crops python3 tools/pdf-harness/harness.py some.pdf  # also save figure/formula crops
+HARNESS_XMX=5g python3 tools/pdf-harness/harness.py big.pdf  # more heap for very long books
 ```
 
 The test books in `app/src/test/resources/pdf` are printed from HTML; `tools/test-pdfs` holds
@@ -179,6 +272,11 @@ upload key** and change `signingConfigs` in `app/build.gradle.kts`.
   The fast `tessdata` models are bundled to keep the app small.
 - Bijoy (SutonnyMJ) conversion covers the common character set; rare conjuncts may be missing
   ("Convert again with OCR" is the fallback).
+- Arabic words that a scan's OCR misread as plausible Latin letters ("ui", "ru") cannot be told
+  from text and stay as they were read; words shown as printed are not searchable.
+- In a scanned book with an OCR text layer, inline math inside sentences stays as the OCR read
+  it (often garbled: "cp" for φ), and misread words the book never prints right elsewhere stay
+  misread. "Copy text" on a formula gives what the OCR reads, which for math is rough.
 - Password-protected PDFs (user password) are not supported yet; owner-password PDFs work.
 - The bundled Tesseract build (JavaCPP 1.5.9) is the last one with 32-bit ARM support; its
   native libraries are not 16 KB page aligned, so on 16 KB-page devices OCR may be unavailable

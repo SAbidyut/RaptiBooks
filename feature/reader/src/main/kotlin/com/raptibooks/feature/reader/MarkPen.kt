@@ -1,6 +1,7 @@
 package com.raptibooks.feature.reader
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -43,6 +44,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -112,7 +114,14 @@ internal val LocalMarks = compositionLocalOf { ReaderMarks(emptyMap(), emptyMap(
 
 /** Body text of a block, with the passages marked by the user underlined in their colour. */
 @Composable
-internal fun MarkableText(blockIndex: Int, text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier, part: Int = 0) {
+internal fun MarkableText(
+    blockIndex: Int,
+    text: AnnotatedString,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    part: Int = 0,
+    inlineContent: Map<String, InlineTextContent> = emptyMap(),
+) {
     val marks = LocalMarks.current
     val key = MarkKey.of(blockIndex, part)
     val spans = marks.byKey[key]
@@ -124,17 +133,27 @@ internal fun MarkableText(blockIndex: Int, text: AnnotatedString, style: TextSty
     }
     val thickness = with(LocalDensity.current) { 2.5.dp.toPx() }
     val drop = with(LocalDensity.current) { 3.dp.toPx() }
+    val selection = LocalSelection.current
+    val selected = style.color.takeOrElse { Color(0xFF3D7BD9) }.copy(alpha = 0.28f)
+    val flash = LocalFlash.current
+    val lit = if (flash.block == blockIndex) remember(text, flash.line) { Passage.rangeIn(text.text, flash.line)?.second } else null
     Text(
         text, style = style,
+        inlineContent = inlineContent,
         onTextLayout = { layout = it; target.layout = it },
         modifier = modifier
             .onGloballyPositioned { target.coords = it }
-            .then(
-                if (spans.isNullOrEmpty()) Modifier else Modifier.drawBehind {
-                    val l = layout ?: return@drawBehind
-                    for (m in spans) drawUnderline(l, text.text, m.start, m.end, Color(m.color.argb), thickness, drop)
-                },
-            ),
+            .drawBehind {
+                val l = layout ?: return@drawBehind
+                if (lit != null && flash.glow.value > 0f) {
+                    drawPath(l.getPathForRange(lit.first, lit.last + 1), PASSAGE_GLOW.copy(alpha = flash.glow.value))
+                }
+                // (read while drawing: a selection being dragged redraws, no recomposition)
+                selection.rangeIn(key, text.length)?.let { r ->
+                    drawPath(l.getPathForRange(r.first, r.last + 1), selected)
+                }
+                if (!spans.isNullOrEmpty()) for (m in spans) drawUnderline(l, text.text, m.start, m.end, Color(m.color.argb), thickness, drop)
+            },
     )
 }
 

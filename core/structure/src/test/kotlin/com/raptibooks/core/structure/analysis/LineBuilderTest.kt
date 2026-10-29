@@ -89,4 +89,51 @@ class LineBuilderTest {
         val lines = builder.build(listOf(cap) + l1 + l2)
         assertEquals("This is the first line", lines.first().text.replace(" his", "his"))
     }
+
+    /** Glyphs of [text] placed one after another from [x], in the order they are drawn. */
+    private fun glyphs(text: String, x: Float, baseline: Float, size: Float = 12f): List<TextFragment> {
+        var cx = x
+        return text.map { c ->
+            val w = if (c == ' ') size * 0.25f else size * 0.5f
+            TextFragment(c.toString(), cx, baseline - size * 0.8f, cx + w, baseline + size * 0.2f, baseline, size).also { cx += w }
+        }
+    }
+
+    @Test
+    fun putsArabicIntoReadingOrder() {
+        // The PDF draws "هذا الكتاب" from the left: the glyphs come out reversed.
+        val visual = "For example, " + "هذا الكتاب".reversed() + " means this book"
+        assertEquals("For example, هذا الكتاب means this book", builder.build(glyphs(visual, 72f, 100f)).single().text)
+        // An Arabic line reads from the right; its number keeps its digits in order.
+        val line = "عام 1990 في العدد 25."
+        val drawn = ".25 " + "ددعلا" + " يف 1990 " + "ماع"
+        assertEquals(line, builder.build(glyphs(drawn, 72f, 100f)).single().text)
+    }
+
+    @Test
+    fun showsGarbledWordsAsPictures() {
+        // Text from a scan read by a Latin-only OCR: the Arabic words became junk.
+        val text = listOf(
+            "For example, y\\:iSll 11\\ means this book and that is all",
+            "Like Spanish, \\:iS is masculine but o.Jt;.... is feminine here",
+            "The magazine wl....JI oJ\\.c. writes a regular feature for us",
+            // a passage in the other script
+            "\\_;jWI \\A.J \\.;3 r:;\\S 1\\.c. \\:i.J",
+            "c.JA \\! I.J\\b:i oy\\ic. ,JI\\_;i.ll \\.o.J o\\l",
+        )
+        val frags = text.flatMapIndexed { i, t -> glyphs(t, 72f, 100f + i * 16f) }
+        val lines = builder.pictureWords(builder.build(frags))
+        val first = lines.first { it.text.startsWith("For example") }
+        assertEquals("For example, \u2B1A means this book and that is all", first.text)
+        assertEquals(1, first.pictures.size)
+        assertTrue(first.styles.single().picture)
+        // the picture is where the garbled words were printed
+        assertTrue(first.pictures[0].left >= 72f + 12 * 6f && first.pictures[0].right < 72f + 30 * 6f)
+        assertTrue(lines.none { it.text.contains("\\") || it.text.contains("Jt;") })
+        // a line of the other script is read from the right, word by word
+        val passage = lines.last()
+        assertTrue(passage.text, passage.text.startsWith("‏") && passage.pictures.size >= 6)
+        val order = passage.styles.map { InlineStyle.pictureId(it.flags) }
+        assertEquals(order.sortedDescending(), order)
+    }
 }

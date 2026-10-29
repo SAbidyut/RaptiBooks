@@ -77,19 +77,36 @@ class FigureConsolidator {
         val outFigures = figures.toMutableList()
         val outTables = tables.toMutableList()
         val absorbed = HashSet<TextLine>()
+        val gutter = TextColumns.gutter(lines, page.width, page.height)
         for ((start, anchorFigure) in anchors.sortedBy { it.first.top }) {
             if (anchorFigure != null && anchorFigure !in outFigures) continue
+            // In a two-column layout a figure stays in the column of its caption.
+            val side = when {
+                gutter == null -> 0
+                start.right <= gutter + 2f -> -1
+                start.left >= gutter - 2f -> 1
+                else -> 0
+            }
+            fun inColumn(r: Rect) = when (side) {
+                -1 -> r.right <= gutter!! + 2f
+                1 -> r.left >= gutter!! - 2f
+                else -> true
+            }
             val pieces = mutableListOf<Piece>()
             outFigures.filter { it !== anchorFigure }.forEach { pieces += FigurePiece(it) }
             outTables.forEach { pieces += TablePiece(it) }
-            lines.filter { it !in absorbed && it !in captionLines }.forEach { pieces += LinePiece(it) }
+            // (running headers, page numbers and emblems in the top and bottom margins are not part of a figure)
+            fun margin(r: Rect) = r.bottom <= page.height * 0.08f || r.top >= page.height * 0.92f
+            lines.filter { it !in absorbed && it !in captionLines && it.bounds.top > page.height * 0.07f && it.bounds.bottom < page.height * 0.93f && !margin(it.bounds) }
+                .forEach { pieces += LinePiece(it) }
             for (p in page.paths) {
                 val b = p.bounds
-                if (b.width > columnWidth * 0.92f || b.bottom > start.top + 2f) continue // box borders, page rules
+                if (b.width > columnWidth * 0.92f || b.bottom > start.top + 2f || margin(b)) continue // box borders, page rules
                 if (p.shape == PathShape.RECTANGLE && p.lightFill && lines.any { isProse(it, bodySize, page.width) && b.contains(it.bounds, 1f) }) continue
                 pieces += PathPiece(b)
             }
-            for (img in page.images) if (img.bounds.bottom <= start.top + 2f && img.bounds.width < page.width * 0.95f) pieces += PathPiece(img.bounds)
+            for (img in page.images) if (img.bounds.bottom <= start.top + 2f && img.bounds.width < page.width * 0.95f && !margin(img.bounds)) pieces += PathPiece(img.bounds)
+            pieces.retainAll { inColumn(it.bounds) }
 
             var union: Rect? = if (anchorFigure != null) start else null
             var top = start.top
@@ -134,8 +151,25 @@ class FigureConsolidator {
                         break
                     }
                     if (blocks(l, bodySize, page.width)) break
+                    // the end of a sentence running on from the line above ("…using / nodal analysis.")
+                    if (lines.any { o ->
+                            o !== l && isProse(o, bodySize, page.width) && !Patterns.endsSentence(o.text) &&
+                                l.bounds.top - o.bounds.bottom in -1f..l.fontSize * 0.8f && o.bounds.horizontalOverlap(l.bounds) > 0f
+                        }
+                    ) {
+                        break
+                    }
                 }
                 if (next is TablePiece && !diagramLike(next.table)) break
+                // (a mark printed level with a line of text, an icon beside an exercise, is not
+                // part of the figure under it)
+                if (next !is LinePiece && lines.any { l ->
+                        blocks(l, bodySize, page.width) && l.bounds.verticalOverlap(next.bounds) >= l.bounds.height * 0.5f &&
+                            max(l.bounds.left - next.bounds.right, next.bounds.left - l.bounds.right) <= bodySize * 3f
+                    }
+                ) {
+                    break
+                }
                 if (next is FigurePiece && next.figure.caption != null && isFigureCaption(next.figure.caption)) break
                 taken += next
                 union = union?.union(next.bounds) ?: next.bounds
@@ -178,14 +212,31 @@ class FigureConsolidator {
             anchorFigure?.let { outFigures.remove(it) }
             outTables.removeAll(taken.filterIsInstance<TablePiece>().map { it.table }.toSet())
             absorbed += labelLines
-            if (anchorFigure == null) lines.filter { isFigureCaption(it.text) && abs(it.bounds.top - start.top) < 1f }.forEach { absorbed += it }
+            if (anchorFigure == null) {
+                lines.firstOrNull { isFigureCaption(it.text) && abs(it.bounds.top - start.top) < 1f }?.let { absorbed += captionBlock(it, lines) }
+            }
             outFigures += FigureRegion(bounds.clamp(page.width, page.height), kind, caption, textSize = textSize)
         }
         return Result(outFigures, outTables, absorbed)
     }
 
-    private fun captionText(lines: List<TextLine>, start: Rect): String? =
-        lines.firstOrNull { isFigureCaption(it.text) && abs(it.bounds.top - start.top) < 1f }?.text
+    private fun captionText(lines: List<TextLine>, start: Rect): String? {
+        val first = lines.firstOrNull { isFigureCaption(it.text) && abs(it.bounds.top - start.top) < 1f } ?: return null
+        return captionBlock(first, lines).joinToString(" ") { it.text }
+    }
+
+    /** The caption line and the description lines right under it. */
+    private fun captionBlock(first: TextLine, lines: List<TextLine>): List<TextLine> {
+        val out = mutableListOf(first)
+        var last = first
+        for (l in lines.filter { it.bounds.horizontalOverlap(first.bounds) > 0f && it.bounds.top > first.bounds.top }.sortedBy { it.bounds.top }) {
+            if (l.bounds.top - last.bounds.bottom > last.fontSize * 0.9f || out.size >= 4) break
+            if (l.fontSize > first.fontSize + 0.6f || isFigureCaption(l.text) || Patterns.numberedHeading.containsMatchIn(l.text)) break
+            out += l
+            last = l
+        }
+        return out
+    }
 
     private fun isFigureCaption(text: String): Boolean =
         Patterns.caption.containsMatchIn(text) && !Patterns.tableCaption.containsMatchIn(text)
@@ -193,6 +244,8 @@ class FigureConsolidator {
     /** Running text, a section heading or another caption: the figure does not reach past it. */
     private fun blocks(l: TextLine, bodySize: Float, pageWidth: Float): Boolean =
         isProse(l, bodySize, pageWidth) || isFigureCaption(l.text) || Patterns.tableCaption.containsMatchIn(l.text) ||
+            // the end of a sentence, a bold problem number ("2.7")
+            (l.wordCount >= 4 && Patterns.endsSentence(l.text)) || (l.isBold && PROBLEM_NUMBER.matches(l.text)) ||
             Patterns.exampleLabel.matches(l.text) || l.fontSize > bodySize * 1.25f ||
             (Patterns.numberedHeading.containsMatchIn(l.text) && l.isBold && l.fontSize >= bodySize * 0.95f) ||
             Patterns.listMarker.containsMatchIn(l.text) && l.fontSize >= bodySize * 0.95f
@@ -207,6 +260,10 @@ class FigureConsolidator {
             figure.top - l.bounds.bottom <= bodySize * 2.8f &&
             abs(l.bounds.centerX - figure.centerX) <= max(figure.width * 0.12f, bodySize * 2f) &&
             !Patterns.numberedHeading.containsMatchIn(l.text)
+
+    private companion object {
+        val PROBLEM_NUMBER = Regex("^\\s*[0-9]{1,2}\\.[0-9]{1,3}\\s*$")
+    }
 
     /** A "table" made of a drawing's wires: few, short cells. */
     private fun diagramLike(t: TableRegion): Boolean {

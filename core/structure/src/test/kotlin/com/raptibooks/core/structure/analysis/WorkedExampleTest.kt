@@ -92,6 +92,24 @@ class WorkedExampleTest {
     }
 
     @Test
+    fun exampleBetweenTwoRulesIsABox() {
+        val frags = mutableListOf<TextFragment>()
+        frags += TestPages.paragraph(TestPages.LOREM, 72f, 80f, 300f, size = 10f).first
+        frags += words("EXAMPLE 1.4", 72f, 230f, size = 10f, bold = true)
+        frags += words("a. 1/1000 = 10^-3 and b. 1/0.00001 = 10^5", 80f, 250f, size = 10f)
+        frags += words("The product of powers of ten follows the same rule as before:", 72f, 290f, size = 10f)
+        frags += TestPages.paragraph(TestPages.LOREM, 72f, 310f, 300f, size = 10f).first
+        val paths = listOf(hLine(60f, 348f, 215f), hLine(60f, 348f, 265f))
+        val elements = structure(analyzer.analyze(RawPage(0, 594f, 783f, frags, paths = paths)))
+        val start = elements.indexOfFirst { it is StructuredElement.Box && it.start }
+        val end = elements.indexOfFirst { it is StructuredElement.Box && !it.start }
+        assertTrue(elements.toString(), start in 0 until end)
+        val inside = elements.subList(start + 1, end).joinToString(" ") { it.toString() }
+        assertTrue(inside, inside.contains("EXAMPLE 1.4") && inside.contains("10^-3"))
+        assertFalse(inside, inside.contains("The product of powers"))
+    }
+
+    @Test
     fun formulaLineIsNeitherHeadingNorPartOfProse() {
         val frags = mutableListOf<TextFragment>()
         frags += TestPages.paragraph(TestPages.LOREM, 72f, 80f, 450f).first

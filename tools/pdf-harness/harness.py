@@ -42,6 +42,6 @@ for module in ["core/model", "core/structure", "core/reflow", "core/pdf"]:
         stamp.touch()
     cp.insert(1, str(out))
 kotlinc(OUT / "classes", [Path(__file__).parent / "Harness.kt"], cp)
-run = ["java", "-Xmx1g", "-cp", os.pathsep.join([str(OUT / "classes")] + cp), "HarnessKt",
+run = ["java", "-Xmx" + os.environ.get("HARNESS_XMX", "3g"), "-cp", os.pathsep.join([str(OUT / "classes")] + cp), "HarnessKt",
        str(pdfbox_dir / "assets")] + sys.argv[1:]
 sys.exit(subprocess.run(run).returncode)

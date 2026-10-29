@@ -64,6 +64,13 @@
     <string name="table_show_original">ছাপানো রূপে দেখুন</string>
     <string name="table_show_text">সারণি হিসেবে দেখুন</string>
     <string name="image_close">বন্ধ</string>
+    <string name="image_text">লেখা কপি</string>
+    <string name="image_text_title">ছবির লেখা</string>
+    <string name="image_text_reading">লেখা পড়া হচ্ছে…</string>
+    <string name="image_text_none">ছবিতে কোনো লেখা পাওয়া যায়নি।</string>
+    <string name="image_text_book">বইয়ের লেখা থেকে</string>
+    <string name="text_copy">কপি</string>
+    <string name="text_copied">কপি হয়েছে</string>
     <string name="info_pages">পৃষ্ঠা</string>
     <string name="info_language">ভাষা</string>
     <string name="info_ocr">লেখা শনাক্তকরণ (OCR)</string>
@@ -79,6 +86,9 @@
     <string name="original_title">মূল পিডিএফ</string>
     <string name="original_reflow">সাজানো লেখায় ফিরে যান</string>
     <string name="original_error">মূল পিডিএফ খোলা যায়নি।</string>
+    <string name="original_landscape">আড়াআড়ি</string>
+    <string name="original_portrait">লম্বালম্বি</string>
+    <string name="original_pen">মার্কিং কলম</string>
     <string name="action_close">বন্ধ</string>
     <string name="equation_scroll_hint">← পুরো সূত্র দেখতে পাশে সরান →</string>
     <string name="table_scroll_hint">← সব কলাম দেখতে পাশে সরান →</string>

@@ -24,6 +24,11 @@ class TextLine(
     val italicRatio: Float,
     val fontName: String,
     val chunks: List<Chunk> = emptyList(),
+    /**
+     * Words whose text is unreadable, shown as printed: where each is on the page, by the number
+     * its [InlineStyle.PICTURE] style carries in this line.
+     */
+    val pictures: List<Rect> = emptyList(),
 ) {
     val isBold: Boolean get() = boldRatio >= 0.75f
     val isItalic: Boolean get() = italicRatio >= 0.75f
@@ -78,6 +83,20 @@ class BoxRegion(
     val openBottom: Boolean = false,
 )
 
+/**
+ * A word shown as printed (see InlinePicture): where it is on the page, and once rendered, its
+ * ink image. Its number in the book is [id] (the line styles carry it).
+ */
+class PictureRegion(
+    val id: Int,
+    var bounds: Rect,
+    /** Size of the text around it, to show it at the same scale. */
+    val fontSize: Float,
+    var imagePath: String? = null,
+    var imageWidth: Int = 0,
+    var imageHeight: Int = 0,
+)
+
 class PageLayout(
     val index: Int,
     val width: Float,
@@ -89,9 +108,10 @@ class PageLayout(
     /** Number of meaningful characters on the page (all lines, including figure labels). */
     val charCount: Int,
     val boxes: List<BoxRegion> = emptyList(),
+    val pictures: List<PictureRegion> = emptyList(),
 ) {
     companion object {
-        private const val MAGIC = 0x52424C34 // "RBL4"
+        private const val MAGIC = 0x52424C35 // "RBL5"
 
         fun write(layout: PageLayout, file: File) {
             val tmp = File(file.parentFile, file.name + ".tmp")
@@ -138,6 +158,15 @@ class PageLayout(
                     out.writeBoolean(b.openTop)
                     out.writeBoolean(b.openBottom)
                 }
+                out.writeInt(layout.pictures.size)
+                for (p in layout.pictures) {
+                    out.writeInt(p.id)
+                    writeRect(out, p.bounds)
+                    out.writeFloat(p.fontSize)
+                    writeNullable(out, p.imagePath)
+                    out.writeInt(p.imageWidth)
+                    out.writeInt(p.imageHeight)
+                }
             }
             if (!tmp.renameTo(file)) {
                 file.delete()
@@ -175,7 +204,10 @@ class PageLayout(
                 val boxes = List(inp.readInt()) {
                     BoxRegion(readRect(inp), inp.readInt(), inp.readInt(), inp.readBoolean(), inp.readBoolean())
                 }
-                PageLayout(index, width, height, lines, figures, tables, ocr, chars, boxes)
+                val pictures = List(inp.readInt()) {
+                    PictureRegion(inp.readInt(), readRect(inp), inp.readFloat(), readNullable(inp), inp.readInt(), inp.readInt())
+                }
+                PageLayout(index, width, height, lines, figures, tables, ocr, chars, boxes, pictures)
             }
 
         private fun writeLine(out: DataOutputStream, l: TextLine) {

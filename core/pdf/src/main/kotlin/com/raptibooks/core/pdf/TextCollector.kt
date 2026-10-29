@@ -2,6 +2,7 @@ package com.raptibooks.core.pdf
 
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.raw.TextFragment
+import com.raptibooks.core.structure.text.PiFonts
 import com.raptibooks.core.structure.text.TextCleaner
 import com.tom_roush.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequence
 import com.tom_roush.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequenceWithProperties
@@ -35,6 +36,10 @@ internal class TextCollector : PDFTextStripper() {
     var glyphsMapped = 0
         private set
 
+    /** Fragments drawn invisible (text render mode 3: an OCR's text layer over a scan). */
+    var invisible = 0
+        private set
+
     private lateinit var transform: DisplayTransform
     private val styleCache = HashMap<PDFont, Pair<Boolean, Boolean>>()
 
@@ -65,7 +70,13 @@ internal class TextCollector : PDFTextStripper() {
         return TextCleaner.clean(text).any { !it.isWhitespace() }
     }
 
-    private fun addPlaceholder(m: Matrix, font: PDFont, displacement: Vector) {
+    private fun glyphName(font: PDFont, code: Int): String = try {
+        (font as? PDSimpleFont)?.encoding?.getName(code) ?: ""
+    } catch (_: Exception) {
+        ""
+    }
+
+    private fun addPlaceholder(m: Matrix, font: PDFont, code: Int, displacement: Vector, text: String = TextCleaner.PLACEHOLDER.toString()) {
         if (!transform.isUpright(m.scaleX, m.shearY)) return
         val size = m.scalingFactorY
         if (size !in 0.5f..500f) return
@@ -75,8 +86,8 @@ internal class TextCollector : PDFTextStripper() {
         val baseline = transform.mapAbsoluteY(tx, ty)
         val advance = (displacement.x * m.scalingFactorX).takeIf { it.isFinite() && it > 0f } ?: (size * 0.5f)
         fragments += TextFragment(
-            TextCleaner.PLACEHOLDER.toString(), x0, baseline - size * 0.82f, x0 + advance, baseline + size * 0.22f,
-            baseline, size, font.name ?: "", false, false,
+            text, x0, baseline - size * 0.82f, x0 + advance, baseline + size * 0.22f,
+            baseline, size, font.name ?: "", false, false, glyph = glyphName(font, code),
         )
     }
 
@@ -93,10 +104,50 @@ internal class TextCollector : PDFTextStripper() {
         rotated.clear()
         markedStack.clear()
         glyphsDrawn = 0
+        invisible = 0
         glyphsMapped = 0
         startPage = pageIndex + 1
         endPage = pageIndex + 1
-        getText(document)
+        try {
+            getText(document)
+        } finally {
+            // (a font is a page's own object: kept, every page's fonts would stay in memory, a
+            // scanned book's OCR layer has fonts of its own on each page)
+            styleCache.clear()
+        }
+        removeShadows()
+    }
+
+    /**
+     * Titles drawn twice, the second copy shifted by a point or two (a drop shadow, a fake
+     * bold): each glyph has a twin of the same text and size right next to it. Neighbouring
+     * letters of a word ("ll", "...") are at least a narrow glyph's width apart.
+     */
+    private fun removeShadows() {
+        if (fragments.size < 2) return
+        val drop = HashSet<Int>()
+        val groups = fragments.indices.filter { fragments[it].text.isNotBlank() }.groupBy { fragments[it].text to (fragments[it].fontSize * 2f).toInt() }
+        for (ix in groups.values) {
+            if (ix.size < 2) continue
+            val sorted = ix.sortedBy { fragments[it].left }
+            for ((a, i) in sorted.withIndex()) {
+                if (i in drop) continue
+                val f = fragments[i]
+                val tol = minOf(f.fontSize * 0.12f, 3f)
+                for (b in a + 1 until sorted.size) {
+                    val j = sorted[b]
+                    val g = fragments[j]
+                    if (g.left - f.left > tol) break
+                    if (j !in drop && abs(g.baseline - f.baseline) <= tol && abs(g.right - g.left - (f.right - f.left)) <= tol) {
+                        drop += minOf(i, j) // keep the copy drawn last, on top
+                    }
+                }
+            }
+        }
+        if (drop.isEmpty()) return
+        val kept = fragments.filterIndexed { i, _ -> i !in drop }
+        fragments.clear()
+        fragments.addAll(kept)
     }
 
     override fun startPage(page: PDPage) {
@@ -111,10 +162,23 @@ internal class TextCollector : PDFTextStripper() {
     override fun showGlyph(textRenderingMatrix: Matrix, font: PDFont, code: Int, unicode: String?, displacement: Vector) {
         glyphsDrawn++
         val span = markedStack.lastOrNull { it != null }
+        // Symbol fonts of math typesetting: their own (missing or misleading) mapping is replaced.
+        val pi = if (span == null) PiFonts.decode(font.name ?: "", glyphName(font, code), unicode) else null
+        if (pi != null) {
+            if (pi.isNotEmpty()) addPlaceholder(textRenderingMatrix, font, code, displacement, pi)
+            else addPlaceholder(textRenderingMatrix, font, code, displacement)
+            suppressText = true
+            try {
+                super.showGlyph(textRenderingMatrix, font, code, unicode, displacement)
+            } finally {
+                suppressText = false
+            }
+            return
+        }
         if (span == null && !hasText(font, code, unicode)) {
             // A symbol without a usable Unicode mapping (e.g. "=" or "×" of a math font): keep its
             // place so that equations are recognised and the symbol can be identified by shape.
-            addPlaceholder(textRenderingMatrix, font, displacement)
+            addPlaceholder(textRenderingMatrix, font, code, displacement)
             suppressText = true
             try {
                 super.showGlyph(textRenderingMatrix, font, code, unicode, displacement)
@@ -224,6 +288,7 @@ internal class TextCollector : PDFTextStripper() {
             val f = fragments[k]
             if (f.text == unicode && abs(f.left - x0) < 0.8f && abs(f.baseline - y0) < 0.8f) return
         }
+        if (renderingMode == RenderingMode.NEITHER) invisible++
         fragments += TextFragment(
             text = unicode,
             left = x0,

@@ -17,6 +17,7 @@ import com.raptibooks.core.model.ContentBlock
 import com.raptibooks.core.model.HeadingBlock
 import com.raptibooks.core.model.ImageBlock
 import com.raptibooks.core.model.ImageKind
+import com.raptibooks.core.model.InlinePicture
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.model.ListItemBlock
 import com.raptibooks.core.model.ParagraphBlock
@@ -40,9 +41,10 @@ class ContentDao(private val db: RaptiDatabase) {
             delete("blocks", "book_id = ?", arrayOf(bookId.toString()))
             delete("toc", "book_id = ?", arrayOf(bookId.toString()))
             delete("boxes", "book_id = ?", arrayOf(bookId.toString()))
-            // Marks point into the old blocks; they cannot follow a re-conversion.
+            // Marks point into the old blocks; they cannot follow a re-conversion. (Lines drawn
+            // on the original pages, kept under the page as -(page + 1), stay.)
             delete("highlights", "book_id = ?", arrayOf(bookId.toString()))
-            delete("ink", "book_id = ?", arrayOf(bookId.toString()))
+            delete("ink", "book_id = ? AND block_idx >= 0", arrayOf(bookId.toString()))
         }
         db.notifyChanged(RaptiDatabase.BLOCKS, RaptiDatabase.TOC, RaptiDatabase.BOXES, RaptiDatabase.HIGHLIGHTS, RaptiDatabase.INK)
     }
@@ -386,7 +388,7 @@ class ContentDao(private val db: RaptiDatabase) {
     fun remapNotes(bookId: Long) {
         db.writableDatabase.execSQL(
             "UPDATE notes SET y = 0.05, block_idx = COALESCE((SELECT MIN(idx) FROM blocks b WHERE b.book_id = notes.book_id " +
-                "AND b.page >= notes.page), 0) WHERE book_id = ?",
+                "AND b.page >= notes.page), 0) WHERE book_id = ? AND block_idx >= 0",
             arrayOf<Any>(bookId),
         )
         db.notifyChanged(RaptiDatabase.NOTES)
@@ -406,8 +408,14 @@ internal object BlockCodec {
 
     fun encode(b: ContentBlock): Row = when (b) {
         is HeadingBlock -> Row(HEADING, b.level, b.text, null, null)
-        is ParagraphBlock -> Row(PARAGRAPH, b.kind.ordinal, b.text, InlineStyle.encode(b.styles).ifEmpty { null }, null)
-        is ListItemBlock -> Row(LIST_ITEM, b.level, b.text, InlineStyle.encode(b.styles).ifEmpty { null }, b.marker)
+        is ParagraphBlock -> Row(
+            PARAGRAPH, b.kind.ordinal, b.text, InlineStyle.encode(b.styles).ifEmpty { null },
+            if (b.pictures.isEmpty()) null else JSONObject().put("pics", encodePictures(b.pictures)).toString(),
+        )
+        is ListItemBlock -> Row(
+            LIST_ITEM, b.level, b.text, InlineStyle.encode(b.styles).ifEmpty { null },
+            if (b.pictures.isEmpty()) b.marker else JSONObject().put("m", b.marker).put("pics", encodePictures(b.pictures)).toString(),
+        )
         is ImageBlock -> Row(
             IMAGE, b.kind.ordinal, b.caption ?: "", null,
             JSONObject().put("path", b.path).put("w", b.width).put("h", b.height)
@@ -426,6 +434,19 @@ internal object BlockCodec {
         is SeparatorBlock -> Row(SEPARATOR, 0, "", null, null)
     }
 
+    /** Word pictures as [start, path, width px, height px, height em] arrays. */
+    private fun encodePictures(pictures: List<InlinePicture>): JSONArray = JSONArray().apply {
+        for (p in pictures) put(JSONArray().put(p.start).put(p.path).put(p.pixelWidth).put(p.pixelHeight).put(p.height.toDouble()))
+    }
+
+    private fun decodePictures(a: JSONArray?): List<InlinePicture> {
+        if (a == null) return emptyList()
+        return List(a.length()) { i ->
+            val p = a.getJSONArray(i)
+            InlinePicture(p.getInt(0), p.getString(1), p.getInt(2), p.getInt(3), p.getDouble(4).toFloat())
+        }
+    }
+
     fun decode(c: Cursor): ContentBlock? {
         val idx = c.getInt(0)
         val page = c.getInt(1)
@@ -436,8 +457,15 @@ internal object BlockCodec {
         return try {
             when (c.getInt(2)) {
                 HEADING -> HeadingBlock(idx, page, level, text)
-                PARAGRAPH -> ParagraphBlock(idx, page, text, InlineStyle.decode(styles), ParagraphKind.entries.getOrElse(level) { ParagraphKind.BODY })
-                LIST_ITEM -> ListItemBlock(idx, page, extra ?: "•", text, InlineStyle.decode(styles), level)
+                PARAGRAPH -> ParagraphBlock(
+                    idx, page, text, InlineStyle.decode(styles), ParagraphKind.entries.getOrElse(level) { ParagraphKind.BODY },
+                    extra?.let { decodePictures(JSONObject(it).optJSONArray("pics")) } ?: emptyList(),
+                )
+                LIST_ITEM -> {
+                    // the marker, or the marker and the item's word pictures
+                    val o = if (extra != null && extra.startsWith("{\"m\"")) JSONObject(extra) else null
+                    ListItemBlock(idx, page, o?.optString("m") ?: extra ?: "•", text, InlineStyle.decode(styles), level, decodePictures(o?.optJSONArray("pics")))
+                }
                 IMAGE -> {
                     val o = JSONObject(extra ?: "{}")
                     ImageBlock(idx, page, o.getString("path"), o.optInt("w"), o.optInt("h"), text.ifEmpty { null },

@@ -64,6 +64,13 @@
     <string name="table_show_original">Show as printed</string>
     <string name="table_show_text">Show as table</string>
     <string name="image_close">Close</string>
+    <string name="image_text">Copy text</string>
+    <string name="image_text_title">Text in the picture</string>
+    <string name="image_text_reading">Reading the text…</string>
+    <string name="image_text_none">No text found in the picture.</string>
+    <string name="image_text_book">From the book\'s text</string>
+    <string name="text_copy">Copy</string>
+    <string name="text_copied">Copied</string>
     <string name="info_pages">Pages</string>
     <string name="info_language">Language</string>
     <string name="info_ocr">Text recognition (OCR)</string>
@@ -79,6 +86,9 @@
     <string name="original_title">Original PDF</string>
     <string name="original_reflow">Back to reflowed text</string>
     <string name="original_error">The original PDF could not be opened.</string>
+    <string name="original_landscape">Landscape</string>
+    <string name="original_portrait">Portrait</string>
+    <string name="original_pen">Marking pen</string>
     <string name="action_close">Close</string>
     <string name="equation_scroll_hint">← Swipe to see the whole formula →</string>
     <string name="table_scroll_hint">← Swipe sideways to see all columns →</string>

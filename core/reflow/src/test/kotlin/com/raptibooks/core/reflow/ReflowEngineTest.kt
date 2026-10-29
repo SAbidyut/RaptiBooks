@@ -214,4 +214,33 @@ class ReflowEngineTest {
         assertEquals("After the box.", blocks.last().plainText)
         assertTrue(box.endIndex < blocks.size - 1)
     }
+
+    @Test
+    fun workedExamplesAndPracticeProblemsBecomeCards() {
+        val blocks = mutableListOf<ContentBlock>()
+        val engine = ReflowEngine { blocks += it }
+        fun para(p: Int, t: String) = StructuredElement.Paragraph(p, t, emptyList(), ParagraphKind.BODY, false, 11f)
+        engine.addPage(
+            listOf(
+                para(0, "Some text before."),
+                StructuredElement.Heading(0, 3, "Example 1.1"),
+                para(0, "How much charge is represented by 4,600 electrons?"),
+                StructuredElement.Heading(0, 4, "Solution:"),
+                para(0, "Each electron has a charge."),
+                StructuredElement.Heading(0, 3, "Practice Problem 1.1"),
+                para(0, "Calculate the amount of charge."),
+                para(0, "Answer: 6.408 C."),
+                para(0, "Text after the problem."),
+                StructuredElement.Heading(0, 2, "1.4 Voltage"),
+            ),
+        )
+        engine.finish()
+        val boxes = engine.boxes()
+        assertEquals(2, boxes.size)
+        assertEquals("Example 1.1", blocks[boxes[0].startIndex].plainText)
+        assertEquals("Each electron has a charge.", blocks[boxes[0].endIndex].plainText)
+        assertEquals("Practice Problem 1.1", blocks[boxes[1].startIndex].plainText)
+        assertEquals("Answer: 6.408 C.", blocks[boxes[1].endIndex].plainText)
+        assertTrue(boxes[0].accent != boxes[1].accent)
+    }
 }

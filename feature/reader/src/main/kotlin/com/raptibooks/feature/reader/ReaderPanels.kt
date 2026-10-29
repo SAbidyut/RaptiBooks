@@ -1,5 +1,15 @@
 package com.raptibooks.feature.reader
 
+import android.content.ClipData
+import android.widget.Toast
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -397,12 +407,20 @@ internal fun ImageViewer(
     onDraw: (MarkColor, FloatArray) -> Unit,
     onErase: (List<Long>) -> Unit,
     onClose: () -> Unit,
+    /** The picture's text as the book's text layer has it (a formula's, a table's), if any. */
+    bookText: String? = null,
+    /** Reads the text printed in the picture (OCR). */
+    readText: (suspend () -> String?)? = null,
 ) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
         var tool by remember { mutableStateOf(MarkTool.NONE) }
         var penOpen by remember { mutableStateOf(penOnStart) }
+        var textOpen by remember { mutableStateOf(false) }
+        // The picture's text, read once when first asked for (null while reading).
+        var pictureText by remember { mutableStateOf<PictureOcr?>(null) }
+        val scope = rememberCoroutineScope()
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
             val density = LocalDensity.current
             val widthPx = with(density) { (maxWidth.toPx() * 2).roundToInt() }
@@ -473,11 +491,42 @@ internal fun ImageViewer(
             IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
                 Icon(Icons.Default.Close, stringResource(R.string.image_close), tint = Color.White)
             }
-            if (caption != null) {
-                Text(
-                    caption, color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.5f)).padding(16.dp),
+            if (readText != null && img != null && tool == MarkTool.NONE) {
+                TextButton(
+                    onClick = {
+                        textOpen = !textOpen
+                        if (textOpen && pictureText == null) {
+                            pictureText = PictureOcr.Reading
+                            scope.launch {
+                                val text = try {
+                                    readText()
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    null
+                                }
+                                pictureText = PictureOcr.Read(text)
+                            }
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp),
+                ) {
+                    Text(stringResource(R.string.image_text), color = Color.White)
+                }
+            }
+            val ocr = pictureText
+            if (textOpen && ocr != null) {
+                PictureTextPanel(
+                    ocr, bookText, onClose = { textOpen = false },
+                    modifier = Modifier.align(Alignment.BottomCenter).heightIn(max = maxHeight * 0.55f),
                 )
+            } else if (caption != null) {
+                SelectionContainer(Modifier.align(Alignment.BottomCenter)) {
+                    Text(
+                        caption, color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.5f)).padding(16.dp),
+                    )
+                }
             }
             // The colour menu is only here when the pen was switched on while reading.
             if (!equation && img != null && penOpen) {
@@ -489,5 +538,67 @@ internal fun ImageViewer(
                 )
             }
         }
+    }
+}
+
+/** Reading the text printed in a picture: under way, or done (null text: none found). */
+private sealed interface PictureOcr {
+    data object Reading : PictureOcr
+    class Read(val text: String?) : PictureOcr
+}
+
+/**
+ * The text of a picture, to select or copy: what the OCR reads in it, and the text the book's
+ * own text layer has for it (when there is one and it says something else).
+ */
+@Composable
+private fun PictureTextPanel(ocr: PictureOcr, bookText: String?, onClose: () -> Unit, modifier: Modifier = Modifier) {
+    val reading = ocr == PictureOcr.Reading
+    val text = (ocr as? PictureOcr.Read)?.text
+    val book = bookText?.trim()?.takeIf { it.isNotEmpty() && it != text }
+    Surface(color = Color(0xF0202124), contentColor = Color.White, modifier = modifier.fillMaxWidth()) {
+        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.image_text_title), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                IconButton(onClick = onClose) { Icon(Icons.Default.Close, stringResource(R.string.image_close), tint = Color.White) }
+            }
+            val found = text
+            when {
+                reading -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+                    CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(stringResource(R.string.image_text_reading))
+                }
+                found != null -> CopyableText(found)
+                else -> Text(stringResource(R.string.image_text_none), color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(vertical = 8.dp))
+            }
+            if (book != null && !reading) {
+                Text(
+                    stringResource(R.string.image_text_book), style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                CopyableText(book)
+            }
+        }
+    }
+}
+
+/** Text that can be selected, with a button that copies all of it. */
+@Composable
+private fun CopyableText(text: String) {
+    val clipboard = LocalClipboard.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val copied = stringResource(R.string.text_copied)
+    SelectionContainer {
+        Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 6.dp))
+    }
+    TextButton(onClick = {
+        scope.launch {
+            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("text", text)))
+            Toast.makeText(context, copied, Toast.LENGTH_SHORT).show()
+        }
+    }) {
+        Text(stringResource(R.string.text_copy))
     }
 }

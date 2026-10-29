@@ -1,8 +1,11 @@
 package com.raptibooks.core.pdf
 
 import com.raptibooks.core.structure.raw.RawPage
+import com.tom_roush.pdfbox.cos.COSArray
 import com.tom_roush.pdfbox.cos.COSDictionary
+import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.cos.COSObject
+import com.tom_roush.pdfbox.cos.COSStream
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.ResourceCache
@@ -19,6 +22,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import java.lang.ref.SoftReference
+import java.security.MessageDigest
 
 class PdfPasswordException(message: String) : IOException(message)
 
@@ -97,16 +101,43 @@ class PdfExtractor private constructor(private val document: PDDocument) : Close
         } catch (e: IOException) {
             // Broken graphics are not fatal: keep the text.
         }
+        // Printer's marks (file name and time slug, crop marks) sit outside the crop box.
+        val w = transform.width
+        val h = transform.height
+        fun visible(left: Float, top: Float, right: Float, bottom: Float) = right > 0f && bottom > 0f && left < w && top < h
         val raw = RawPage(
             index = index,
-            width = transform.width,
-            height = transform.height,
-            fragments = ArrayList(textCollector.fragments),
-            images = ArrayList(graphics.images),
-            paths = ArrayList(graphics.paths),
-            rotatedText = ArrayList(textCollector.rotated),
+            width = w,
+            height = h,
+            fragments = textCollector.fragments.filter { f ->
+                val cx = (f.left + f.right) / 2f
+                val cy = (f.top + f.bottom) / 2f
+                cx in 0f..w && cy in 0f..h
+            },
+            images = graphics.images.filter { visible(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom) },
+            paths = graphics.paths.filter { visible(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom) },
+            rotatedText = textCollector.rotated.filter { visible(it.left, it.top, it.right, it.bottom) },
+            invisibleText = textCollector.fragments.isNotEmpty() && textCollector.invisible * 2 >= textCollector.fragments.size,
         )
         return PageExtraction(raw, textCollector.glyphsDrawn, textCollector.glyphsMapped)
+    }
+
+    /** Only the text of one page (no pictures or drawing): quick, for finding a passage on it. */
+    fun extractText(index: Int): RawPage {
+        val transform = DisplayTransform(document.getPage(index))
+        textCollector.collect(document, index)
+        val w = transform.width
+        val h = transform.height
+        return RawPage(
+            index = index,
+            width = w,
+            height = h,
+            fragments = textCollector.fragments.filter { f ->
+                val cx = (f.left + f.right) / 2f
+                val cy = (f.top + f.bottom) / 2f
+                cx in 0f..w && cy in 0f..h
+            },
+        )
     }
 
     fun pageSize(index: Int): Pair<Float, Float> {
@@ -154,9 +185,48 @@ private class FontOnlyResourceCache : ResourceCache {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<COSObject, SoftReference<PDFont>>?) = size > 96
     }
 
-    override fun getFont(indirect: COSObject): PDFont? = fonts[indirect]?.get()
+    /** Composite fonts by what they are made of (see [sameAs]). */
+    private val composites = object : LinkedHashMap<String, SoftReference<PDFont>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SoftReference<PDFont>>?) = size > 96
+    }
+
+    override fun getFont(indirect: COSObject): PDFont? =
+        fonts[indirect]?.get() ?: sameAs(indirect)?.let { composites[it]?.get() }?.also { fonts[indirect] = SoftReference(it) }
+
     override fun put(indirect: COSObject, font: PDFont) {
         fonts[indirect] = SoftReference(font)
+        sameAs(indirect)?.let { composites[it] = SoftReference(font) }
+    }
+
+    /**
+     * What a composite font is made of: its program (the descendant font object), encoding and
+     * the content of its ToUnicode map. A scanned book's OCR layer has a font of its own on each
+     * page, all the same font: one program, one 65536-entry map. Parsed once and shared, they
+     * cost neither the time nor the memory of a page each.
+     */
+    private fun sameAs(indirect: COSObject): String? = try {
+        val dict = indirect.getObject() as? COSDictionary
+        val descendants = dict?.takeIf { it.getCOSName(COSName.SUBTYPE) == COSName.TYPE0 }?.getDictionaryObject(COSName.DESCENDANT_FONTS) as? COSArray
+        val program = descendants?.takeIf { it.size() == 1 }?.get(0) as? COSObject
+        val encoding = dict?.getDictionaryObject(COSName.ENCODING) as? COSName
+        val toUnicode = dict?.getDictionaryObject(COSName.TO_UNICODE) as? COSStream
+        if (program == null || encoding == null || toUnicode == null || toUnicode.length > MAX_TO_UNICODE) {
+            null
+        } else {
+            val digest = MessageDigest.getInstance("MD5")
+            toUnicode.createInputStream().use { input ->
+                val buf = ByteArray(8192)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    digest.update(buf, 0, n)
+                }
+            }
+            "${program.objectNumber} ${program.generationNumber} ${encoding.name} ${dict.getNameAsString(COSName.BASE_FONT)} " +
+                digest.digest().joinToString("") { "%02x".format(it) }
+        }
+    } catch (_: IOException) {
+        null
     }
 
     override fun getColorSpace(indirect: COSObject): PDColorSpace? = null
@@ -171,4 +241,9 @@ private class FontOnlyResourceCache : ResourceCache {
     override fun put(indirect: COSObject, pattern: PDAbstractPattern) = Unit
     override fun put(indirect: COSObject, propertyList: PDPropertyList) = Unit
     override fun put(indirect: COSObject, xobject: PDXObject) = Unit
+
+    private companion object {
+        /** (compressed bytes: a map is a few KB, a larger one is no OCR layer's) */
+        const val MAX_TO_UNICODE = 64L * 1024
+    }
 }

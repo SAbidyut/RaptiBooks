@@ -11,11 +11,13 @@ import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.font.PDType3Font
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImage
+import com.tom_roush.pdfbox.pdmodel.graphics.state.PDGraphicsState
 import com.tom_roush.pdfbox.util.Matrix
 import com.tom_roush.pdfbox.util.Vector
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import java.util.IdentityHashMap
 
 /**
  * Records where raster images are drawn and which vector paths are painted, in display
@@ -41,7 +43,21 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
     private val current = PointF()
     private val subpathStart = PointF()
 
+    /**
+     * Clipping rectangle (user space: x0, y0, x1, y1) of each graphics state. Paint outside the
+     * clip is invisible: a big shape clipped to a thin strip is a tinted strip, not a drawing.
+     */
+    private val clips = IdentityHashMap<PDGraphicsState, FloatArray>()
+
+    private fun currentClip(): FloatArray? = clips[graphicsState]
+
     fun collect() = processPage(page)
+
+    override fun saveGraphicsState() {
+        val clip = currentClip()
+        super.saveGraphicsState()
+        if (clip != null) clips[graphicsState] = clip
+    }
 
     private fun include(x: Float, y: Float) {
         minX = min(minX, x); minY = min(minY, y); maxX = max(maxX, x); maxY = max(maxY, y)
@@ -106,6 +122,18 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
 
     override fun clip(windingRule: Path.FillType) {
         // The clipping path is followed by endPath(); nothing is painted.
+        if (minX > maxX) return
+        val old = currentClip()
+        clips[graphicsState] = if (old == null) floatArrayOf(minX, minY, maxX, maxY) else floatArrayOf(
+            max(old[0], minX), max(old[1], minY), min(old[2], maxX), min(old[3], maxY),
+        )
+    }
+
+    /** The part of a user-space box inside the clip, or null if nothing of it is visible. */
+    private fun clipped(x0: Float, y0: Float, x1: Float, y1: Float): FloatArray? {
+        val c = currentClip() ?: return floatArrayOf(x0, y0, x1, y1)
+        val r = floatArrayOf(max(x0, c[0]), max(y0, c[1]), min(x1, c[2]), min(y1, c[3]))
+        return if (r[0] > r[2] || r[1] > r[3]) null else r
     }
 
     override fun strokePath() = paint(stroked = true, filled = false)
@@ -121,9 +149,8 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
     override fun drawImage(pdImage: PDImage) {
         val ctm = graphicsState.currentTransformationMatrix
         val corners = listOf(0f to 0f, 1f to 0f, 0f to 1f, 1f to 1f).map { (u, v) -> ctm.transformPoint(u, v) }
-        val xs = corners.map { transform.mapAbsoluteX(it.x, it.y) }
-        val ys = corners.map { transform.mapAbsoluteY(it.x, it.y) }
-        val r = Rect(xs.min(), ys.min(), xs.max(), ys.max())
+        val c = clipped(corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y }) ?: return
+        val r = transform.mapAbsoluteRect(c[0], c[1], c[2], c[3])
         if (r.width > 1f && r.height > 1f && images.size < MAX_ITEMS) images += ImageRegion(r)
     }
 
@@ -143,7 +170,8 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
         if (!complex && pieces.isNotEmpty() && pieces.size <= 400 && !filledPolygon) {
             // Decompose rules and rectangles: table borders are often one path with many parts.
             for (p in pieces) {
-                val r = transform.mapAbsoluteRect(p.x0, p.y0, p.x1, p.y1)
+                val c = clipped(p.x0, p.y0, p.x1, p.y1) ?: continue
+                val r = transform.mapAbsoluteRect(c[0], c[1], c[2], c[3])
                 val lw = if (stroked) max(lineWidth(), 0.1f) else 0f
                 val shape = classify(r, p.rect, lw)
                 val bounds = if (r.height < lw) Rect(r.left, r.top - lw / 2, r.right, r.bottom + lw / 2)
@@ -153,7 +181,11 @@ internal class GraphicsCollector(page: PDPage) : PDFGraphicsStreamEngine(page) {
                 paths += VectorPath(bounds, shape, stroked, filled, lightFill, if (p.rect) 4 else 1, color)
             }
         } else {
-            val r = transform.mapAbsoluteRect(minX, minY, maxX, maxY)
+            val c = clipped(minX, minY, maxX, maxY)
+            if (c == null) {
+                reset(); return
+            }
+            val r = transform.mapAbsoluteRect(c[0], c[1], c[2], c[3])
             paths += VectorPath(r, if (complex) PathShape.COMPLEX else PathShape.RECTANGLE, stroked, filled, lightFill, segments, color)
         }
         reset()

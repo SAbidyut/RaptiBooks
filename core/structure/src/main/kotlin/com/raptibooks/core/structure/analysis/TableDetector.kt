@@ -65,7 +65,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     firstRow.outset(1f).contains(p.bounds) && p.bounds.width > 8f
             } && ys.size > 2
             val table = fillGrid(frags, bounds, columns, rowEdges, ruled = true, header = shadedHeader) ?: continue
-            if (looksLikeDiagram(page, table, (columns.size - 1) * (rowEdges.size - 1))) continue
+            if (looksLikeDiagram(page, table, (columns.size - 1) * (rowEdges.size - 1)) || looksLikeFormula(table) || looksLikeCircuit(table)) continue
             tables += table
             used += component
         }
@@ -101,7 +101,9 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     if (columns != null && columns.size >= 3) {
                         val ys = (listOf(bounds.top) + rowBoundaries(rows) + listOf(bounds.bottom)).distinct().sorted()
                         val table = fillGrid(frags, bounds, columns, ys, ruled = true, header = group.size >= 3)
-                        if (table != null) {
+                        if (table != null && !looksLikeDiagram(page, table, (columns.size - 1) * (ys.size - 1)) && !looksLikeFormula(table) &&
+                            !looksLikeCircuit(table)
+                        ) {
                             out += table
                             i = j
                             continue
@@ -116,6 +118,48 @@ class TableDetector(private val lineBuilder: LineBuilder) {
 
     /** Unruled tables made of column-aligned short text pieces. Returns tables and the consumed lines. */
     fun detectAligned(lines: List<TextLine>, page: RawPage): Pair<List<TableRegion>, Set<TextLine>> {
+        if (lines.size < 6) return emptyList<TableRegion>() to emptySet()
+        // A table in the margin column has its rows on the same baselines as the text (or a
+        // table) next to it: look for tables inside the text column and outside it separately.
+        val prose = lines.filter { it.wordCount >= 6 && it.bounds.width >= page.width * 0.3f }
+        if (prose.size >= 5) {
+            val lefts = prose.map { it.bounds.left }.sorted()
+            val rights = prose.map { it.bounds.right }.sorted()
+            val colLeft = lefts[lefts.size / 10]
+            val colRight = rights[rights.size * 9 / 10]
+            val outside = lines.filter { it.bounds.left >= colRight + 2f || it.bounds.right <= colLeft - 2f }
+            if (outside.isNotEmpty() && colRight - colLeft < page.width * 0.75f) {
+                val left = outside.filter { it.bounds.right <= colLeft - 2f }
+                val right = outside.filter { it.bounds.left >= colRight + 2f }
+                val inside = lines.filter { it !in outside }
+                val tables = mutableListOf<TableRegion>()
+                val consumed = HashSet<TextLine>()
+                for (zone in listOf(inside, left, right)) {
+                    val (t, c) = detectAlignedIn(zone, page)
+                    tables += t
+                    consumed += c
+                }
+                return tables to consumed
+            }
+        }
+        // Two columns of text (exercises, review questions): their option rows are not one table.
+        val gutter = TextColumns.gutter(lines, page.width, page.height)
+        if (gutter != null) {
+            val tables = mutableListOf<TableRegion>()
+            val consumed = HashSet<TextLine>()
+            val left = lines.filter { it.bounds.right <= gutter + 2f }
+            val right = lines.filter { it.bounds.left >= gutter - 2f }
+            for (zone in listOf(left, right, lines.filter { it !in left && it !in right })) {
+                val (t, c) = detectAlignedIn(zone, page)
+                tables += t
+                consumed += c
+            }
+            return tables to consumed
+        }
+        return detectAlignedIn(lines, page)
+    }
+
+    private fun detectAlignedIn(lines: List<TextLine>, page: RawPage): Pair<List<TableRegion>, Set<TextLine>> {
         if (lines.size < 6) return emptyList<TableRegion>() to emptySet()
         data class Piece(val left: Float, val right: Float, val text: String, val bold: Boolean)
         // Note: not called "lines", which would resolve to the function parameter inside the class.
@@ -172,32 +216,59 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                     pieces.size >= 3 && pieces.count { maxRight - it.right < 3f } * 10 >= pieces.size * 6 &&
                         pieces.map { it.text.split(' ').size }.average() > 3
                 }
-                // Hanging list markers ("1.", "•") in a narrow first column are lists, not tables.
+                // Hanging list markers ("1.", "•") in a narrow first column are lists, not tables;
+                // so are numbered exercises ("11.1 | The average power absorbed by…").
                 val firstColumnMarkers = run.all { r ->
                     val first = r.pieces.first()
                     Patterns.listMarker.containsMatchIn(first.text + " ") && first.text.length <= 4
-                }
+                } || run.count { r ->
+                    r.pieces.size >= 2 && EXERCISE_NUMBER.matches(r.pieces[0].text) && r.pieces[1].text.split(' ').size >= 4
+                } * 10 >= run.size * 3
                 // Real tables have white channels between columns: no piece crosses into the
                 // next column. Justified prose split at wide word gaps fails this.
-                val crossing = run.any { r ->
+                // A bold header row may centre its labels over the columns.
+                val boldHeader = run.first().pieces.all { it.bold } && run.drop(1).any { r -> r.pieces.any { !it.bold } }
+                val crossing = run.drop(if (boldHeader) 1 else 0).any { r ->
                     r.pieces.any { p ->
                         val col = columns.indexOfLast { it <= p.left + 6f }
                         col >= 0 && col + 1 < columns.size && p.right > columns[col + 1] - 2f
                     }
                 }
+                // A printed contents page without leaders: section numbers, titles and page numbers.
+                fun titledPage(r: Row) = r.pieces.indices.any { k ->
+                    (PAGE_ONLY.matches(r.pieces[k].text) && k > 0 && r.pieces[k - 1].text.any { it.isLetter() }) ||
+                        TITLE_WITH_PAGE.matches(r.pieces[k].text)
+                }
+                val numbered = run.count { r -> r.pieces.any { SECTION_NUMBER.matches(it.text) || NUMBERED_TITLE.matches(it.text) } }
+                if (numbered * 10 >= run.size * 4 && run.count { titledPage(it) } * 10 >= run.size * 5) {
+                    i = j
+                    continue
+                }
                 if (columns.size >= 2 && justifiedColumns < columns.size && !firstColumnMarkers && !crossing &&
                     (shortCells || (columns.size >= 3 && avgWords <= 6))
                 ) {
+                    // The bold header row above the rule under it.
+                    val above = rows.getOrNull(i - 1)
+                    val run = if (!boldHeader && above != null && above.pieces.size in 2..columns.size &&
+                        above.pieces.all { it.bold } && run.first().top - above.bottom < above.size * 2.5f &&
+                        above.pieces.all { p -> p.right - p.left < page.width * 0.3f } &&
+                        above.pieces.map { p -> columns.indexOfLast { it <= (p.left + p.right) / 2f } }.let { it.distinct().size == it.size && it.all { c -> c >= 0 } }
+                    ) listOf(above) + run else run
+                    val boldHeader = boldHeader || run.size > j - i
                     val bounds = Rect.bounding(run.flatMap { r -> r.members.map { it.bounds } })!!
-                    val grid = run.map { r ->
+                    val grid = run.mapIndexed { k, r ->
                         val cells = MutableList(columns.size) { "" }
                         for (p in r.pieces) {
-                            val col = columns.indexOfLast { it <= p.left + 6f }.coerceAtLeast(0)
+                            val col = if (k == 0 && boldHeader) {
+                                columns.indexOfLast { it <= (p.left + p.right) / 2f }.coerceAtLeast(0)
+                            } else {
+                                columns.indexOfLast { it <= p.left + 6f }.coerceAtLeast(0)
+                            }
                             cells[col] = (cells[col] + " " + TextCleaner.finish(p.text)).trim()
                         }
                         cells
                     }
-                    val header = if (run.first().pieces.all { it.bold } && run.drop(1).any { r -> r.pieces.any { !it.bold } }) 1 else 0
+                    val header = if (boldHeader) 1 else 0
                     tables += TableRegion(bounds, grid, header, ruled = false)
                     run.forEach { consumed += it.members }
                     i = j
@@ -220,12 +291,37 @@ class TableDetector(private val lineBuilder: LineBuilder) {
     /** Real (non-thin) curved or diagonal shapes overlapping [r]: circles, arrowheads, rounded boxes. */
     private fun drawingShapes(page: RawPage, r: Rect): Int = page.paths.count { p ->
         val b = p.bounds
-        p.shape == PathShape.COMPLEX && min(b.width, b.height) > 4f && b.intersects(r) &&
-            b.area < r.area * 4f
+        b.intersects(r) && (
+            (p.shape == PathShape.COMPLEX && min(b.width, b.height) > 4f && b.area < r.area * 4f) ||
+                // circuit elements drawn as small solid bars (resistors) and arrowheads
+                (p.filled && !p.lightFill && p.shape == PathShape.RECTANGLE && min(b.width, b.height) in 3f..14f &&
+                    max(b.width, b.height) in 12f..50f && max(b.width, b.height) >= min(b.width, b.height) * 2f) ||
+                (p.filled && !p.lightFill && p.shape == PathShape.COMPLEX && p.segments <= 4 && b.width in 2f..9f && b.height in 2f..9f)
+            )
     }
 
     /** Text sitting on boxes and circles is diagram labelling, not an unruled table. */
     private fun onDrawing(page: RawPage, r: Rect): Boolean = drawingShapes(page, r.outset(4f)) >= 2
+
+    /**
+     * A circuit's wires form a grid too; its "cells" hold component values and polarity signs
+     * ("2 Ω", "60 V", "+ vₒ −"), never words.
+     */
+    private fun looksLikeCircuit(table: TableRegion): Boolean {
+        val cells = table.rows.flatten().map { it.trim() }.filter { it.isNotEmpty() }
+        if (cells.isEmpty()) return false
+        val words = cells.any { c -> c.split(' ').any { w -> w.count { it.isLetter() } >= 4 && w.none { it.isDigit() } } }
+        val values = cells.count { c -> COMPONENT_VALUE.containsMatchIn(c) || c.all { it in "+−-–± " } || COMPONENT_NAME.matches(c) }
+        return !words && values * 3 >= cells.size
+    }
+
+    /** Fraction bars of a displayed formula ("v₁ = R₁/(R₁ + R₂) v") also make a small grid. */
+    private fun looksLikeFormula(table: TableRegion): Boolean {
+        val cells = table.rows.flatten().filter { it.isNotBlank() }
+        val text = cells.joinToString(" ")
+        return table.rows.size <= 4 && table.columnCount <= 4 && text.length <= 80 &&
+            cells.any { c -> c.any { it in "=≈≤≥" } } && cells.none { c -> c.split(' ').count { w -> w.length >= 4 && w.all { it.isLetter() } } >= 2 }
+    }
 
     /**
      * Flow charts made of boxes joined by arrows form a "grid" of rules too, but most of its
@@ -236,7 +332,7 @@ class TableDetector(private val lineBuilder: LineBuilder) {
         val filled = table.rows.sumOf { row -> row.count { it.isNotBlank() } }
         val ratio = filled.toFloat() / cells
         val shapes = drawingShapes(page, table.bounds.outset(8f))
-        return ratio < 0.2f || (ratio < 0.4f && shapes >= 1) || (ratio < 0.6f && shapes >= 3)
+        return ratio < 0.2f || (ratio < 0.4f && shapes >= 1) || (ratio < 0.6f && shapes >= 3) || (ratio < 0.9f && shapes >= 4)
     }
 
     /**
@@ -495,5 +591,16 @@ class TableDetector(private val lineBuilder: LineBuilder) {
             if (last != null && abs(last.first().baseline - l.baseline) <= l.fontSize * 0.3f) last += l else out += mutableListOf(l)
         }
         return out
+    }
+
+    private companion object {
+        val SECTION_NUMBER = Regex("^\\s*(?:(?:chapter|part)\\s+[0-9]{1,2}|[0-9]{1,2}(?:\\.[0-9]{1,2}){1,3})\\s*$", RegexOption.IGNORE_CASE)
+        val NUMBERED_TITLE = Regex("^\\s*[0-9]{1,2}(?:\\.[0-9]{1,2}){1,3}\\s+.*\\p{L}.*$")
+        val COMPONENT_VALUE = Regex("[0-9]\\s*(?:[kmMμnpG]?\\s*(?:Ω|V|A|F|H|W|S|Hz)|VAR|VA)\\b|Ω|^[+−-]|[+−-]$")
+        /** "R₁", "Vs", "iₒ", "C2": a component or quantity name next to a drawing. */
+        val COMPONENT_NAME = Regex("^[+−-]?\\s*[A-Za-zΩα-ω][₀-₉ₐ-ₜa-z0-9]{0,3}\\s*[+−-]?$")
+        val EXERCISE_NUMBER = Regex("^\\s*[0-9]{1,2}\\.[0-9]{1,3}\\s*$")
+        val PAGE_ONLY = Regex("^\\s*(?:[0-9]{1,4}|[ivxlc]{1,7})\\s*$")
+        val TITLE_WITH_PAGE = Regex("^.*\\p{L}.*\\s[0-9]{1,4}$")
     }
 }

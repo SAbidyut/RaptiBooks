@@ -12,3 +12,4 @@ build/
 __pycache__/
 /out/
 /dist/
+/RaptiBooks-*.apk
