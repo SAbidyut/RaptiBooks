@@ -3,6 +3,7 @@ package com.raptibooks.core.structure.text
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.structure.layout.Chunk
 import com.raptibooks.core.structure.layout.TextLine
+import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.raw.TextFragment
 import kotlin.math.abs
 import kotlin.math.max
@@ -155,6 +156,43 @@ object OcrWords {
             if (edits.isEmpty()) l else edit(l, edits)
         }
     }
+
+    /**
+     * A page read by the OCR because its text layer is wrong ([layer]: a font that maps the
+     * wrong letters) keeps the symbols the layer has right: a "✔" beside an answer, which the
+     * OCR reads as "V" or "/". A short word read over such a symbol becomes the symbol, and a
+     * symbol the OCR did not read is added.
+     */
+    fun keepSymbols(ocr: RawPage, layer: RawPage?): RawPage {
+        val symbols = layer?.fragments?.filter { f -> f.text.isNotBlank() && f.text.all { isSymbol(it) } }.orEmpty()
+        if (symbols.isEmpty()) return ocr
+        val used = HashSet<TextFragment>()
+        val words = ocr.fragments.map { w ->
+            if (w.text.length > 3) return@map w
+            val over = symbols.filter { s ->
+                s.bounds.horizontalOverlap(w.bounds) >= s.width * 0.5f && (s.top + s.bottom) / 2f in w.top..w.bottom
+            }
+            if (over.isEmpty()) return@map w
+            used += over
+            TextFragment(over.sortedBy { it.left }.joinToString("") { it.text }, w.left, w.top, w.right, w.bottom, w.baseline, w.fontSize, w.fontName, w.bold, w.italic, w.spaceWidth)
+        }
+        // A symbol the OCR left out (or read as part of the next word, whose box then covers it)
+        // is added on its line, with the size and baseline of the words there, before a word
+        // whose box covers it.
+        val added = symbols.filter { it !in used }.map { s ->
+            val line = ocr.fragments.filter { (s.top + s.bottom) / 2f in it.top..it.bottom }
+            val near = line.minByOrNull { minOf(abs(it.left - s.right), abs(s.left - it.right)) } ?: return@map s
+            val left = minOf(s.left, (line.filter { it.bounds.horizontalOverlap(s.bounds) > 0f }.minOfOrNull { it.left } ?: s.left) - 0.1f)
+            TextFragment(s.text, left, near.top, s.right, near.bottom, near.baseline, near.fontSize, near.fontName, near.bold, false, near.spaceWidth)
+        }
+        return RawPage(
+            ocr.index, ocr.width, ocr.height, words + added, ocr.images, ocr.paths, ocr.rotatedText, ocr.fromOcr,
+            ocr.ocrPictures, ocr.ink, ocr.invisibleText, ocr.ocrFormulas,
+        )
+    }
+
+    /** A pictogram (✔, ☐, ●, ★…), not a letter, digit or punctuation mark. */
+    private fun isSymbol(c: Char): Boolean = Character.getType(c) == Character.OTHER_SYMBOL.toInt() && !c.isLetterOrDigit()
 
     /** [l] with the text ranges [edits] (start, end, new text) replaced; styles and chunks follow. */
     private fun edit(l: TextLine, edits: List<Triple<Int, Int, String>>): TextLine {

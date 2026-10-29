@@ -64,7 +64,8 @@ screen. Bangla and English are both first-class, and everything runs offline.
     never takes in a sliver of the text line above it; fractions of words ("Effect =
     cause / opposition") are formulas; columns of "A = 1.0" values are a table;
   - printed **contents pages** with or without dot leaders (also as tables, also two columns
-    of "1.2  Systems of Units 4" with wrapped titles) become tappable contents entries, and
+    of "1.2  Systems of Units 4" with wrapped titles, section numbers set apart from their
+    titles and pages numbered within the chapter, "1-6") become tappable contents entries, and
     the reader's Contents panel follows the book's own contents when it can be tied to the
     pages;
   - **textbook layouts** (e.g. *Fundamentals of Electric Circuits*): section numbers printed
@@ -113,7 +114,16 @@ screen. Bangla and English are both first-class, and everything runs offline.
     such lines too, while a grid of words (a drill's word list) and a table with a column of
     them are shown as printed, whole;
   - **OCR** for scanned pages and broken text layers: Tesseract 5 with bundled `ben` + `eng`
-    models, fully offline; text-as-outlines pages are detected too;
+    models, fully offline; text-as-outlines pages are detected too, and so is Bangla whose
+    font maps the wrong letters (a Word file saved with Kalpurush: "িাাংলা" for "বাংলা"), which
+    is read by the OCR while symbols the text layer has right (✔) are kept;
+  - **scanned Bangla textbooks** (NCTB board books, image-only): headings are found from how
+    thick their letters are printed (bold) as well as their size, fractions and formulas the
+    OCR cannot read are shown as printed, drawings with their labels become pictures, the
+    words the OCR read are always parted by a space, and the dari "।" the OCR took for a bar
+    "|" is put right;
+  - **two-column question banks and MCQ books**: a title set across both columns does not
+    join them into one, so the questions and their options read in order (never as a table);
   - **scanned books with an OCR text layer** (Acrobat, CVISION: the picture of each page under
     invisible text): the page's ink shows what the text layer misses — drawings become figures
     with their captions (panels of one figure, ruled tables), display formulas are shown as
@@ -242,6 +252,9 @@ python3 tools/offline-build/rbuild.py robotest  # Robolectric tests (DB, pipelin
 python3 tools/pdf-harness/harness.py some.pdf   # print the reflowed book of a PDF (desktop)
 HARNESS_IMAGES=/tmp/crops python3 tools/pdf-harness/harness.py some.pdf  # also save figure/formula crops
 HARNESS_XMX=5g python3 tools/pdf-harness/harness.py big.pdf  # more heap for very long books
+HARNESS_PAGES=20-40 python3 tools/pdf-harness/harness.py some.pdf  # only these pages (from 0)
+HARNESS_OCR=dir-of-bytedeco-linux-jars HARNESS_OCR_CACHE=/tmp/reads python3 tools/pdf-harness/harness.py scan.pdf
+                                                 # OCR pages like the app (raw reads cached)
 ```
 
 The test books in `app/src/test/resources/pdf` are printed from HTML; `tools/test-pdfs` holds

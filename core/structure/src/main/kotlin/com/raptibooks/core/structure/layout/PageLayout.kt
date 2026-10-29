@@ -2,6 +2,7 @@ package com.raptibooks.core.structure.layout
 
 import com.raptibooks.core.model.InlineStyle
 import com.raptibooks.core.structure.geometry.Rect
+import com.raptibooks.core.structure.raw.TextFragment
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -31,6 +32,9 @@ class TextLine(
     val pictures: List<Rect> = emptyList(),
 ) {
     val isBold: Boolean get() = boldRatio >= 0.75f
+
+    /** Read by an OCR from a picture of the page (its sizes only estimated from the picture). */
+    val isOcr: Boolean get() = fontName == TextFragment.OCR_FONT
     val isItalic: Boolean get() = italicRatio >= 0.75f
     val wordCount: Int get() = text.split(' ').count { it.isNotBlank() }
 

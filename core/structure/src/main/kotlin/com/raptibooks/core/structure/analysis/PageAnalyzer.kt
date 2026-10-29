@@ -37,6 +37,14 @@ class PageAnalyzer(
     private val figureDetector = FigureDetector()
     private val equationDetector = EquationDetector()
 
+    /** The formulas an OCR found on its page, shown as printed, with any line left inside them. */
+    private fun ocrFormulas(page: RawPage, lines: List<TextLine>, bodySize: Float): EquationDetector.Result? {
+        if (page.ocrFormulas.isEmpty()) return null
+        val regions = page.ocrFormulas.map { FigureRegion(it, FigureKind.EQUATION, textSize = bodySize) }
+        val inside = lines.filter { l -> page.ocrFormulas.any { it.outset(1f).contains(l.bounds.centerX, l.bounds.centerY) } }.toSet()
+        return EquationDetector.Result(regions, inside, emptySet())
+    }
+
     fun analyze(input: RawPage): PageLayout {
         // Text set at 1-2 pt is invisible (bookmark targets, hidden running-header markers);
         // it must not be read as content.
@@ -84,7 +92,7 @@ class PageAnalyzer(
         // (whose text is garbled) that are shown as printed.
         val scan = if (page.ink == null) null else ScanPage.read(page, allLines, bodySize)
         // Display equations first: their stacked rows would otherwise look like table rows.
-        val equations = if (page.fromOcr) null else scan?.equations ?: equationDetector.detect(page, allLines, bodySize, ruled.map { it.bounds })
+        val equations = if (page.fromOcr) ocrFormulas(page, allLines, bodySize) else scan?.equations ?: equationDetector.detect(page, allLines, bodySize, ruled.map { it.bounds })
         val textLines = if (equations == null) allLines else allLines.filter { it !in equations.absorbed }
         // (a scan's drawings and ruled tables are shown as printed: their text is no table)
         val (aligned, consumed) = tableDetector.detectAligned(
@@ -155,7 +163,7 @@ class PageAnalyzer(
             } + scanDrawings,
             // (a scan's vector lines are CVISION's tracing of its drawings, already in its ink)
             if (scan != null) emptyList() else page.paths.filter { p -> p !in bulletPaths && p !in equationPaths && panels.none { it.first.bounds.outset(1f).contains(p.bounds) } },
-            page.rotatedText, page.fromOcr, page.ocrPictures, page.ink, page.invisibleText,
+            page.rotatedText, page.fromOcr, page.ocrPictures, page.ink, page.invisibleText, page.ocrFormulas,
         )
         var equationRegions = equations?.equations ?: emptyList()
         val detected = figureDetector.detect(figurePage, lines, tables, equationRegions.map { it.bounds }, bodySize)
@@ -344,6 +352,9 @@ object OcrDecision {
             letters < 25 && complexPaths > 150 && pathArea > pageArea * 0.25f -> Reason.OUTLINED_TEXT
             glyphsDrawn > 60 && glyphsMapped < glyphsDrawn * 0.4f -> Reason.UNMAPPED_GLYPHS
             letters >= 25 && TextQuality.garbageRatio(text) > 0.3f -> Reason.BROKEN_ENCODING
+            // (Bangla whose vowel signs land where no word has them: its font maps the wrong letters)
+            TextQuality.banglaMisorder(page.fragments.filter { !BijoyConverter.isBijoyFont(it.fontName) }.joinToString("") { it.text }) > 0.06f ->
+                Reason.BROKEN_ENCODING
             else -> Reason.NONE
         }
     }

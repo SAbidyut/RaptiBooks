@@ -26,7 +26,15 @@ class TextFragment(
     val bounds: Rect get() = Rect(left, top, right, bottom)
     val isSpace: Boolean get() = text.isBlank()
 
+    /** A word read by the OCR (each fragment is a whole word). */
+    val isOcrWord: Boolean get() = fontName == OCR_FONT
+
     override fun toString(): String = "Fragment('$text' @$left,$baseline size=$fontSize)"
+
+    companion object {
+        /** The font name of the words an OCR read. */
+        const val OCR_FONT = "ocr"
+    }
 }
 
 /** A raster image drawn on the page. */
@@ -86,4 +94,6 @@ class RawPage(
     val ink: InkMap? = null,
     /** The text is drawn invisible: an OCR's text layer over the picture of a scanned page. */
     val invisibleText: Boolean = false,
+    /** Formulas on a page read by an OCR, shown as printed (their words are not in [fragments]). */
+    val ocrFormulas: List<Rect> = emptyList(),
 )

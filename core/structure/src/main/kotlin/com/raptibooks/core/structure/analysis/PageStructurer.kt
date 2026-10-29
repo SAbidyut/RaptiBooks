@@ -244,6 +244,8 @@ class PageStructurer(private val profile: DocumentProfile) {
 
         // Pieces of a formula's row taken in by the formula before them.
         val joined = HashSet<Int>()
+        // "1.1" printed apart from "PLC Scan Method ....... 1-2" on a contents page
+        var tocNumber: String? = null
         for ((i, p) in placed.withIndex()) {
             if (i in joined) continue
             val building = current
@@ -312,9 +314,35 @@ class PageStructurer(private val profile: DocumentProfile) {
                         }
                         continue
                     }
+                    val nextEntry = (placed.getOrNull(i + 1)?.item as? LineItem)?.line
+                    if (LONE_SECTION_NUMBER.matches(line.text) && nextEntry != null && nextEntry.bounds.left > line.bounds.right &&
+                        abs(nextEntry.src.baseline - line.src.baseline) <= line.size * 0.35f && tocEntry(nextEntry) != null
+                    ) {
+                        tocNumber = line.text.trim()
+                        continue
+                    }
                     val toc = tocEntry(line)
                     if (toc != null) {
-                        flush(); out += toc.copy(pageIndex = page)
+                        flush()
+                        val number = tocNumber
+                        tocNumber = null
+                        val entry = if (number == null) toc.copy(pageIndex = page) else toc.copy(pageIndex = page, text = number + " " + toc.text, styles = shiftStyles(toc.styles, 0, toc.text.length, number.length + 1))
+                        // "1.5.4 AND / ANI (Connect NO contact in series / Connect NC contact in" over
+                        // "series) ....... 1-6": a title that wrapped is one entry
+                        val before = out.lastOrNull()
+                        val wrappedFrom = when (before) {
+                            is StructuredElement.Heading -> before.text
+                            is StructuredElement.Paragraph -> before.text.takeIf { before.kind == ParagraphKind.BODY && !it.contains('\n') }
+                            else -> null
+                        }
+                        val startsLow = entry.text.firstOrNull()?.let { it.isLowerCase() || it in ")]," } == true
+                        if (wrappedFrom != null && before?.pageIndex == page && startsLow && wrappedFrom.length <= 160 && !Patterns.endsSentence(wrappedFrom)) {
+                            val text = wrappedFrom.trim() + " " + entry.text
+                            val main = entry.styles.isNotEmpty()
+                            out[out.size - 1] = entry.copy(text = text, styles = if (main) listOf(InlineStyle(0, text.indexOf('\t'), InlineStyle.BOLD)) else emptyList())
+                        } else {
+                            out += entry
+                        }
                         continue
                     }
                     val options = if (line.src.chunks.size >= 2) splitOptions(line.text) else emptyList()
@@ -367,7 +395,7 @@ class PageStructurer(private val profile: DocumentProfile) {
                         continue
                     }
                     val nextLine = (placed.getOrNull(i + 1)?.item as? LineItem)?.line
-                    val level = headingLevel(line, prevLine, nextLine, leading)
+                    val level = headingLevel(line, prevLine, nextLine, leading, runWords(i, leading) { (placed.getOrNull(it)?.item as? LineItem)?.line })
                     if (level != null) {
                         flush()
                         val prev = out.lastOrNull()
@@ -813,8 +841,12 @@ class PageStructurer(private val profile: DocumentProfile) {
     }
 
     private fun contentsEntry(title: String, page: String, main: Boolean, size: Float): StructuredElement.Paragraph {
-        val styles = if (main) listOf(InlineStyle(0, title.length, InlineStyle.BOLD)) else emptyList()
-        return StructuredElement.Paragraph(0, title + "\t" + page, styles, ParagraphKind.TOC, false, size)
+        // (a cell that still holds the dot leaders, and the page after them)
+        val leader = Patterns.tocEntry.matchEntire(title)
+        val clean = (if (leader != null && page.isBlank()) leader.groupValues[1] else title).trimEnd('.', ' ', '·', '…', '_')
+        val number = if (leader != null && page.isBlank()) leader.groupValues[2] else page
+        val styles = if (main) listOf(InlineStyle(0, clean.length, InlineStyle.BOLD)) else emptyList()
+        return StructuredElement.Paragraph(0, clean + "\t" + number, styles, ParagraphKind.TOC, false, size)
     }
 
     /** Runs of list items lettered (ক), (খ), (গ)… or (a), (b)… become one block of answer options. */
@@ -888,6 +920,7 @@ class PageStructurer(private val profile: DocumentProfile) {
 
         /** "1.2 Systems of Units", "১.৩ ..." : a numbered section (not a chapter). */
         val SECTION_NUMBER = Regex("^\\s*[0-9০-৯]{1,2}[.][0-9০-৯]{1,2}")
+        val LONE_SECTION_NUMBER = Regex("^\\s*[0-9০-৯A-Z]{1,2}(?:[.][0-9০-৯]{1,3}){1,3}\\.?\\s*$")
 
         fun pageNumber(s: String): Int? {
             val digits = s.trim().map { c -> if (c in '০'..'৯') '0' + (c - '০') else c }.joinToString("")
@@ -967,7 +1000,35 @@ class PageStructurer(private val profile: DocumentProfile) {
 
     // ---------------------------------------------------------------- headings
 
-    private fun headingLevel(line: NLine, prev: NLine?, next: NLine?, leading: Float): Int? {
+    /**
+     * The words of the lines set alike around line [i] (one size and weight, one under the
+     * other, starting at one left): many are a paragraph's, few a title's that wrapped.
+     */
+    private fun runWords(i: Int, leading: Float, lineAt: (Int) -> NLine?): Int {
+        fun alike(a: NLine, b: NLine) = abs(a.size - b.size) < 0.5f && a.src.isBold == b.src.isBold &&
+            abs(a.bounds.left - b.bounds.left) <= a.size * 1.5f && b.bounds.top >= a.bounds.top + a.size * 0.5f &&
+            b.bounds.top - a.bounds.bottom <= leading * 0.6f
+        fun count(l: NLine) = l.text.split(' ').count { it.isNotBlank() }
+        val line = lineAt(i) ?: return 0
+        var words = count(line)
+        var j = i
+        while (true) {
+            val a = lineAt(j - 1) ?: break
+            if (!alike(a, lineAt(j)!!)) break
+            words += count(a)
+            j--
+        }
+        j = i
+        while (true) {
+            val b = lineAt(j + 1) ?: break
+            if (!alike(lineAt(j)!!, b)) break
+            words += count(b)
+            j++
+        }
+        return words
+    }
+
+    private fun headingLevel(line: NLine, prev: NLine?, next: NLine?, leading: Float, runWords: Int = 0): Int? {
         val text = line.text
         val words = text.split(' ').count { it.isNotBlank() }
         if (text.length < 2 || words > 20 || text.length > 160) return null
@@ -975,12 +1036,16 @@ class PageStructurer(private val profile: DocumentProfile) {
         // (a title with words shown as printed stays a paragraph, which can hold them)
         if (InlinePicture.MARKER in text) return null
         if (text.count { it.isLetter() || BanglaText.isMatra(it) } < 2) return null
+        // (the OCR's reading of a drawing's labels, "B   Cc   BD", is no title)
+        if (line.src.isOcr && text.split(' ').none { w -> w.count { it.isLetter() || BanglaText.isMatra(it) } >= 3 }) return null
         val ratio = line.size / profile.bodySize
         val bold = line.src.isBold
         val gapAbove = prev?.let { line.bounds.top - it.bounds.bottom } ?: Float.MAX_VALUE
         val gapBelow = next?.let { it.bounds.top - line.bounds.bottom } ?: Float.MAX_VALUE
+        // (an OCR's sizes of two lines of one type differ a little)
+        val sizeSlack = if (line.src.isOcr) line.size * 0.08f else 0f
         val isolated = gapAbove > leading * 0.6f || gapBelow > leading * 0.6f ||
-            (next != null && !next.src.isBold && next.size <= line.size)
+            (next != null && !next.src.isBold && next.size <= line.size + sizeSlack)
 
         if (MathText.isFormula(text)) return null
         val chapter = Patterns.chapter.find(text)
@@ -1013,7 +1078,19 @@ class PageStructurer(private val profile: DocumentProfile) {
         ) {
             return null
         }
-        if (bySize != null && words <= 16 && !(text.endsWith('.') && words > 10)) {
+        // (an OCR's sizes are estimates: a line it read is a heading by its size only when short
+        // and not a sentence; a tall formula or a mark beside it can make a line look big)
+        val ocrSentence = line.src.isOcr && (words > 8 || (Patterns.endsSentence(text) && !text.endsWith(':')))
+        // The lines of a paragraph set a little larger than the book's text (a syllabus page) are no
+        // titles: together they hold more words than a title that wrapped
+        // ("3.6 Nodal and Mesh Analyses / by Inspection").
+        val prose = runWords > 16
+        // Nor is a line starting in a small letter (one that tall symbols made look larger,
+        // "when a voltage V = 120∠0° is applied"), unless it goes on from a title set alike.
+        val goesOn = prev != null && abs(prev.size - line.size) < 0.5f && prev.src.isBold == line.src.isBold &&
+            gapAbove <= leading * 0.6f && prev.bounds.horizontalOverlap(line.bounds) > 0f
+        val lowStart = text.trimStart().firstOrNull()?.isLowerCase() == true && !goesOn
+        if (bySize != null && words <= 16 && !(text.endsWith('.') && words > 10) && !ocrSentence && !prose && !lowStart) {
             // "1.2 Systems of Units" is a section, "7.9.1 Delay Circuits" a subsection, whatever their size.
             val depth = numbered?.groupValues?.get(1)?.count { it == '.' } ?: 0
             return if (depth >= 1) (1 + depth).coerceAtMost(4) else bySize
@@ -1028,7 +1105,7 @@ class PageStructurer(private val profile: DocumentProfile) {
         // A worked formula ("I = 0.58 × 30 = 17.4 A") set in bold is a result, not a heading.
         val formula = text.any { it in "=≈≠<>" } && text.any { it.isDigit() }
         // (a statement in bold starting with a small letter, "the symbol E is applied to…", is text)
-        if (bold && !formula && ratio >= 0.95f && words <= 12 && isolated && !text.endsWith(',') &&
+        if (bold && !formula && ratio >= (if (line.src.isOcr) 0.85f else 0.95f) && words <= 12 && isolated && !text.endsWith(',') &&
             text.trimStart().firstOrNull()?.isLowerCase() != true &&
             (!Patterns.endsSentence(text) || text.endsWith(':')) &&
             !(prev != null && prev.src.isBold && gapAbove < leading * 0.6f)

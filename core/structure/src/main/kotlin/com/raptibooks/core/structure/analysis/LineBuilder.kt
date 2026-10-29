@@ -455,7 +455,9 @@ class LineBuilder(
                         min(max(inferred, lineSize * 0.15f), tightGap ?: Float.MAX_VALUE)
                     else -> lineSize * 0.6f
                 }
-                needSpace = pendingSpace || (!trustSpaces && gap > threshold)
+                // (two words the OCR read are two words, however close their boxes: its boxes of
+                // Bangla words often reach into the next one)
+                needSpace = pendingSpace || (p.f.isOcrWord && f.isOcrWord) || (!trustSpaces && gap > threshold)
                 if (gap > chunkGapEm * lineSize) {
                     flushBijoy()
                     chunks += Chunk(chunkLeft, chunkRight, chunkStart, sb.length)

@@ -10,7 +10,10 @@ object TextColumns {
      * words crosses it and there are lines on both sides. Running headers are ignored.
      */
     fun gutter(lines: List<TextLine>, pageWidth: Float, pageHeight: Float): Float? {
-        val text = lines.filter { it.wordCount >= 4 && it.bounds.top > pageHeight * 0.07f && it.bounds.bottom < pageHeight * 0.93f }
+        val all = lines.filter { it.wordCount >= 4 && it.bounds.top > pageHeight * 0.07f && it.bounds.bottom < pageHeight * 0.93f }
+        // (a title set across both columns, over them, does not join them)
+        val usual = all.map { it.fontSize }.sorted().let { it.getOrNull(it.size / 2) } ?: return null
+        val text = all.filter { it.fontSize <= usual * 1.25f }
         if (text.size < 6) return null
         var x = pageWidth * 0.25f
         var best: Float? = null

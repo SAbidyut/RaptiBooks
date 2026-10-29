@@ -15,7 +15,8 @@ libs = r["libs"]
 def files(key): return libs[key]["files"]
 pdfbox_dir = next((CACHE / "exploded" / "com.tom-roush" / "pdfbox-android").glob("*/pdfbox-android-*"))
 cp = [str(OUT / "shim")] + files("org.jetbrains.kotlin:kotlin-stdlib") + \
-     [str(pdfbox_dir / "classes.jar"), r["tools"]["androidJar"]]
+     [str(pdfbox_dir / "classes.jar"), r["tools"]["androidJar"]] + \
+     [files(k)[0] for k in ("org.bytedeco:javacpp", "org.bytedeco:leptonica", "org.bytedeco:tesseract")]
 OUT.mkdir(parents=True, exist_ok=True)
 shim_src = [str(p) for p in (Path(__file__).parent / "shim").rglob("*.java")]
 subprocess.run(["javac", "-nowarn", "-d", str(OUT / "shim"), "-cp", r["tools"]["androidJar"]] + shim_src, check=True)
@@ -29,8 +30,11 @@ def kotlinc(out, sources, classpath):
 
 # The engine modules are compiled here when their sources changed, so the harness always runs
 # the current code.
-for module in ["core/model", "core/structure", "core/reflow", "core/pdf"]:
+for module in ["core/model", "core/structure", "core/reflow", "core/pdf", "core/ocr"]:
     src = sorted((ROOT / module / "src/main/kotlin").rglob("*.kt"))
+    if module == "core/ocr":
+        # (only its plain JVM part: the rest needs a real Android)
+        src = [p for p in src if p.name in ("TesseractPage.kt", "OcrEngine.kt")]
     out = OUT / module.replace("/", "-")
     stamp = out / ".stamp"
     newest = max(p.stat().st_mtime for p in src)
@@ -42,6 +46,11 @@ for module in ["core/model", "core/structure", "core/reflow", "core/pdf"]:
         stamp.touch()
     cp.insert(1, str(out))
 kotlinc(OUT / "classes", [Path(__file__).parent / "Harness.kt"], cp)
-run = ["java", "-Xmx" + os.environ.get("HARNESS_XMX", "3g"), "-cp", os.pathsep.join([str(OUT / "classes")] + cp), "HarnessKt",
+# HARNESS_OCR=dir of the linux-x86_64 bytedeco jars (javacpp, leptonica, tesseract): scanned
+# pages are read by Tesseract like the app reads them.
+os.environ.setdefault("HARNESS_TESSDATA", str(ROOT / "core/ocr/src/main/assets/tessdata"))
+natives = sorted(str(p) for p in Path(os.environ["HARNESS_OCR"]).glob("*linux-x86_64.jar")) if os.environ.get("HARNESS_OCR") else []
+run = ["java", "-Xmx" + os.environ.get("HARNESS_XMX", "3g"), "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
+       "-cp", os.pathsep.join([str(OUT / "classes")] + cp + natives), "HarnessKt",
        str(pdfbox_dir / "assets")] + sys.argv[1:]
 sys.exit(subprocess.run(run).returncode)

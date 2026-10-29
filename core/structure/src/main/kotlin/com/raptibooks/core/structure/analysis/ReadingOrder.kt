@@ -170,13 +170,29 @@ object ReadingOrder {
         }
     }
 
-    private fun <T> sortTopDown(items: List<T>, boundsOf: (T) -> Rect): List<T> =
-        items.sortedWith { a, b ->
+    /** [items] row by row from the top, each row left to right. */
+    fun <T> sortTopDown(items: List<T>, boundsOf: (T) -> Rect): List<T> {
+        val order = Comparator<T> { a, b ->
             val ra = boundsOf(a)
             val rb = boundsOf(b)
             val sameRow = ra.verticalOverlap(rb) > 0.5f * min(ra.height, rb.height)
             if (sameRow) ra.left.compareTo(rb.left) else ra.top.compareTo(rb.top)
         }
+        // A tall item in the row of two items that are in no row together (a table beside two
+        // lines) makes the order inconsistent, and the library's sort may refuse it: then each
+        // item goes after the ones it follows, as far up as it can.
+        return try {
+            items.sortedWith(order)
+        } catch (e: IllegalArgumentException) {
+            val out = ArrayList<T>(items.size)
+            for (item in items) {
+                var at = out.size
+                while (at > 0 && order.compare(out[at - 1], item) > 0) at--
+                out.add(at, item)
+            }
+            out
+        }
+    }
 
     /** Returns gutters as (left, right) x-ranges, sorted left to right. */
     private fun <T> findGutters(

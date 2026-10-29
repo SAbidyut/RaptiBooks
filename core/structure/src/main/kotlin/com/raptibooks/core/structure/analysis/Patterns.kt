@@ -62,7 +62,8 @@ object Patterns {
      * Table-of-contents line: a title, a dot leader and a page number
      * ("অধ্যায় ০২ টুলস.........13"). Group 1 = title, group 2 = page.
      */
-    val tocEntry = Regex("^\\s*(.*?\\S)\\s*(?:[.·…‥_]\\s?){4,}\\s*($NUM{1,4}|[ivxlcdm]{1,6})\\s*$", RegexOption.IGNORE_CASE)
+    // (the page may be numbered within its chapter: "1-6", "A-3")
+    val tocEntry = Regex("^\\s*(.*?\\S)\\s*(?:[.·…‥_]\\s?){4,}\\s*((?:(?:$NUM{1,2}|[A-Z])[-–])?$NUM{1,4}|[ivxlcdm]{1,6})\\s*$", RegexOption.IGNORE_CASE)
 
     /** Title of a printed table of contents ("Contents", "সূচিপত্র", "Index" as Bangla books call it). */
     val contentsTitle = Regex(

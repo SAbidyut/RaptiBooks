@@ -235,4 +235,29 @@ object TextQuality {
 
     /** Letters (any script) and digits. */
     fun letterCount(text: CharSequence): Int = text.count { it.isLetterOrDigit() || BanglaText.isMatra(it) }
+
+    /**
+     * Fraction (0..1) of the Bangla vowel signs that sit where no Bangla word puts them: at a
+     * word's start or after another sign ("িাাংলা" for "বাংলা"), the mark of a font whose
+     * characters were mapped wrongly (a Word document saved with Kalpurush). A sign drawn
+     * before its consonant (visual order, which the reader puts right) is not counted. Zero
+     * when there are too few signs to tell.
+     */
+    fun banglaMisorder(text: String): Float {
+        var signs = 0
+        var misplaced = 0
+        for (i in text.indices) {
+            val c = text[i]
+            if (!BanglaText.isMatra(c)) continue
+            signs++
+            val prev = if (i > 0) text[i - 1] else ' '
+            val next = if (i + 1 < text.length) text[i + 1] else ' '
+            val placed = BanglaText.isConsonant(prev) || prev == BanglaText.NUKTA || prev == BanglaText.ZWJ || prev == BanglaText.ZWNJ ||
+                // (ো written as its two parts)
+                (prev == 'ে' && (c == 'া' || c == 'ৗ')) ||
+                (BanglaText.isPreBaseMatra(c) && BanglaText.isConsonant(next))
+            if (!placed) misplaced++
+        }
+        return if (signs < 40) 0f else misplaced.toFloat() / signs
+    }
 }

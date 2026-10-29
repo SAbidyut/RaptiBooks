@@ -29,6 +29,7 @@ import com.raptibooks.core.structure.layout.PageLayout
 import com.raptibooks.core.structure.layout.PictureRegion
 import com.raptibooks.core.structure.raw.RawPage
 import com.raptibooks.core.structure.text.GrayImage
+import com.raptibooks.core.structure.text.OcrWords
 import com.raptibooks.core.structure.text.SymbolRecognizer
 import com.raptibooks.core.structure.text.Vocabulary
 import kotlinx.coroutines.Dispatchers
@@ -246,7 +247,8 @@ class ConversionPipeline(
                     val bmp = renderer.renderPage(index, TesseractOcrEngine.renderWidthFor(w, h, lowMemory))
                     pageBitmap = bmp
                     val result = engine.recognize(bmp, index, w, h)
-                    if (result.wordCount >= 3) raw = result.page
+                    // (symbols a mis-mapped text layer has right, "✔", are kept)
+                    if (result.wordCount >= 3) raw = OcrWords.keepSymbols(result.page, extraction?.page)
                     lowConfidence = result.wordCount < 30 && result.meanConfidence < 45f
                 } catch (e: OutOfMemoryError) {
                     pageBitmap?.recycle()
@@ -617,7 +619,7 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 11
+        const val LAYOUT_VERSION = 12
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60
