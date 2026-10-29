@@ -380,6 +380,8 @@ private fun Reader(
         )
 
         // The passage selected with two fingers: copy it, or let it go.
+        // the selection's ends, to drag it longer or shorter
+        SelectionHandles(selection, registry, listState, listState) { listPlace[0] }
         SelectionBar(selection, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp))
 
         // Minimal progress line while reading without chrome.

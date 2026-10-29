@@ -132,8 +132,9 @@ screen. Bangla and English are both first-class, and everything runs offline.
   spacing, margins, justification; contents, bookmarks,
   in-book search with highlights; zoomable figures; **copying text**: two fingers dragged over
   the text select it, from where they came down to where they are dragged, across paragraphs
-  (the page scrolls on at its top or bottom edge), then "Copy" copies it (one finger never
-  selects, so reading and scrolling stay undisturbed), and "Copy text" in the picture
+  (the page scrolls on at its top or bottom edge); two handles at its ends can then be
+  dragged with one finger to make it longer or shorter; "Copy" copies it (one finger never
+  starts a selection, so reading and scrolling stay undisturbed), and "Copy text" in the picture
   viewer reads the text printed in a figure, formula or page kept as a picture (offline OCR)
   and shows it to select or copy, beside the text the book's text layer has for it; **marking pen** (tap the right edge: red / blue / yellow / green and an eraser; draw along
   words or loop around a passage — in text, tables and answer options — to underline it in that colour; on pictures a
