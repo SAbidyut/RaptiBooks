@@ -216,6 +216,39 @@ class ReflowEngineTest {
     }
 
     @Test
+    fun ruleClosingAnExampleOnTheNextPageEndsItsCard() {
+        val blocks = mutableListOf<ContentBlock>()
+        val engine = ReflowEngine { blocks += it }
+        fun para(p: Int, t: String) = StructuredElement.Paragraph(p, t, emptyList(), ParagraphKind.BODY, false, 11f)
+        val closing = BoxRegion(Rect(67f, 30f, 427f, 106f), 0xE0F5FD, 0x00ADEF, openTop = true, closing = true)
+        engine.addPage(
+            listOf(
+                para(0, "Some text before."),
+                StructuredElement.Heading(0, 4, "EXAMPLE 1.4"),
+                para(0, "For the characteristics of Fig. 1.27, determine the ac resistance."),
+                StructuredElement.Heading(0, 4, "Solution:"),
+                para(0, "The tangent line was drawn."),
+            ),
+        )
+        engine.addPage(
+            listOf(
+                StructuredElement.Box(1, true, closing),
+                para(1, "which far exceeds the rd of 2 Ω."),
+                StructuredElement.Box(1, false, closing),
+                para(1, "We have found the dynamic resistance graphically."),
+                // the same rule on a page where no example is open is no box at all
+                StructuredElement.Box(1, true, closing),
+                para(1, "More of the text."),
+                StructuredElement.Box(1, false, closing),
+            ),
+        )
+        engine.finish()
+        val box = engine.boxes().single()
+        assertEquals("EXAMPLE 1.4", blocks[box.startIndex].plainText)
+        assertEquals("which far exceeds the rd of 2 Ω.", blocks[box.endIndex].plainText)
+    }
+
+    @Test
     fun workedExamplesAndPracticeProblemsBecomeCards() {
         val blocks = mutableListOf<ContentBlock>()
         val engine = ReflowEngine { blocks += it }

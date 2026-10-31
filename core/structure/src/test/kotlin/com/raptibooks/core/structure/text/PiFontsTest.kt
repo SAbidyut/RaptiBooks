@@ -49,6 +49,26 @@ class PiFontsTest {
     }
 
     @Test
+    fun pearsonMathSets() {
+        // Greek keyboard, capitals in the bold cut of headings ("Alpha (A)")
+        assertEquals("β", PiFonts.decode("DEOCJM+PearsonMATH01", "", "b"))
+        assertEquals("α", PiFonts.decode("DEOCJM+PearsonMATH01", "", "A"))
+        assertEquals("μ", PiFonts.decode("DEOCJM+PearsonMATH01", "", "M"))
+        // the fraction slash of "VD/ID", relations, parallel bars and radicals
+        assertEquals("/", PiFonts.decode("ECHNFH+PearsonMATH18", "", ">"))
+        assertEquals("‖", PiFonts.decode("ECHNFH+PearsonMATH18", "", "7"))
+        assertEquals("≥", PiFonts.decode("DEMDLJ+PearsonMATH02", "", "Ú"))
+        assertEquals("×", PiFonts.decode("DEMDLJ+PearsonMATH02", "", "*"))
+        assertEquals("Ω", PiFonts.decode("DEMDLJ+PearsonMATH02", "", "Æ"))
+        assertEquals("√", PiFonts.decode("ECHOCD+PearsonMATH20", "", "1"))
+        assertEquals("-", PiFonts.decode("ECHOOO+PearsonMATH11", "", "@"))
+        assertEquals("±", PiFonts.decode("ECHOJJ+PearsonMATH13", "", "{"))
+        // a piece of a tall brace carries no text; a set not known keeps its own mapping
+        assertEquals("", PiFonts.decode("ECHOJJ+PearsonMATH13", "", "5"))
+        assertNull(PiFonts.decode("ABCDEF+PearsonMATH42", "", "x"))
+    }
+
+    @Test
     fun ordinaryFontsKeepTheirText() {
         assertNull(PiFonts.decode("Times-Roman", "", "u"))
         assertNull(PiFonts.decode("ABCDEF+Grkish-Sans", "", "u"))

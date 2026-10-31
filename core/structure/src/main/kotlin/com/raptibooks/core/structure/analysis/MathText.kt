@@ -38,6 +38,13 @@ object MathText {
             if (c in 'অ'..'হ' || c in '\u09DC'..'\u09DF') bangla++
         }
         if (bangla >= 2) return true
+        // ("VCC", "IBRB", "RTh", "R2VCC": a symbol with its subscript letters, in a formula)
+        if (t.length <= 4 && t.all { it in 'A'..'Z' }) return false
+        if (t.length <= 6 && t.all { it in 'A'..'Z' || it in 'a'..'z' || it.isDigit() } && t[0] in 'A'..'Z' &&
+            (t.any { it.isDigit() } || (t.drop(1).any { it in 'A'..'Z' } && t.any { it in 'a'..'z' } &&
+                // (not a name in mixed case, "PSpice")
+                Regex("[a-z]{3,}").find(t) == null))
+        ) return false
         val lower = t.lowercase()
         return maxLatin >= 3 && lower !in MATH_FUNCTIONS && lower !in UNITS
     }

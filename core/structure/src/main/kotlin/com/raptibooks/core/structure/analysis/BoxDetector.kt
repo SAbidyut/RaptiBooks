@@ -4,6 +4,7 @@ import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.layout.BoxRegion
 import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
+import com.raptibooks.core.structure.raw.VectorPath
 import com.raptibooks.core.structure.raw.PathShape
 import com.raptibooks.core.structure.raw.RawPage
 import kotlin.math.abs
@@ -20,23 +21,57 @@ class BoxDetector {
     fun detect(page: RawPage, lines: List<TextLine>, tables: List<TableRegion>): List<BoxRegion> {
         if (lines.isEmpty()) return emptyList()
         val tinted = tintedBoxes(page, lines, tables)
-        return tinted + ruledExamples(page, lines, tinted)
+        val ruled = ruledExamples(page, lines, tinted)
+        return tinted + ruled + closingRule(page, lines, tables, tinted + ruled)
     }
+
+    /** Rules across the column: lines, and bars drawn as one thick stroke or a thin fill. */
+    private fun rules(page: RawPage): List<VectorPath> = page.paths.filter {
+        it.bounds.width >= page.width * 0.35f && (it.shape == PathShape.HORIZONTAL_LINE ||
+            (it.shape == PathShape.RECTANGLE && it.bounds.height <= 12f && (it.segments == 1 || (it.filled && !it.lightFill))))
+    }.sortedBy { it.bounds.top }
+
+    /**
+     * The rule that closes a worked example begun on an earlier page: a coloured rule across the
+     * column with the text of the example above it, from the top of the page, and no new example
+     * under it. Its box only closes a box already open (see [BoxRegion.closing]).
+     */
+    private fun closingRule(page: RawPage, lines: List<TextLine>, tables: List<TableRegion>, boxes: List<BoxRegion>): List<BoxRegion> {
+        val margin = page.height * 0.07f
+        val body = lines.filter { it.bounds.top > margin && it.bounds.bottom < page.height - margin }
+        val rule = rules(page).firstOrNull { r ->
+            saturation(r.color) >= 60 && tables.none { it.bounds.outset(2f).intersects(r.bounds) } &&
+                boxes.none { it.bounds.outset(2f).intersects(r.bounds) }
+        } ?: return emptyList()
+        val r = rule.bounds
+        val above = body.filter { it.bounds.bottom <= r.top + 1f && it.bounds.horizontalOverlap(r) >= it.bounds.width * 0.5f }
+        if (above.isEmpty() || above.none { it.wordCount >= 4 }) return emptyList()
+        // (the bar over the next example's label opens that example)
+        if (body.any { it.bounds.centerY > r.bottom && it.bounds.top - r.bottom <= it.fontSize * 2.5f && EXAMPLE_START.containsMatchIn(it.text) }) return emptyList()
+        // (nothing but that text above it: no heading, no example label)
+        if (above.any { EXAMPLE_START.containsMatchIn(it.text) || (it.isBold && it.fontSize >= profileless(above) * 1.1f && it.wordCount <= 8) }) return emptyList()
+        val top = above.minOf { it.bounds.top } - 2f
+        val accent = rule.color
+        return listOf(BoxRegion(Rect(r.left, top, r.right, r.bottom), lighten(accent), accent, openTop = true, closing = true))
+    }
+
+    /** The size of most of [lines]. */
+    private fun profileless(lines: List<TextLine>): Float = lines.map { it.fontSize }.sorted()[lines.size / 2]
 
     /**
      * Worked examples set between two rules across the column, the "EXAMPLE 1.4" label right
      * under the first: the rules are the example's box.
      */
     private fun ruledExamples(page: RawPage, lines: List<TextLine>, boxes: List<BoxRegion>): List<BoxRegion> {
-        val rules = page.paths.filter { it.shape == PathShape.HORIZONTAL_LINE && it.bounds.width >= page.width * 0.35f }
-            .sortedBy { it.bounds.top }
+        val rules = rules(page)
         if (rules.isEmpty()) return emptyList()
         val margin = page.height * 0.07f
         val body = lines.filter { it.bounds.top > margin && it.bounds.bottom < page.height - margin }
         val out = mutableListOf<BoxRegion>()
         for ((k, rule) in rules.withIndex()) {
             val top = rule.bounds
-            fun under(l: TextLine) = l.bounds.top >= top.bottom - 1f && l.bounds.horizontalOverlap(top) >= l.bounds.width * 0.5f
+            // (a thick bar's bounds take in its stroke: the label's ascenders may reach into them)
+            fun under(l: TextLine) = l.bounds.top >= top.bottom - max(1f, top.height * 0.5f) && l.bounds.horizontalOverlap(top) >= l.bounds.width * 0.5f
             // (the label may have a formula beside it, whose numerator is printed higher)
             val first = body.filter { under(it) && it.bounds.top - top.bottom <= it.fontSize * 2.5f }
                 .firstOrNull { EXAMPLE_START.containsMatchIn(it.text) } ?: continue
@@ -46,11 +81,15 @@ class BoxDetector {
             // Without a closing rule the example ends before the next section's heading (or the next
             // example); one that runs on to the next page is left to the reader's example card,
             // which follows it there.
+            // (the caption "Example 1.3." of the example's own figure is no next example)
+            val label = EXAMPLE_START.find(first.text)!!.value.filter { it.isDigit() || it == '.' || it == '-' }
+            fun nextExample(l: TextLine) = EXAMPLE_START.find(l.text)?.value?.filter { it.isDigit() || it == '.' || it == '-' }?.let { it != label } == true
             val stop = body.filter { l ->
                 under(l) && l.bounds.top > first.bounds.bottom &&
                     // (a heading starts the column's lines: not the "." on a calculator key)
-                    ((l.isBold && l.fontSize >= first.fontSize * 1.1f && l.text.count { it.isLetter() } >= 3 &&
-                        abs(l.bounds.left - top.left) <= l.fontSize * 1.5f) || EXAMPLE_START.containsMatchIn(l.text))
+                    // ("Solution:" over the steps is part of the example)
+                    ((l.isBold && l.fontSize >= first.fontSize * 1.1f && l.text.count { it.isLetter() } >= 3 && !l.text.trimEnd().endsWith(':') &&
+                        abs(l.bounds.left - top.left) <= l.fontSize * 1.5f) || nextExample(l))
             }.minByOrNull { it.bounds.top }
             val close = rules.drop(k + 1).firstOrNull {
                 abs(it.bounds.left - top.left) <= 4f && abs(it.bounds.right - top.right) <= 4f && it.bounds.top < (stop?.bounds?.top ?: Float.MAX_VALUE)
@@ -77,6 +116,8 @@ class BoxDetector {
             val b = p.bounds
             p.filled && p.color >= 0 && p.shape == PathShape.RECTANGLE &&
                 b.width >= page.width * 0.35f && b.height >= 12f && b.area < pageArea * 0.7f &&
+                // (a panel bleeding off the page, the backdrop of a chapter opener, is no callout)
+                !(!p.stroked && b.area > pageArea * 0.2f && (b.left <= 2f || b.right >= page.width - 2f)) &&
                 isTint(p.color) && tables.none { it.bounds.outset(2f).contains(b) }
         }.map { it.bounds to it.color }
             .distinctBy { (b, _) -> listOf(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt()) }

@@ -98,7 +98,8 @@ class PageStructurer(private val profile: DocumentProfile) {
         val folios = layout.lines.filter { DocumentStats.edgeZone(it, layout.height) != null && Patterns.pageNumber.matches(it.text.trim()) }
         fun besideFolio(l: TextLine) = DocumentStats.edgeZone(l, layout.height) != null && l.wordCount < 10 &&
             folios.any { f -> f !== l && abs(f.baseline - l.baseline) <= 1.5f } && l.fontSize <= profile.bodySize * 1.05f
-        fun furniture(l: TextLine) = profile.isRunningHeaderOrFooter(l, layout.height, layout.index) || besideFolio(l)
+        val marginHead = marginRunningHead(layout)
+        fun furniture(l: TextLine) = l in marginHead || profile.isRunningHeaderOrFooter(l, layout.height, layout.index) || besideFolio(l)
         // A piece that looks like a running header ("Chapter 8", "5.3") but shares its row with
         // ordinary text (a contents entry at the top of the page) belongs to that text.
         fun besideText(l: TextLine) = layout.lines.any { o ->
@@ -108,7 +109,7 @@ class PageStructurer(private val profile: DocumentProfile) {
             .mapNotNull { l ->
                 normalize(l, layout.fromOcr)?.takeIf {
                     // the word "chapter" repeats on every chapter opener but is not a running header
-                    !furniture(l) || besideText(l) || CHAPTER_WORD.matches(it.text)
+                    l !in marginHead && !ornament(l, layout.lines) && (!furniture(l) || besideText(l) || CHAPTER_WORD.matches(it.text))
                 }
             }
         // A printed table of contents (also its continuation pages without the "Contents" title).
@@ -152,6 +153,51 @@ class PageStructurer(private val profile: DocumentProfile) {
             pos++
         }
         return groupOptions(labelsFirst(out, leading).map { it.first })
+    }
+
+    /**
+     * A running head set in the side margin beside the text ("2  SEMICONDUCTOR / DIODES" at the
+     * top left, "COVALENT BONDING / AND INTRINSIC / MATERIALS  3" at the top right): the page
+     * number of the book's sequence, out beyond the edge of the running text, and the short lines
+     * stacked with it in that margin. It shares its rows with the text, so it is not told apart
+     * from a contents entry by its row.
+     */
+    private fun marginRunningHead(layout: PageLayout): Set<TextLine> {
+        // (the number alone, or with the title on its row: "10 SEMICONDUCTOR", "SEMICONDUCTOR DIODE 11")
+        val folios = layout.lines.filter {
+            it.wordCount <= 6 && DocumentStats.folios(it.text).isNotEmpty() && profile.isRunningHeaderOrFooter(it, layout.height, layout.index)
+        }
+        if (folios.isEmpty()) return emptySet()
+        // (where the text runs: its lines of prose, or on a page of figures whatever text it has)
+        val prose = layout.lines.filter { it.wordCount >= 6 }.takeIf { it.size >= 3 }
+            ?: layout.lines.filter { DocumentStats.edgeZone(it, layout.height) == null }.takeIf { it.size >= 2 } ?: return emptySet()
+        val textLeft = prose.map { it.bounds.left }.sorted()[prose.size / 2]
+        val textRight = prose.map { it.bounds.right }.sorted()[prose.size / 2]
+        val out = HashSet<TextLine>()
+        for (f in folios) {
+            val gap = f.fontSize
+            val inMargin: (TextLine) -> Boolean = when {
+                f.bounds.right <= textLeft - gap -> { l -> l.bounds.right <= textLeft - gap * 0.5f }
+                f.bounds.left >= textRight + gap -> { l -> l.bounds.left >= textRight + gap * 0.5f }
+                else -> continue
+            }
+            val zone = DocumentStats.edgeZone(f, layout.height)
+            val stack = mutableListOf(f)
+            // lines of the head follow one another closely, away from the edge of the page
+            val heads = layout.lines.filter {
+                it !== f && inMargin(it) && DocumentStats.edgeZone(it, layout.height) == zone && it.wordCount <= 6 &&
+                    it.fontSize <= profile.bodySize * 1.05f && !Patterns.endsSentence(it.text)
+            }.sortedBy { if (zone == "B|") -it.bounds.top else it.bounds.top }
+            for (l in heads) {
+                val near = stack.any { s ->
+                    abs(s.baseline - l.baseline) <= 1.5f ||
+                        (if (zone == "B|") s.bounds.top - l.bounds.bottom else l.bounds.top - s.bounds.bottom) in -1f..s.fontSize
+                }
+                if (near) stack += l
+            }
+            out += stack
+        }
+        return out
     }
 
     /**
@@ -599,15 +645,22 @@ class PageStructurer(private val profile: DocumentProfile) {
      * number and the title ("Basic Concepts   1"): one heading "Chapter 1: Basic Concepts".
      */
     private fun chapterOpener(lines: List<NLine>): List<NLine> {
-        // "CHAPT1E R": a big chapter number printed over the letter-spaced word
-        fun numberInWord(l: NLine) = l.text.filter { it.isDigit() }.takeIf {
-            it.length in 1..2 && l.text.filter { c -> c.isLetter() }.equals("chapter", ignoreCase = true) &&
+        // "CHAPT1E R", "AppenBdix": a big chapter number or appendix letter printed over the word
+        fun numberInWord(l: NLine): String? {
+            val digits = l.text.filter { it.isDigit() }
+            val letters = l.text.filter { it.isLetter() }
+            if (digits.length in 1..2 && letters.equals("chapter", ignoreCase = true) &&
                 l.text.indexOfFirst { c -> c.isDigit() } < l.text.indexOfLast { c -> c.isLetter() }
+            ) return digits
+            if (digits.isNotEmpty() || letters.length != "appendix".length + 1) return null
+            return (1 until letters.length - 1).firstOrNull { k ->
+                letters[k].isUpperCase() && letters.removeRange(k, k + 1).equals("appendix", ignoreCase = true)
+            }?.let { letters[it].toString() }
         }
-        val word = lines.firstOrNull { CHAPTER_WORD.matches(it.text) || numberInWord(it) != null } ?: return lines
+        val word = lines.firstOrNull { CHAPTER_WORD.matches(it.text) || numberInWord(it) != null } ?: return numberedOpener(lines)
         val inWord = numberInWord(word)
         val big = lines.filter { it !== word && it.size >= profile.bodySize * 1.6f && abs(it.bounds.top - word.bounds.top) <= word.size * 14f }
-        val numberLine = big.firstOrNull { BARE_NUMBER.matches(it.text) }
+        val numberLine = big.firstOrNull { BARE_NUMBER.matches(it.text) || (APPENDIX_LETTER.matches(it.text) && word.text.trim().startsWith("A", ignoreCase = true)) }
         // The title, possibly over two lines ("Capacitors and / Inductors").
         val first = big.filter { it !== numberLine && it.text.count { c -> c.isLetter() } >= 3 }.minByOrNull { it.bounds.top } ?: return lines
         val titleLines = mutableListOf(first)
@@ -627,12 +680,48 @@ class PageStructurer(private val profile: DocumentProfile) {
             if (m != null) title = (title.substring(0, m.range.first) + " " + title.substring(m.range.last + 1)).replace(Regex("\\s+"), " ").trim()
             m?.groupValues?.get(1)
         }
-        val label = word.text.filter { !it.isDigit() && !it.isWhitespace() }.lowercase().replaceFirstChar { it.uppercase() }
+        val letters = word.text.filter { !it.isDigit() && !it.isWhitespace() }
+        val label = (if (inWord != null && inWord[0].isLetter()) letters.replaceFirst(inWord, "") else letters)
+            .lowercase().replaceFirstChar { it.uppercase() }
         // (the number may be part of the artwork: then the title alone)
         val text = if (number != null) "$label $number: $title" else title
         val merged = joined(word, first, text, emptyList(), first.src)
         val drop = titleLines.drop(1).toSet() + listOfNotNull(word, numberLine)
         return lines.filter { it !in drop }.map { if (it === first) merged else it }
+    }
+
+    /**
+     * A bullet with no text after it — the dot at the end of the rule under a section heading — is
+     * an ornament.
+     */
+    private fun ornament(l: TextLine, lines: List<TextLine>): Boolean {
+        if (!LONE_BULLET.matches(l.text)) return false
+        return lines.none { o ->
+            o !== l && o.bounds.verticalOverlap(l.bounds) > 0f && o.bounds.left >= l.bounds.left &&
+                o.bounds.left - l.bounds.right <= max(l.fontSize, o.fontSize) * 3f
+        }
+    }
+
+    /**
+     * A chapter opener without the word "chapter": the title and, beside or above it, a huge
+     * chapter number ("Semiconductor Diodes   1"): one heading "1 Semiconductor Diodes".
+     */
+    private fun numberedOpener(lines: List<NLine>): List<NLine> {
+        val number = lines.filter { BARE_NUMBER.matches(it.text) && it.size >= profile.bodySize * 4f }.singleOrNull() ?: return lines
+        val title = lines.filter { l ->
+            l !== number && l.size >= profile.bodySize * 1.6f && l.size < number.size && l.text.count { it.isLetter() } >= 3 &&
+                l.bounds.top - number.bounds.bottom <= l.size * 2f && number.bounds.top - l.bounds.bottom <= l.size * 2f
+        }.minByOrNull { it.bounds.top } ?: return lines
+        // (a title over two lines: "Power Supplies / (Voltage Regulators)")
+        val titleLines = mutableListOf(title)
+        for (l in lines.filter { it !== title && it !== number && abs(it.size - title.size) <= title.size * 0.1f }.sortedBy { it.bounds.top }) {
+            if (l.bounds.top < title.bounds.top || l.bounds.top - titleLines.last().bounds.bottom > title.size * 1.2f) continue
+            titleLines += l
+        }
+        val text = number.text.trim() + " " + titleLines.joinToString(" ") { it.text.trim() }
+        val merged = joined(number, title, text, shiftStyles(title.styles, 0, title.text.length, number.text.trim().length + 1), title.src)
+        val drop = titleLines.drop(1).toSet() + number
+        return lines.filter { it !in drop }.map { if (it === title) merged else it }
     }
 
     /**
@@ -862,7 +951,9 @@ class PageStructurer(private val profile: DocumentProfile) {
 
         /** A section number printed apart from its title: "1.2", "12.10.3". */
         val SECTION_ONLY = Regex("^\\s*[0-9০-৯]{1,2}(?:\\.[0-9০-৯]{1,2}){1,3}\\.?\\s*$")
-        val CHAPTER_WORD = Regex("^\\s*(?:chapter|অধ্যায়|অধ্যায়)\\s*$", RegexOption.IGNORE_CASE)
+        val CHAPTER_WORD = Regex("^\\s*(?:chapter|appendix|অধ্যায়|অধ্যায়|পরিশিষ্ট)\\s*$", RegexOption.IGNORE_CASE)
+        private val APPENDIX_LETTER = Regex("^\\s*[A-Z]\\s*$")
+        private val LONE_BULLET = Regex("^\\s*[•●○◦▪■]\\s*$")
         val BARE_NUMBER = Regex("^\\s*(?:[0-9০-৯]{1,3}|[IVXL]{1,6})\\s*$")
         val NUMBER_TOKEN = Regex("(?<=^|\\s)([0-9০-৯]{1,3})(?=\\s|$)")
         private val BULLET_START = Regex("^\\s*[•●○◦▪■♦◆►▸]")
@@ -984,12 +1075,18 @@ class PageStructurer(private val profile: DocumentProfile) {
 
         if (MathText.isFormula(text)) return null
         val chapter = Patterns.chapter.find(text)
-        if (chapter != null && words <= 10 && !(Patterns.endsSentence(text) && !text.endsWith(':'))) {
+        // (not "Chapter 7 results in", the start of a sentence)
+        val sentence = chapter != null && text.substring(chapter.range.last + 1).trimStart().firstOrNull()?.isLowerCase() == true
+        if (chapter != null && !sentence && words <= 10 && !(Patterns.endsSentence(text) && !text.endsWith(':'))) {
             // "অধ্যায় ৩", "Chapter IV" — a bare word ("ভাগ করে…", "Part of…") needs a heading's size.
             val numbered = chapter.value.trim().split(Regex("\\s+")).size >= 2
             if ((numbered && (ratio >= 1.05f || bold || words <= 4)) || ratio >= 1.3f) return 1
         }
-        if (Patterns.frontMatter.matches(text) && (ratio >= 1.08f || bold)) return 1
+        // ("Summary" set smaller than any heading size of the book is a minor heading of a chapter,
+        // not part of its front matter)
+        if (Patterns.frontMatter.matches(text) && (ratio >= 1.08f || bold)) {
+            return if (profile.headingSizes.isNotEmpty() && line.size < profile.headingSizes.last() * 0.94f) profile.headingLevelForSize(line.size) ?: 1 else 1
+        }
         // "Section 2.4 Kirchhoff's Laws" over the exercises of that section
         if (SECTION_TITLE.matches(text) && words <= 12 && isolated) return 4
         // "Example 1.4" on its own line (often on a coloured banner): a minor heading.
@@ -1013,7 +1110,8 @@ class PageStructurer(private val profile: DocumentProfile) {
         ) {
             return null
         }
-        if (bySize != null && words <= 16 && !(text.endsWith('.') && words > 10)) {
+        // (two big letters alone, "Th" on a chapter's emblem, are no title)
+        if (bySize != null && words <= 16 && !(text.endsWith('.') && words > 10) && (text.count { it.isLetter() } >= 3 || numbered != null)) {
             // "1.2 Systems of Units" is a section, "7.9.1 Delay Circuits" a subsection, whatever their size.
             val depth = numbered?.groupValues?.get(1)?.count { it == '.' } ?: 0
             return if (depth >= 1) (1 + depth).coerceAtMost(4) else bySize
@@ -1036,8 +1134,8 @@ class PageStructurer(private val profile: DocumentProfile) {
             return 4
         }
         val letters = text.filter { it.isLetter() }
-        // (mostly words: "LN 2 ENTER 693.15E−3" is a calculator sequence)
-        if (letters.length >= 4 && letters.all { it in 'A'..'Z' } && words <= 8 && ratio >= 1.0f && isolated &&
+        // (mostly words: "LN 2 ENTER 693.15E−3" is a calculator sequence, "VCE = VCC − ICRC" a formula)
+        if (letters.length >= 4 && letters.all { it in 'A'..'Z' } && words <= 8 && ratio >= 1.0f && isolated && text.none { it in "=≈≠≅<>≤≥" } &&
             letters.length >= text.count { !it.isWhitespace() } * 0.6f
         ) {
             return 4

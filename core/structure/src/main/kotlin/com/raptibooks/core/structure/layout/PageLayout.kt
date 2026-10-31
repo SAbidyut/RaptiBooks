@@ -74,6 +74,8 @@ class TableRegion(
 /**
  * A tinted callout box around text (worked example, definition, note). Colours are 0xRRGGBB.
  * [openTop]/[openBottom]: the box runs on from the previous page / onto the next one.
+ * [closing]: only the end of a box begun on an earlier page (the text above the rule that closes
+ * a worked example); without such a box it is no box at all.
  */
 class BoxRegion(
     val bounds: Rect,
@@ -81,6 +83,7 @@ class BoxRegion(
     val accent: Int,
     val openTop: Boolean = false,
     val openBottom: Boolean = false,
+    val closing: Boolean = false,
 )
 
 /**
@@ -157,6 +160,7 @@ class PageLayout(
                     out.writeInt(b.accent)
                     out.writeBoolean(b.openTop)
                     out.writeBoolean(b.openBottom)
+                    out.writeBoolean(b.closing)
                 }
                 out.writeInt(layout.pictures.size)
                 for (p in layout.pictures) {
@@ -202,7 +206,7 @@ class PageLayout(
                     TableRegion(b, rows, header, ruled, caption, path, w, h)
                 }
                 val boxes = List(inp.readInt()) {
-                    BoxRegion(readRect(inp), inp.readInt(), inp.readInt(), inp.readBoolean(), inp.readBoolean())
+                    BoxRegion(readRect(inp), inp.readInt(), inp.readInt(), inp.readBoolean(), inp.readBoolean(), inp.readBoolean())
                 }
                 val pictures = List(inp.readInt()) {
                     PictureRegion(inp.readInt(), readRect(inp), inp.readFloat(), readNullable(inp), inp.readInt(), inp.readInt())
