@@ -191,6 +191,16 @@ class ReflowEngine(
         flushTable()
         val r = el.region
         if (el.start) {
+            if (r.closing) {
+                // the end of a worked example begun on an earlier page: its card goes on to here
+                val label = labelBox
+                labelBox = null
+                openBox?.let { closeBox(it) }
+                openBox = continuingBox?.takeIf { label == null } ?: label
+                if (label != null) continuingBox?.let { closeBox(it) }
+                continuingBox = null
+                return
+            }
             closeLabelBox()
             val cont = continuingBox
             continuingBox = null

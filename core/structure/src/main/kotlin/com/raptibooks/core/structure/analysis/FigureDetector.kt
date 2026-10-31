@@ -7,6 +7,7 @@ import com.raptibooks.core.structure.layout.TableRegion
 import com.raptibooks.core.structure.layout.TextLine
 import com.raptibooks.core.structure.raw.PathShape
 import com.raptibooks.core.structure.raw.RawPage
+import com.raptibooks.core.structure.raw.VectorPath
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -69,6 +70,25 @@ class FigureDetector {
         items += added
     }
 
+    /** A stroked rectangle, or the fill of one. */
+    private fun framed(p: VectorPath, page: RawPage): Boolean = p.stroked || page.paths.any { o ->
+        o.stroked && o.shape == PathShape.RECTANGLE && abs(o.bounds.left - p.bounds.left) <= 1.5f && abs(o.bounds.top - p.bounds.top) <= 1.5f &&
+            abs(o.bounds.right - p.bounds.right) <= 1.5f && abs(o.bounds.bottom - p.bounds.bottom) <= 1.5f
+    }
+
+    private fun edgesTouched(b: Rect, page: RawPage): Int =
+        listOf(b.left <= 2f, b.top <= 2f, b.right >= page.width - 2f, b.bottom >= page.height - 2f).count { it }
+
+    /**
+     * Artwork that bleeds off the page, like that of a chapter opener: a picture in a corner of
+     * the page, or a band across its whole width at the top or bottom.
+     */
+    private fun bleedBand(b: Rect, page: RawPage): Boolean {
+        val touched = edgesTouched(b, page)
+        val band = b.width >= page.width * 0.9f && b.height <= page.height * 0.25f && (b.top <= 2f || b.bottom >= page.height - 2f)
+        return touched >= 2 && (band || (b.left <= 2f || b.right >= page.width - 2f) && (b.top <= 2f || b.bottom >= page.height - 2f))
+    }
+
     fun detect(
         page: RawPage,
         lines: List<TextLine>,
@@ -89,6 +109,8 @@ class FigureDetector {
             if (b.width < 14f || b.height < 14f) continue
             if (b.area > pageArea * 0.85f) continue // full-page background or scan; handled by OCR logic
             if (inTable(b)) continue
+            // (artwork bleeding off the page with text printed over it is the backdrop of an opener)
+            if (!page.fromOcr && page.ink == null && bleedBand(b, page) && lines.any { b.contains(it.bounds.centerX, it.bounds.centerY) }) continue
             items += Item(b, strong = true, raster = true, complex = false, rect = false)
         }
         for (p in page.paths) {
@@ -96,6 +118,12 @@ class FigureDetector {
             if (b.isEmpty && p.shape == PathShape.COMPLEX) continue
             if (b.area > pageArea * 0.6f) continue // page frames and backgrounds
             if (inTable(b)) continue
+            // a tinted panel bleeding off the page is the backdrop of a chapter opener
+            if (p.shape == PathShape.RECTANGLE && !p.stroked && b.area > pageArea * 0.05f && edgesTouched(b, page) >= 1) continue
+            // and the frame around a boxed formula (with its tint) belongs to the formula
+            if (p.shape == PathShape.RECTANGLE && framed(p, page) &&
+                equations.any { e -> (b.outset(2f).contains(e) && b.area <= e.area * 2.5f) || b.coveredBy(e.outset(6f)) >= 0.9f }
+            ) continue
             when (p.shape) {
                 PathShape.COMPLEX -> if (max(b.width, b.height) >= 4f) {
                     // Thin pieces (mitred box borders, rules drawn as polygons) are lines, not drawings.

@@ -40,7 +40,7 @@ fun convert(pdf: File) {
                 val key = if (f.glyph in names) f.glyph else "${f.fontName.substringAfter('+')}:${f.text}".takeIf { it in names } ?: continue
                 if ((found[key] ?: 0) >= 2) continue
                 found[key] = (found[key] ?: 0) + 1
-                println("glyph $key page=${i + 1} x=${f.left} base=${f.baseline} size=${f.fontSize} w=${f.right - f.left} ${f.fontName}")
+                println("glyph $key page=${i + 1} x=${f.left} base=${f.baseline} size=${f.fontSize} w=${f.right - f.left} ${f.fontName} name=${f.glyph}")
             }
         }
         ex.close()

@@ -133,7 +133,8 @@ internal class TextCollector : PDFTextStripper() {
             for ((a, i) in sorted.withIndex()) {
                 if (i in drop) continue
                 val f = fragments[i]
-                val tol = minOf(f.fontSize * 0.12f, 3f)
+                // (a huge chapter number's shadow is set further off)
+                val tol = minOf(f.fontSize * 0.12f, maxOf(3f, f.fontSize * 0.05f))
                 for (b in a + 1 until sorted.size) {
                     val j = sorted[b]
                     val g = fragments[j]

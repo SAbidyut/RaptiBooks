@@ -18,8 +18,10 @@ screen. Bangla and English are both first-class, and everything runs offline.
   resumable after the app is killed):
   - text with positions and font styles (bold, italic incl. synthetic, superscript);
   - running headers/footers and page numbers removed (repetition across pages; also running
-    heads that change with every section but carry the page number, "A BRIEF HISTORY ⏐ 3");
-    titles printed twice for a shadow effect are read once;
+    heads that change with every section but carry the page number, "A BRIEF HISTORY ⏐ 3",
+    and running heads set in the side margin beside the text, "2  SEMICONDUCTOR / DIODES",
+    also where they share a row with the text); titles printed twice for a shadow effect are
+    read once;
   - headings from font-size levels, bold lines, "Chapter/অধ্যায়" and "2.3"-style numbering;
   - paragraphs re-joined across lines, columns and page breaks, with de-hyphenation (a word
     the book prints with its hyphen, "three-phase", keeps it at a line break); glossaries
@@ -51,12 +53,25 @@ screen. Bangla and English are both first-class, and everything runs offline.
   - **math symbols of "pi fonts"** (Linotype Mathematical Pi, Greek-keyboard and operator
     fonts of engineering textbooks) are read from their glyph names and known layouts: the
     "=", "≠", "±", "∠", "Δ", "Π", "ω", "θ", "Ω", "π", "≈", "≅", "″" that otherwise vanish or turn
-    into "¢", "ß", "u", "p", "6"; any other symbol without Unicode mapping is identified from
-    its printed shape;
+    into "¢", "ß", "u", "p", "6" — also Pearson's numbered math fonts ("PearsonMATH01"…"20":
+    "VD>ID" is "VD/ID", "b" is β, "Ú" is ≥, the radicals, parallel bars and tall brackets); any
+    other symbol without Unicode mapping is identified from its printed shape; formulas whose
+    operators have no space glyphs keep their spaces ("+VCC − IBRB − VBE = 0"), and a line of
+    subscripted symbols ("VCE = VCC − ICRC") is a formula, not a heading in capitals;
+  - **chapter openers** without the word "chapter" (the title beside a huge "1", a title over
+    two lines) become "1 Semiconductor Diodes"; "AppenBdix" (the appendix letter printed over
+    the word) becomes "Appendix B: …"; the tinted panels and bleeding artwork behind an opener
+    are no table, figure or callout; the dot at the end of the rule under a section heading is
+    no bullet;
   - **worked examples and practice problems** ("Example 2.3", "Practice Problem 2.3",
     "উদাহরণ ৪.১", also examples set between two rules and labels printed at the start of the
     question, "EXAMPLE 6.11 Determine…") become cards of their own, up to the answer or the
-    next section;
+    next section — or up to the coloured rule that closes the example, also when that rule
+    is on a later page (a thick bar over the label opens it; "Solution:" and the example's
+    own figure caption "Example 1.3." do not end it);
+  - boxed formulas next to a figure stay formulas (the frame is the formula's, not part of
+    the drawing), also when the numerator has subscripts ("VCC" over "RC" is no superscript);
+    derivations of subscripted symbols ("RTh", "ETh", "R2VCC") are one picture;
   - **calculator keys** ("2ND", "√", "ENTER" drawn as key caps) and the display after them are
     one picture per row;
   - derivations with words on their rows ("so that", "and", "resulting in") stay one picture;

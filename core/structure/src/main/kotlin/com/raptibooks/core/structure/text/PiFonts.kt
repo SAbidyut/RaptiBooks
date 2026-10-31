@@ -50,6 +50,36 @@ object PiFonts {
         'r' to "ρ", 's' to "σ", 'w' to "ς", 't' to "τ", 'y' to "υ", 'f' to "φ", 'x' to "χ", 'c' to "ψ", 'v' to "ω",
     )
 
+    /**
+     * Pearson's math fonts ("PearsonMATH01"…"PearsonMATH20"), numbered sets whose mapping names
+     * the key typed: 01 is Greek on a Greek keyboard (capitals for the bold cut), the others hold
+     * operators, relations, arrows and pieces of tall delimiters ("" = a piece without text).
+     */
+    private val PEARSON = mapOf(
+        "02" to mapOf(
+            "*" to "×", ":" to "×", "-" to "−", "+" to "+", "=" to "=", "#" to "·", "6" to "<", "7" to ">",
+            "Ú" to "≥", "G" to "≥", "F" to "≤", "…" to "≤", "W" to "≫", "V" to "≪", "S" to "→", "c" to "↑",
+            "T" to "↓", "P" to "ϵ", "Æ" to "Ω", "æ" to "Ω", "ƒ" to "|", "¢" to "Δ", "0" to "∂", "1" to "⇒",
+            "3" to "⇔", "l" to "∠",
+        ),
+        "07" to mapOf("1" to "∫", "L" to "∫"),
+        "08" to mapOf("=" to "=", "-" to "−"),
+        "09" to mapOf("X" to "-", "_" to "≅"),
+        "11" to mapOf("@" to "-", "*" to "*", "-" to "†", "[" to "‡", ":" to "—"),
+        "13" to mapOf("g" to "⋯", "{" to "±", "}" to "‖", "c" to "…"),
+        "15" to mapOf("\"" to "‖", "s" to "}"),
+        "16" to mapOf(
+            "#" to "≥", "*" to "<", "+" to ">", "," to "/", "3" to "≠", "@" to "≅", "H" to "∞", "f" to "≪",
+            "g" to "≫", "~" to "·",
+        ),
+        "18" to mapOf(
+            ">" to "/", "0" to "|", "`" to "|", "7" to "‖", "g" to "‖", "1" to "(", "2" to ")", "a" to "(",
+            "b" to ")", "c" to "[", "d" to "]", "3" to "[", "4" to "]", "e" to "{", "f" to "}", "£" to "[",
+            "§" to "]", "¢" to "[", "°" to "]",
+        ),
+        "20" to mapOf("1" to "√", "2" to "√", "A" to "√", "B" to "√"),
+    )
+
     private val SCRIPT = mapOf("F" to "ℱ", "L" to "ℒ", "H" to "ℋ", "E" to "ℰ", "B" to "ℬ", "R" to "ℛ", "I" to "ℐ", "M" to "ℳ")
 
     /**
@@ -68,6 +98,10 @@ object PiFonts {
             family == "Grk" || family.startsWith("Grk-") -> {
                 val c = text.singleOrNull() ?: return null
                 GREEK_KEYBOARD[c.lowercaseChar()] ?: text
+            }
+            family.startsWith("PearsonMATH") -> if (text.isBlank()) null else when (val set = family.removePrefix("PearsonMATH").take(2)) {
+                "01" -> text.singleOrNull()?.let { GREEK_KEYBOARD[it.lowercaseChar()] } ?: text
+                else -> PEARSON[set]?.let { it[text] ?: "" }
             }
             family.startsWith("Fancy") || family.startsWith("CMSY") -> SCRIPT[text]
             family.startsWith("Rads") -> if (text in setOf("1", "2", "A", "B")) "√" else ""

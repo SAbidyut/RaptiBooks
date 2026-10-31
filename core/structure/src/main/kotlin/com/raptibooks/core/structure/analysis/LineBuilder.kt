@@ -155,7 +155,17 @@ class LineBuilder(
                     val prevSolid = current.lastOrNull { !it.f.isSpace }
                     val captionStart = prevSolid != null && !marker && gap >= em * 0.4f && CAPTION_START.containsMatchIn(restText()) &&
                         (fr.f.bold != prevSolid.f.bold || abs(fr.f.fontSize - prevSolid.f.fontSize) >= prevSolid.f.fontSize * 0.12f)
-                    if (captionStart || gap >= em * chunkGapEm && !marker && columnEdge(fr.left, restText) && !crossed(mid, fr.left) &&
+                    // A running head in the margin beside a line of text ("…from the n-type
+                    // SEMICONDUCTOR DIODE 13", "276 BJT AC ANALYSIS   But"): capitals in another
+                    // face and size.
+                    fun caps(r: String) = r.split(' ').count { it.isNotBlank() } <= 5 && r.none { it.isLowerCase() } && r.count { it.isUpperCase() } >= 4
+                    fun prose(r: String) = r.split(' ').count { w -> w.count { it.isLowerCase() } >= 2 } >= 3
+                    val headStart = prevSolid != null && !marker && gap >= em * 1.2f && fr.f.fontName != prevSolid.f.fontName &&
+                        abs(fr.f.fontSize - prevSolid.f.fontSize) >= prevSolid.f.fontSize * 0.08f &&
+                        current.joinToString("") { if (it.f.isSpace) " " else it.f.text }.let { before ->
+                            (caps(restText()) && prose(before)) || (caps(before) && prose(restText()))
+                        }
+                    if (captionStart || headStart || gap >= em * chunkGapEm && !marker && columnEdge(fr.left, restText) && !crossed(mid, fr.left) &&
                         (near.count { it.right <= maxRight + 2f } >= 1 || label())
                     ) {
                         out += current
@@ -223,6 +233,16 @@ class LineBuilder(
         return rows
     }
 
+    /** The size of a row that is one capital letter with its subscripts right after it ("VCC"). */
+    private fun symbolSize(r: Row): Float? {
+        val solid = r.frags.filter { !it.f.isSpace }.sortedBy { it.left }
+        val base = solid.firstOrNull() ?: return null
+        if (solid.size < 2 || base.f.text.singleOrNull()?.isUpperCase() != true) return null
+        val subscripts = solid.drop(1)
+        if (subscripts.any { it.size > base.size * 0.87f || it.f.baseline < base.f.baseline + base.size * 0.1f }) return null
+        return if (solid.zipWithNext().all { (a, b) -> b.left - a.right <= base.size * 0.15f }) base.size else null
+    }
+
     private fun mergeSuperscripts(rows: MutableList<Row>) {
         // A row runs across the page: its pieces are judged on their own (the subscripts of a
         // line in one column share a baseline with the labels of a figure in the other).
@@ -246,7 +266,8 @@ class LineBuilder(
             val sorted = rows.sortedBy { it.baseline }
             for ((i, r) in sorted.withIndex()) {
                 if (r.charCount > 12) continue
-                val rSize = r.size
+                // (a symbol and its subscript, "VCC" over a fraction bar, is as big as the symbol)
+                val rSize = symbolSize(r) ?: r.size
                 // Not only the rows right above and below: a line of another column may sit in between.
                 val candidates = (maxOf(0, i - 4)..minOf(sorted.size - 1, i + 4)).filter { it != i }.map { sorted[it] }
                 val target = candidates.filter { n ->
@@ -455,7 +476,10 @@ class LineBuilder(
                         min(max(inferred, lineSize * 0.15f), tightGap ?: Float.MAX_VALUE)
                     else -> lineSize * 0.6f
                 }
-                needSpace = pendingSpace || (!trustSpaces && gap > threshold)
+                // (where only the space glyphs are trusted, an operator set apart still has its
+                // spaces: "+VCC − IBRB − VBE = 0" in a book whose formulas have no space glyphs)
+                val operator = trustSpaces && gap > lineSize * 0.3f && (p.f.text in OPERATORS || text in OPERATORS)
+                needSpace = pendingSpace || (!trustSpaces && gap > threshold) || operator
                 if (gap > chunkGapEm * lineSize) {
                     flushBijoy()
                     chunks += Chunk(chunkLeft, chunkRight, chunkStart, sb.length)
@@ -844,6 +868,8 @@ class LineBuilder(
         )
         /** "Figure 3.117", "Fig. 2.4", "Table 1.3": a numbered caption label opening the text. */
         private val CAPTION_START = Regex("^\\s*(?:figure|fig\\.|table)\\s*[0-9]+(?:\\.[0-9]+)*", RegexOption.IGNORE_CASE)
+        /** Operators and relations, set with space around them in a formula. */
+        private val OPERATORS = setOf("=", "+", "−", "×", "÷", "±", "<", ">", "≤", "≥", "≅", "≈", "≠", "→", "⇒", "≫", "≪")
         private val MARKER_ONLY = Regex("^[(\\[]?[0-9০-৯]{1,3}(?:\\.[0-9০-৯]{1,3})*[.)\\]]?$|^[•●○◦▪■♦◆►▸*–-]$|^[(]?[a-zA-Z][.)]$")
 
         private fun medianSize(frags: List<Frag>): Float {

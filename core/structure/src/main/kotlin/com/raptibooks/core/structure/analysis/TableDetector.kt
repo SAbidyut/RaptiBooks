@@ -398,7 +398,11 @@ class TableDetector(private val lineBuilder: LineBuilder) {
                 PathShape.HORIZONTAL_LINE -> if (b.width >= 12f) raw += Seg(true, b.centerY, b.left, b.right)
                 PathShape.VERTICAL_LINE -> if (b.height >= 8f) raw += Seg(false, b.centerX, b.top, b.bottom)
                 PathShape.RECTANGLE -> {
-                    val edges = (p.stroked || (p.filled && !p.lightFill)) && b.area < pageArea * 0.5f
+                    // (a tinted panel that bleeds off the page, the backdrop of a chapter opener,
+                    // has no table in its edges)
+                    val bleed = !p.stroked && b.area > pageArea * 0.05f &&
+                        (b.left <= 2f || b.top <= 2f || b.right >= page.width - 2f || b.bottom >= page.height - 2f)
+                    val edges = (p.stroked || (p.filled && !p.lightFill)) && b.area < pageArea * 0.5f && !bleed
                     if (edges && b.width >= 12f && b.height >= 6f) {
                         raw += Seg(true, b.top, b.left, b.right)
                         raw += Seg(true, b.bottom, b.left, b.right)
