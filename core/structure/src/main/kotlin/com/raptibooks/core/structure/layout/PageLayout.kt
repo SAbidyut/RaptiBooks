@@ -29,7 +29,10 @@ class TextLine(
      * its [InlineStyle.PICTURE] style carries in this line.
      */
     val pictures: List<Rect> = emptyList(),
+    /** Share of the line's letters set in a monospace font (code, terminal output). */
+    val monoRatio: Float = 0f,
 ) {
+    val isMonospace: Boolean get() = monoRatio >= 0.5f
     val isBold: Boolean get() = boldRatio >= 0.75f
     val isItalic: Boolean get() = italicRatio >= 0.75f
     val wordCount: Int get() = text.split(' ').count { it.isNotBlank() }
@@ -226,6 +229,7 @@ class PageLayout(
             for (c in l.chunks) {
                 out.writeFloat(c.left); out.writeFloat(c.right); out.writeInt(c.textStart); out.writeInt(c.textEnd)
             }
+            out.writeFloat(l.monoRatio)
         }
 
         private fun readLine(inp: DataInputStream): TextLine {
@@ -238,7 +242,8 @@ class PageLayout(
             val italic = inp.readFloat()
             val font = readString(inp)
             val chunks = List(inp.readInt()) { Chunk(inp.readFloat(), inp.readFloat(), inp.readInt(), inp.readInt()) }
-            return TextLine(text, styles, bounds, baseline, size, bold, italic, font, chunks)
+            val mono = inp.readFloat()
+            return TextLine(text, styles, bounds, baseline, size, bold, italic, font, chunks, monoRatio = mono)
         }
 
         private fun writeRect(out: DataOutputStream, r: Rect) {

@@ -50,6 +50,9 @@ class LineBuilder(
         val charCount: Int get() = frags.sumOf { it.f.text.trim().length }
     }
 
+    /** Whether a font is a monospace one (code, terminal output). */
+    private fun isMonospaceFont(name: String): Boolean = MONOSPACE.containsMatchIn(name.substringAfter('+').lowercase())
+
     /** Text in scripts whose glyph advances are reliable (Latin, Greek, Cyrillic, digits, math). */
     private fun simpleScript(text: String): Boolean = text.all { it.code < 0x0590 || it.code in 0x1D00..0x2BFF || it == TextCleaner.PLACEHOLDER }
 
@@ -250,15 +253,35 @@ class LineBuilder(
                 // Not only the rows right above and below: a line of another column may sit in between.
                 val candidates = (maxOf(0, i - 4)..minOf(sorted.size - 1, i + 4)).filter { it != i }.map { sorted[it] }
                 val target = candidates.filter { n ->
-                    rSize <= n.size * 0.87f &&
+                    (rSize <= n.size * 0.87f &&
                         r.baseline > n.baseline - n.size * 0.9f && r.baseline < n.baseline + n.size * 0.45f &&
-                        r.left < n.right + n.size && r.right > n.left - n.size
+                        r.left < n.right + n.size && r.right > n.left - n.size) ||
+                        setAgainst(r, n)
                 }.minByOrNull { abs(it.baseline - r.baseline) } ?: continue
                 target.frags += r.frags
                 rows.remove(r)
                 changed = true
                 break
             }
+        }
+    }
+
+    /**
+     * A subscript or exponent set only a little smaller than the glyph it hangs on (HTML's `sub`
+     * and `sup` inside a smaller math span: 10.7 pt under 11.3 pt, "E" with a "k" below it, a
+     * numerator "(২ × ৫)" with a "৭" above), moved a good part of the size away and touching
+     * a glyph of the row.
+     */
+    private fun setAgainst(r: Row, n: Row): Boolean {
+        if (r.charCount > 4 || r.size > n.size * 0.97f) return false
+        val shift = r.baseline - n.baseline
+        val em = n.size
+        val lowered = shift in em * 0.28f..em * 0.8f
+        val raised = -shift in em * 0.22f..em * 0.9f
+        if (!lowered && !raised) return false
+        return n.frags.any { g ->
+            !g.f.isSpace && abs(g.f.baseline - n.baseline) <= em * 0.1f &&
+                abs(r.left - g.right) <= em * 0.25f && g.f.fontSize >= r.size
         }
     }
 
@@ -418,6 +441,8 @@ class LineBuilder(
         var boldChars = 0
         var italicChars = 0
         var totalChars = 0
+        var solidChars = 0
+        var monoChars = 0
         val fontChars = HashMap<String, Int>()
 
         // Bijoy (ANSI Bangla) runs are converted as a whole so that reordering works per word.
@@ -470,6 +495,10 @@ class LineBuilder(
             if (f.fontSize < lineSize * 0.87f) {
                 if (f.baseline < baseline - lineSize * 0.15f) flags = flags or InlineStyle.SUPERSCRIPT
                 else if (f.baseline > baseline + lineSize * 0.08f) flags = flags or InlineStyle.SUBSCRIPT
+            } else if (f.fontSize <= lineSize * 0.97f) {
+                // (set only a little smaller, but well off the baseline: see setAgainst)
+                if (f.baseline < baseline - lineSize * 0.22f) flags = flags or InlineStyle.SUPERSCRIPT
+                else if (f.baseline > baseline + lineSize * 0.28f) flags = flags or InlineStyle.SUBSCRIPT
             }
             if (isBijoy) {
                 val run = bijoyRun ?: StringBuilder().also {
@@ -503,6 +532,10 @@ class LineBuilder(
             if (f.bold) boldChars += n
             if (f.italic) italicChars += n
             fontChars.merge(f.fontName, n, Int::plus)
+            if (!f.isSpace) {
+                solidChars += n
+                if (isMonospaceFont(f.fontName)) monoChars += n
+            }
             chunkRight = max(chunkRight, f.right)
             maxRight = max(maxRight, f.right)
             prev = fr
@@ -537,6 +570,7 @@ class LineBuilder(
             italicRatio = if (totalChars == 0) 0f else italicChars.toFloat() / totalChars,
             fontName = fontChars.maxByOrNull { it.value }?.key ?: "",
             chunks = if (lineChunks.size > 1) lineChunks else emptyList(),
+            monoRatio = if (solidChars == 0) 0f else monoChars.toFloat() / solidChars,
         )
         if (positions && !RtlText.hasRtl(sb)) {
             charPlaces[built] = charLeft.subList(0, sb.length).toFloatArray() to charRight.subList(0, sb.length).toFloatArray()
@@ -625,7 +659,7 @@ class LineBuilder(
             }
             val bounds = Rect.bounding(row.map { it.bounds })!!
             val first = row.first()
-            out += TextLine(sb.toString(), styles, bounds, first.baseline, first.fontSize, first.boldRatio, first.italicRatio, first.fontName, emptyList(), pictures)
+            out += TextLine(sb.toString(), styles, bounds, first.baseline, first.fontSize, first.boldRatio, first.italicRatio, first.fontName, emptyList(), pictures, first.monoRatio)
         }
         return out
     }
@@ -726,7 +760,7 @@ class LineBuilder(
                 if (b >= a) styles += InlineStyle(a, b + 1, st.flags)
             }
         }
-        return TextLine(sb.toString(), styles.sortedBy { it.start }, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, emptyList(), pictures)
+        return TextLine(sb.toString(), styles.sortedBy { it.start }, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, emptyList(), pictures, l.monoRatio)
     }
 
     /**
@@ -810,6 +844,9 @@ class LineBuilder(
     }
 
     companion object {
+        /** Fonts of code and terminal output (not "Unicode": the match needs a word of its own). */
+        private val MONOSPACE = Regex("mono|courier|consolas|menlo|inconsolata|typewriter|lucidaconsole|firacode|sourcecode|cousine|andale|monaco|jetbrains|sfmono|hack\\b")
+
         private const val SUPER_FROM = "0123456789+-−=()ni"
         private const val SUPER_TO = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ⁿⁱ"
         private const val SUB_FROM = "0123456789+-−=()aeox"

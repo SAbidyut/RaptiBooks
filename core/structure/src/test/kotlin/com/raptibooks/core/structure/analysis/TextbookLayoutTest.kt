@@ -27,6 +27,24 @@ class TextbookLayoutTest {
     }
 
     @Test
+    fun monospaceLinesInAPaddedPanelAreOneCodeBlockWithTheirIndentation() {
+        val frags = mutableListOf<TextFragment>()
+        for (k in 0 until 8) frags += words("body line $k of the running text in the main column of the page", 72f, 100f + k * 13f, size = 10f)
+        // a panel padded 14 pt: lines of code, the third indented by four characters
+        val code = listOf("services:", "  api:", "    build: .", "  db:")
+        for ((k, l) in code.withIndex()) {
+            val indent = l.length - l.trimStart().length
+            val text = l.trimStart()
+            val x = 86f + indent * 5f
+            frags += TextFragment(text, x, 220f + k * 12f, x + text.length * 5f, 230f + k * 12f, 228f + k * 12f, 8.5f, "DejaVu-Sans-Mono")
+        }
+        for (k in 0 until 4) frags += words("more body text after the code block $k that goes on for a while", 72f, 300f + k * 13f, size = 10f)
+        val blocks = structure(frags).filterIsInstance<StructuredElement.Paragraph>().filter { it.kind == ParagraphKind.CODE }
+        assertEquals(1, blocks.size)
+        assertEquals("services:\n  api:\n    build: .\n  db:", blocks.single().text)
+    }
+
+    @Test
     fun wordsOfTightlyJustifiedLinesKeepTheirSpaces() {
         // The text layer has space glyphs, but this line was set without them: words are moved.
         val glyphs = mutableListOf<TextFragment>()

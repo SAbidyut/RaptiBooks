@@ -91,15 +91,24 @@ class FigureDetector {
             if (inTable(b)) continue
             items += Item(b, strong = true, raster = true, complex = false, rect = false)
         }
+        // Chips drawn around words of a sentence (inline `code`, a keyboard key, a highlighted
+        // term) are decoration of the text, not drawings: they sit inside a line of running text.
+        val chipBody = bodySizeHint ?: PageAnalyzer.typicalSize(lines, page.width)
+        val chipLines = lines.filter { isProse(it, chipBody, page.width) }
+        fun inlineChip(b: Rect): Boolean = b.height <= chipBody * 1.9f && b.width <= page.width * 0.6f && chipLines.any { l ->
+            l.bounds.verticalOverlap(b) >= min(b.height, l.bounds.height) * 0.7f && b.centerX in l.bounds.left..l.bounds.right
+        }
         for (p in page.paths) {
             val b = p.bounds.clamp(page.width, page.height)
             if (b.isEmpty && p.shape == PathShape.COMPLEX) continue
             if (b.area > pageArea * 0.6f) continue // page frames and backgrounds
             if (inTable(b)) continue
+            if (p.shape != PathShape.HORIZONTAL_LINE && p.shape != PathShape.VERTICAL_LINE && inlineChip(b)) continue
             when (p.shape) {
                 PathShape.COMPLEX -> if (max(b.width, b.height) >= 4f) {
                     // Thin pieces (mitred box borders, rules drawn as polygons) are lines, not drawings.
-                    val thin = min(b.width, b.height) <= 4f && max(b.width, b.height) >= min(b.width, b.height) * 6f
+                    // (a 4.5 pt accent border of a rounded callout is one too, drawn piece by piece)
+                    val thin = min(b.width, b.height) <= 6.5f && max(b.width, b.height) >= min(b.width, b.height) * 6f
                     items += if (thin) {
                         Item(b, strong = false, raster = false, complex = false, rect = false)
                     } else {

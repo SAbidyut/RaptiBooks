@@ -132,6 +132,20 @@ class ConversionTest {
         assertTrue(content.search(id, "যুক্তাক্ষর").isNotEmpty())
     }
 
+    /**
+     * A WeasyPrint PDF (Kalpurush): its ToUnicode map has lost the vowel signs ি ে ৈ, put "র্থ" on
+     * the reph and "্যু" on a ya-phala; the text is rebuilt from the font's own cmap and outlines.
+     */
+    @Test
+    fun convertsBanglaPdfWithADamagedToUnicodeMap() {
+        val (id, content) = convert("weasyprint_bangla.pdf")
+        val all = content.blocks(id, 0, 10_000).joinToString("\n") { it.plainText }
+        for (word in listOf("কোনো বস্তুর", "যান্ত্রিক শক্তি কাকে বলে", "কর্মদক্ষতা", "নবায়নযোগ্য", "বিভব শক্তি", "ব্যাখ্যা কর", "সৃষ্টি বা ধ্বংস")) {
+            assertTrue("missing '$word' in: $all", all.contains(word))
+        }
+        assertFalse(all, all.contains("কাক বলে") || all.contains("কানা"))
+    }
+
     /** Contents page, flow/radial diagrams with labels, a table followed by rules, a callout and MCQs. */
     @Test
     fun convertsTextbookLayouts() {

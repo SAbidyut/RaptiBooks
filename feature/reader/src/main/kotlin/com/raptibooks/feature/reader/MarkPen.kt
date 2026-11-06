@@ -121,6 +121,7 @@ internal fun MarkableText(
     modifier: Modifier = Modifier,
     part: Int = 0,
     inlineContent: Map<String, InlineTextContent> = emptyMap(),
+    softWrap: Boolean = true,
 ) {
     val marks = LocalMarks.current
     val key = MarkKey.of(blockIndex, part)
@@ -140,6 +141,7 @@ internal fun MarkableText(
     Text(
         text, style = style,
         inlineContent = inlineContent,
+        softWrap = softWrap,
         onTextLayout = { layout = it; target.layout = it },
         modifier = modifier
             .onGloballyPositioned { target.coords = it }

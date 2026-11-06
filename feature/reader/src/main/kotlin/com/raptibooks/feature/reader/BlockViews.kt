@@ -211,6 +211,7 @@ private fun ParagraphView(block: ParagraphBlock, style: ReaderStyle, highlight: 
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing),
         )
         ParagraphKind.FORMULA -> FormulaView(text, style)
+        ParagraphKind.CODE -> CodeView(block.index, text, style)
         ParagraphKind.NOTE, ParagraphKind.TOC, ParagraphKind.OPTIONS -> MarkableText(
             block.index, text, style = base.copy(fontSize = (style.fontSize.value * 0.82f).sp, color = style.colors.secondary, textAlign = TextAlign.Start),
             modifier = Modifier.fillMaxWidth().padding(bottom = spacing / 2), inlineContent = pictures,
@@ -238,6 +239,36 @@ private fun FormulaView(text: AnnotatedString, style: ReaderStyle) {
                 modifier = Modifier.widthIn(min = width).padding(horizontal = 4.dp),
             )
         }
+    }
+}
+
+/**
+ * Program code or terminal output: monospace on a tinted panel, lines and indentation as
+ * printed, never wrapped (a long line scrolls sideways).
+ */
+@Composable
+private fun CodeView(blockIndex: Int, text: AnnotatedString, style: ReaderStyle) {
+    val size = style.fontSize.value * 0.8f
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = (style.fontSize.value * 0.75f).dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(style.colors.text.copy(alpha = 0.07f))
+            .horizontalScroll(rememberScrollState()),
+    ) {
+        MarkableText(
+            blockIndex, text,
+            style = style.body.copy(
+                fontFamily = FontFamily.Monospace,
+                fontSize = size.sp,
+                lineHeight = (size * 1.5f).sp,
+                textAlign = TextAlign.Start,
+                hyphens = Hyphens.None,
+            ),
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        )
     }
 }
 

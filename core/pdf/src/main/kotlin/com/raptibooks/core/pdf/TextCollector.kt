@@ -2,6 +2,7 @@ package com.raptibooks.core.pdf
 
 import com.raptibooks.core.structure.geometry.Rect
 import com.raptibooks.core.structure.raw.TextFragment
+import com.raptibooks.core.structure.text.BanglaGlyphs
 import com.raptibooks.core.structure.text.PiFonts
 import com.raptibooks.core.structure.text.TextCleaner
 import com.tom_roush.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequence
@@ -18,6 +19,7 @@ import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
 import com.tom_roush.pdfbox.util.Matrix
 import com.tom_roush.pdfbox.util.Vector
+import java.util.IdentityHashMap
 import kotlin.math.abs
 
 /**
@@ -56,6 +58,20 @@ internal class TextCollector : PDFTextStripper() {
 
     private val markedStack = ArrayDeque<ActualTextSpan?>()
 
+    /** A glyph of a Bangla font with a damaged ToUnicode map, with where it was drawn. */
+    private class BanglaGlyphEvent(
+        val glyph: BanglaGlyphs.Glyph,
+        val x0: Float,
+        val x1: Float,
+        val baseline: Float,
+        val size: Float,
+        val font: PDFont,
+    )
+
+    /** The page's Bangla glyphs in drawing order; a null ends a run (any other glyph was drawn). */
+    private val banglaRun = ArrayList<BanglaGlyphEvent?>()
+    private val banglaDecoders = IdentityHashMap<PDFont, BanglaGlyphDecoder?>()
+
     /** Set while PdfBox processes a glyph that was already recorded as a placeholder. */
     private var suppressText = false
 
@@ -91,6 +107,69 @@ internal class TextCollector : PDFTextStripper() {
         )
     }
 
+
+    // ---------------------------------------------------------------- Bangla with a damaged ToUnicode map
+
+    private fun banglaDecoder(font: PDFont): BanglaGlyphDecoder? {
+        if (banglaDecoders.containsKey(font)) return banglaDecoders[font]
+        val decoder = BanglaGlyphDecoder.create(font)
+        banglaDecoders[font] = decoder
+        return decoder
+    }
+
+    /**
+     * Takes the glyph for the syllable assembly of [flushBangla] if its font is a Bangla font
+     * that does not say which character each glyph is; false: the ordinary text path handles it.
+     */
+    private fun addBanglaGlyph(m: Matrix, font: PDFont, code: Int, unicode: String?, displacement: Vector): Boolean {
+        val decoder = banglaDecoder(font) ?: return false
+        if (!transform.isUpright(m.scaleX, m.shearY)) return false
+        val size = m.scalingFactorY
+        if (size !in 0.5f..500f) return false
+        val glyph = decoder.decode(code, unicode) ?: return false
+        val tx = m.translateX
+        val ty = m.translateY
+        val x0 = transform.mapAbsoluteX(tx, ty)
+        val advance = (displacement.x * m.scalingFactorX).takeIf { it.isFinite() && it > 0f } ?: 0f
+        banglaRun += BanglaGlyphEvent(glyph, x0, x0 + advance, transform.mapAbsoluteY(tx, ty), size, font)
+        suppressText = true
+        try {
+            super.showGlyph(m, font, code, unicode, displacement)
+        } finally {
+            suppressText = false
+        }
+        return true
+    }
+
+    /**
+     * Puts the page's Bangla glyphs together: syllable by syllable, in logical order, one fragment
+     * spanning the glyphs of each (like an `/ActualText` span).
+     */
+    private fun flushBangla() {
+        if (banglaRun.none { it != null }) return
+        val glyphs = BanglaGlyphs.resolve(banglaRun.map { it?.glyph })
+        for (syllable in BanglaGlyphs.assemble(glyphs)) {
+            val events = syllable.members.map { banglaRun[it]!! }
+            val body = events.firstOrNull { it.glyph.role == BanglaGlyphs.Role.BASE } ?: events.first()
+            val left = events.minOf { it.x0 }
+            val right = maxOf(events.maxOf { it.x1 }, left + body.size * 0.3f)
+            val (bold, italic) = styleOf(body.font)
+            fragments += TextFragment(
+                text = syllable.text,
+                left = left,
+                top = body.baseline - body.size * 0.82f,
+                right = right,
+                bottom = body.baseline + body.size * 0.22f,
+                baseline = body.baseline,
+                fontSize = body.size,
+                fontName = body.font.name ?: "",
+                bold = bold,
+                italic = italic,
+                spaceWidth = body.size * 0.25f,
+            )
+        }
+    }
+
     init {
         addOperator(BeginMarkedContentSequenceWithProperties())
         addOperator(BeginMarkedContentSequence())
@@ -103,6 +182,7 @@ internal class TextCollector : PDFTextStripper() {
         fragments.clear()
         rotated.clear()
         markedStack.clear()
+        banglaRun.clear()
         glyphsDrawn = 0
         invisible = 0
         glyphsMapped = 0
@@ -110,7 +190,10 @@ internal class TextCollector : PDFTextStripper() {
         endPage = pageIndex + 1
         try {
             getText(document)
+            flushBangla()
         } finally {
+            banglaRun.clear()
+            banglaDecoders.clear()
             // (a font is a page's own object: kept, every page's fonts would stay in memory, a
             // scanned book's OCR layer has fonts of its own on each page)
             styleCache.clear()
@@ -162,6 +245,8 @@ internal class TextCollector : PDFTextStripper() {
     override fun showGlyph(textRenderingMatrix: Matrix, font: PDFont, code: Int, unicode: String?, displacement: Vector) {
         glyphsDrawn++
         val span = markedStack.lastOrNull { it != null }
+        if (span == null && addBanglaGlyph(textRenderingMatrix, font, code, unicode, displacement)) return
+        if (banglaRun.isNotEmpty() && banglaRun.last() != null) banglaRun += null
         // Symbol fonts of math typesetting: their own (missing or misleading) mapping is replaced.
         val pi = if (span == null) PiFonts.decode(font.name ?: "", glyphName(font, code), unicode) else null
         if (pi != null) {

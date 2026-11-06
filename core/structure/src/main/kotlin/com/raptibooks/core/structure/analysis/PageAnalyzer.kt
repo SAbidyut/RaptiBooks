@@ -214,7 +214,7 @@ class PageAnalyzer(
                 places += regions.last().bounds
             }
             val styles = l.styles.map { st -> if (st.picture) InlineStyle(st.start, st.end, InlineStyle.pictureFlags(ids[InlineStyle.pictureId(st.flags)])) else st }
-            TextLine(l.text, styles, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, l.chunks, places)
+            TextLine(l.text, styles, l.bounds, l.baseline, l.fontSize, l.boldRatio, l.italicRatio, l.fontName, l.chunks, places, l.monoRatio)
         }
         return out to regions
     }

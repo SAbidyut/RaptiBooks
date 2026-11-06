@@ -70,6 +70,11 @@ fun convert(pdf: File) {
         if (System.getenv("HARNESS_FRAGS")?.split(",")?.contains("$i") == true) {
             e.page.fragments.forEach { println("     frag '${it.text}' x=${it.left}..${it.right} base=${it.baseline} size=${it.fontSize} sw=${it.spaceWidth} font=${it.fontName} glyph=${it.glyph}") }
         }
+        // HARNESS_PATHS=page index: print that page's vector paths (fraction bars, rules, frames) and images.
+        if (System.getenv("HARNESS_PATHS")?.split(",")?.contains("$i") == true) {
+            e.page.paths.forEach { println("     path ${it.shape} x=${it.bounds.left}..${it.bounds.right} y=${it.bounds.top}..${it.bounds.bottom} stroked=${it.stroked} filled=${it.filled}") }
+            e.page.images.forEach { println("     image x=${it.bounds.left}..${it.bounds.right} y=${it.bounds.top}..${it.bounds.bottom}") }
+        }
         // Like the app: symbols without Unicode mapping are identified from their rendering.
         val page = SymbolRecognizer.recognize(e.page) { r, scale -> renderGray(pdf, i, r, scale) }.let {
             // and a scan under an OCR text layer gets its ink map

@@ -99,7 +99,16 @@ screen. Bangla and English are both first-class, and everything runs offline.
     over two columns of exercises); subscripts are kept with their line when a figure in the
     other column has labels on the same baseline;
   - **Bangla**: visual→logical glyph order repair (ি ে ৈ, reph), ActualText clusters,
-    Bijoy/SutonnyMJ (ANSI) → Unicode conversion;
+    Bijoy/SutonnyMJ (ANSI) → Unicode conversion; **PDFs whose ToUnicode map lost the cluster
+    boundaries** (WeasyPrint and other Pango/HarfBuzz generators: the vowel signs map to nothing,
+    "র্থ" sits on the reph, a ligature has taken the ি before it) are read from the embedded
+    font itself: its `cmap` names every plain character, the outline tells ে from ৈ, ি and a
+    reph, and each syllable is put into logical order ("পদার্থবিজ্ঞান", "স্থির বিদ্যুৎ");
+  - **code blocks** (monospace lines in a padded panel) become one code block with their line
+    breaks and indentation, shown in a monospace font that scrolls sideways; inline `code` chips,
+    keys and emoji inside a sentence or callout never turn the text into a picture;
+  - subscripts and exponents set only a little smaller than the text (`E`ₖ, a numerator with
+    its "৭") stay in their line; sentences with fractions set into them become one picture;
   - **Arabic and other right-to-left scripts** (Persian, Urdu, Hebrew): lines drawn in visual
     order are put into reading order (numbers and Latin words keep theirs, marks stay on their
     letters, presentation forms become plain letters); Arabic paragraphs read and align from

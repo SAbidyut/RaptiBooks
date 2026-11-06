@@ -92,6 +92,45 @@ class PageStructurer(private val profile: DocumentProfile) {
         val last: NLine get() = lines.last()
     }
 
+    /** Lines of program code or terminal output collected into one block. */
+    private class CodeBuilder(val column: Rect) {
+        val lines = mutableListOf<NLine>()
+        val minLeft: Float get() = lines.minOf { it.bounds.left }
+        val last: NLine get() = lines.last()
+    }
+
+    /** A line that is code by itself: set (mostly) in a monospace font. */
+    private fun isCodeLine(l: NLine) = l.src.isMonospace
+
+    /** "# comment" in the proportional font of the prose, right before or inside code. */
+    private fun isCommentLine(l: NLine): Boolean = l.text.trimStart().let { it.startsWith("#") || it.startsWith("//") || it.startsWith("/*") || it.startsWith("--") }
+
+    /**
+     * The text of a code block: one line per printed line, indented by the number of character
+     * widths the line starts right of the block's left edge, an empty line where one was printed.
+     */
+    private fun codeText(c: CodeBuilder): String {
+        val mono = c.lines.filter { isCodeLine(it) && it.text.isNotEmpty() }
+        val charWidth = mono.map { it.bounds.width / it.text.length }.sorted().let { if (it.isEmpty()) c.lines.first().size * 0.6f else it[it.size / 2] }
+            .coerceAtLeast(c.lines.first().size * 0.4f)
+        val pitch = c.lines.zipWithNext { a, b -> b.src.baseline - a.src.baseline }.filter { it > 0.5f }.minOrNull() ?: (c.lines.first().size * 1.3f)
+        val left = c.minLeft
+        val sb = StringBuilder()
+        var prev: NLine? = null
+        for (l in c.lines) {
+            if (prev != null) {
+                sb.append('\n')
+                val blank = ((l.src.baseline - prev.src.baseline) / pitch).let { it.toInt() - 1 }.coerceIn(0, 3)
+                repeat(blank) { sb.append('\n') }
+            }
+            val indent = ((l.bounds.left - left) / charWidth + 0.35f).toInt().coerceIn(0, 60)
+            repeat(indent) { sb.append(' ') }
+            sb.append(l.text.trimEnd())
+            prev = l
+        }
+        return sb.toString()
+    }
+
     fun structure(layout: PageLayout): List<StructuredElement> {
         // A title in the top or bottom margin printed beside the page number is a running header
         // (a sentence is not: the last line of a page beside a "V" of the artwork).
@@ -186,6 +225,7 @@ class PageStructurer(private val profile: DocumentProfile) {
         val tops = mutableListOf<Float>()
         val page = layout.index
         var current: Builder? = null
+        var code: CodeBuilder? = null
         var lastTop = 0f
         // Where the lines of a column end: the column's area may reach past its text.
         val rights = HashMap<Rect, Float>()
@@ -210,7 +250,16 @@ class PageStructurer(private val profile: DocumentProfile) {
         // A figure printed beside a paragraph (in the other column) comes after the paragraph.
         val afterParagraph = mutableListOf<FigureItem>()
 
+        fun flushCode() {
+            val c = code ?: return
+            code = null
+            record()
+            out += StructuredElement.Paragraph(page, codeText(c), emptyList(), ParagraphKind.CODE, false, c.lines.map { it.size }.average().toFloat())
+            while (tops.size < out.size) tops += c.lines.first().bounds.top
+        }
+
         fun flush() {
+            flushCode()
             val b = current ?: return
             current = null
             record()
@@ -289,6 +338,35 @@ class PageStructurer(private val profile: DocumentProfile) {
                 }
                 is LineItem -> {
                     var line = item.line
+                    // Program code and terminal output: one block, lines and indentation kept.
+                    val openCode = code
+                    val near = { a: NLine, b: NLine -> b.src.baseline > a.src.baseline && b.src.baseline - a.src.baseline <= a.size * 3.4f }
+                    val nextItem = (placed.getOrNull(i + 1)?.item as? LineItem)?.line
+                    val inCode = when {
+                        openCode != null && openCode.column == p.column && near(openCode.last, line) ->
+                            isCodeLine(line) || (line.src.monoRatio > 0.02f && line.bounds.left >= openCode.minLeft - 0.5f)
+                        else -> false
+                    }
+                    // (a code panel is padded: its lines start right of where the prose of the column
+                    // starts; the last words of a paragraph set in code chips do not)
+                    val padded = line.bounds.left >= textLeft(p.column) + line.size * 0.8f
+                    // (and it is alone on its row: a code chip inside a sentence shares it with the words)
+                    val aloneOnRow = placed.none { o ->
+                        val ol = (o.item as? LineItem)?.line
+                        ol != null && ol !== line && abs(ol.src.baseline - line.src.baseline) <= line.size * 0.3f && o.column == p.column
+                    }
+                    val startsCode = !inCode && !Patterns.listMarker.containsMatchIn(line.text) && !line.text.trimEnd().endsWith('।') && padded && aloneOnRow && (isCodeLine(line) ||
+                        (isCommentLine(line) && nextItem != null && isCodeLine(nextItem) && near(line, nextItem) &&
+                            abs(nextItem.bounds.left - line.bounds.left) <= 1.5f && line.src.monoRatio > 0.02f))
+                    if (inCode) {
+                        openCode!!.lines += line
+                        continue
+                    }
+                    if (startsCode) {
+                        flush()
+                        code = CodeBuilder(p.column).also { it.lines += line }
+                        continue
+                    }
                     // "EXAMPLE 6.11 Determine the values of…": the label printed in bold at the
                     // start of the question is the example's heading.
                     val label = INLINE_LABEL.find(line.text)?.takeIf { m ->

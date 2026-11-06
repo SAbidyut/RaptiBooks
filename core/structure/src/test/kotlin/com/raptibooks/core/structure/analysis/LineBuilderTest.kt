@@ -66,6 +66,24 @@ class LineBuilderTest {
     }
 
     @Test
+    fun foldsScriptsOnlyALittleSmallerIntoTheirLine() {
+        // HTML sub/sup in a smaller math span: "E" at 11.3 pt, its "k" at 10.7 pt, 5.3 pt lower
+        val main = words("E = E + E", 72f, 100f, size = 11.3f)
+        val end = main.last().right
+        val sub = listOf(TextFragment("k", end, 98f, end + 5.3f, 108f, 105.3f, 10.7f))
+        val line = builder.build(main + sub).single()
+        assertEquals("E = E + Ek", line.text)
+        assertTrue(line.styles.any { it.flags and InlineStyle.SUBSCRIPT != 0 })
+        // …and an exponent above a numerator
+        val num = words("(5)", 72f, 100f, size = 11.7f)
+        val exp = listOf(TextFragment("7", num.last().right, 88f, num.last().right + 5.3f, 98f, 94.7f, 10.7f))
+        assertEquals("(5)7", builder.build(num + exp).single().text)
+        // but the next line of a paragraph is a line of its own
+        val next = words("k", end, 113.5f)
+        assertEquals(2, builder.build(main + next).size)
+    }
+
+    @Test
     fun recordsBoldRanges() {
         val space = TextFragment(" ", 99.5f, 91.2f, 102.25f, 102.2f, 100f, 11f)
         val frags = words("Note:", 72f, 100f, bold = true) + space + words("plain text", 72f + 5 * 5.5f + 2.75f, 100f)

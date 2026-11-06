@@ -34,6 +34,9 @@ enum class ParagraphKind {
 
     /** A displayed formula or calculation step kept as text ("P = V × I = 230 × 0.43 ≈ 99 W"). */
     FORMULA,
+
+    /** Program code or terminal output set in a monospace font: line breaks and indentation kept. */
+    CODE,
 }
 
 data class ParagraphBlock(

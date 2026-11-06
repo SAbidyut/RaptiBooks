@@ -161,7 +161,18 @@ class EquationDetector {
                 for (l in lines) {
                     if (l in r.lines || regions.any { o -> o !== r && l in o.lines } || l === r.number) continue
                     val f = feats.getValue(l)
-                    if (f.prose || !free(l.bounds)) continue
+                    if (!free(l.bounds)) continue
+                    // A sentence with stacked fractions set into it ("(খ) w log xz/y² − … এর মান
+                    // নির্ণয় কর।"): its text has a gap where each fraction sits, so the fractions
+                    // cannot be read off the rows. The whole line is one picture.
+                    if (f.prose && gapsAroundBars(l, r, em)) {
+                        r.lines += l
+                        r.labels += l
+                        r.bounds = r.bounds.union(l.bounds)
+                        changed = true
+                        continue
+                    }
+                    if (f.prose) continue
                     val sameRow = l.bounds.verticalOverlap(r.bounds) >= min(l.bounds.height, r.bounds.height) * 0.5f
                     val hGap = max(0f, max(r.bounds.left - l.bounds.right, l.bounds.left - r.bounds.right))
                     if (sameRow && f.number && l.bounds.left >= r.bounds.right - 1f && hGap <= page.width * 0.45f) {
@@ -183,7 +194,11 @@ class EquationDetector {
                             o !== r && equationRows(o.lines) >= 1 && o.bounds.horizontalOverlap(r.bounds) > 0f &&
                                 max(o.bounds.top - r.bounds.bottom, r.bounds.top - o.bounds.bottom) <= em * 0.8f
                         })
-                    if (sameRow && (f.fragment || f.seed) && (hGap <= em * 2.5f || column) &&
+                    // ("প্রদত্ত রাশি = w log" just before the fractions it multiplies: the start of the
+                    // formula's own row, a few words and a relation)
+                    val rowStart = sameRow && f.rel > 0 && f.words <= 3 && !f.labelled && r.bars.isNotEmpty() &&
+                        l.bounds.right <= r.bounds.left + 1f && hGap <= em * 2.5f && !sentence(l)
+                    if (sameRow && (f.fragment || f.seed || rowStart) && (hGap <= em * 2.5f || column) &&
                         !(l.bounds.left >= r.bounds.right - 1f && OPTION_LABEL.matches(l.text.trim()))
                     ) {
                         r.lines += l
@@ -298,6 +313,21 @@ class EquationDetector {
             usedPaths += r.frames
         }
         return Result(out, absorbed, usedPaths)
+    }
+
+    /**
+     * Whether a line of text is part of the sentence the fractions of [r] are set into: it is
+     * level with one of their bars (a line cut into chunks at the place of a bar, or the words
+     * printed right after the last fraction: "… x⁴z এর মান নির্ণয় কর।").
+     */
+    private fun gapsAroundBars(l: TextLine, r: Region, em: Float): Boolean {
+        if (r.bars.isEmpty()) return false
+        val hGap = max(0f, max(r.bounds.left - l.bounds.right, l.bounds.left - r.bounds.right))
+        return r.bars.any { bar ->
+            val b = bar.bounds
+            if (b.centerY !in l.bounds.top - em * 0.3f..l.bounds.bottom + em * 0.3f) return@any false
+            hGap <= em * 2.5f || l.chunks.zipWithNext().any { (a, c) -> min(c.left, b.right) - max(a.right, b.left) >= b.width * 0.5f }
+        }
     }
 
     /**

@@ -39,7 +39,17 @@ object MathText {
         }
         if (bangla >= 2) return true
         val lower = t.lowercase()
-        return maxLatin >= 3 && lower !in MATH_FUNCTIONS && lower !in UNITS
+        return maxLatin >= 3 && lower !in MATH_FUNCTIONS && lower !in UNITS && !functionWithBase(lower)
+    }
+
+    /**
+     * A function name with its subscript or argument written against it ("log3", "logy" for
+     * log with a base y, "log10", "sin2θ"): the line text has no space where the base was set
+     * lower, so it reads as one word.
+     */
+    private fun functionWithBase(lower: String): Boolean {
+        val fn = MATH_FUNCTIONS.firstOrNull { lower.startsWith(it) && lower.length > it.length } ?: return false
+        return lower.substring(fn.length).count { it in 'a'..'z' } <= 1
     }
 
     class Stats(val words: Int, val wordChars: Int, val relations: Int, val big: Int, val unknown: Int, val solid: Int) {
