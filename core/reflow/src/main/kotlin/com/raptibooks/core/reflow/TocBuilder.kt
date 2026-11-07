@@ -31,7 +31,7 @@ object TocBuilder {
         if (blockCount == 0) return emptyList()
         val sortedStarts = pageStarts.toSortedMap()
         val usable = outline.filter { it.title.isNotBlank() && it.pageIndex >= 0 }
-        if (usable.size >= 2) {
+        if (usable.size >= 2 && !junk(outline, usable, sortedStarts.keys.maxOrNull() ?: 0)) {
             return usable.map { item ->
                 val onPage = headings.filter { it.pageIndex == item.pageIndex }
                 val match = onPage.firstOrNull { similar(it.title, item.title) }
@@ -85,6 +85,20 @@ object TocBuilder {
         return out.sortedBy { it.blockIndex }
     }
 
+    /**
+     * Bookmarks a word processor made by itself: many without a title, sentences of the text,
+     * out of page order, or only the first part of a long book. The book's headings serve better.
+     */
+    private fun junk(outline: List<OutlineItem>, usable: List<OutlineItem>, lastPage: Int): Boolean {
+        if (outline.size < 20) return false
+        val blank = outline.count { it.title.isBlank() }
+        if (blank * 5 >= outline.size) return true
+        if (usable.count { it.title.length > 100 } * 20 >= usable.size) return true
+        val backwards = usable.zipWithNext().count { (a, b) -> b.pageIndex < a.pageIndex }
+        if (backwards * 10 >= usable.size) return true
+        return lastPage >= 100 && usable.maxOf { it.pageIndex } < lastPage / 2
+    }
+
     /** Detected headings without noise: duplicates, symbols-only lines, overly long "headings". */
     private fun clean(headings: List<TocEntry>): List<TocEntry> {
         var out = headings.filter { h ->
@@ -96,8 +110,8 @@ object TocBuilder {
             val top = out.filter { it.level <= 2 }
             // Hundreds of "Chapter 3, Problem 12" and no chapter titles (a solutions manual):
             // the first heading of each chapter stands for the chapter.
-            val chapters = if (top.size < 3) byChapter(out) else emptyList()
-            out = if (chapters.size >= 3) chapters else top
+            val chapters = byChapter(out)
+            out = if (chapters.size >= 3 && top.size <= chapters.size) chapters else top
         }
         return out
     }

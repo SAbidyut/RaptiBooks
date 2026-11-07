@@ -950,6 +950,7 @@ class PageStructurer(private val profile: DocumentProfile) {
             "^\\s*((?:example|worked example|practice problem|exercise|উদাহরণ)\\s+[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*)\\s*[:.]?\\s+",
             RegexOption.IGNORE_CASE,
         )
+        const val TALL_BRACKETS = "⎡⎢⎣⎤⎥⎦⎛⎜⎝⎞⎟⎠⎧⎨⎩⎫⎬⎭"
         val CHAPTER_ITEM = Regex(
             "(?:chapter|ch\\.)\\s*\\d+\\s*[,:–-]\\s*(problem|practice problem|solution|example|exercise|answer)\\s*\\d+(?:\\.\\d+)*\\s*[.:]?",
             RegexOption.IGNORE_CASE,
@@ -1066,6 +1067,14 @@ class PageStructurer(private val profile: DocumentProfile) {
             (next != null && !next.src.isBold && next.size <= line.size)
 
         if (MathText.isFormula(text)) return null
+        // Mathematics set large (an integral sign, the pieces of a tall bracket, axis labels "0 π 2π"):
+        // no title without a word in it.
+        val math = MathText.stats(text)
+        if (math.big > 0 || text.any { it in TALL_BRACKETS } || (math.words == 0 && ratio < 1.5f && Patterns.chapter.find(text) == null &&
+                (!Patterns.numberedHeading.containsMatchIn(text) || text.any { it in "π=+−[]" }))
+        ) {
+            return null
+        }
         // "Chapter 3, Problem 12." and its "Chapter 3, Solution 12" in a solutions manual
         CHAPTER_ITEM.matchEntire(text.trim())?.let { m ->
             if (bold || isolated) return if (m.groupValues[1].lowercase().startsWith("solution") || m.groupValues[1].lowercase().startsWith("answer")) 4 else 3
