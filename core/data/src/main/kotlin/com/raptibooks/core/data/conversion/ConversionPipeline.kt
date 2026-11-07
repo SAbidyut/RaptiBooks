@@ -17,6 +17,7 @@ import com.raptibooks.core.pdf.PdfSupport
 import com.raptibooks.core.reflow.OutlineItem
 import com.raptibooks.core.reflow.ReflowEngine
 import com.raptibooks.core.reflow.TocBuilder
+import com.raptibooks.core.structure.analysis.BodySizeSurvey
 import com.raptibooks.core.structure.analysis.DocumentStats
 import com.raptibooks.core.structure.analysis.OcrDecision
 import com.raptibooks.core.structure.analysis.ScanPage
@@ -518,7 +519,7 @@ class ConversionPipeline(
         // (more pages for the words, whose counts must tell common from rare)
         val wordPages = if (pageCount <= VOCABULARY_PAGES) (0 until pageCount).toSet()
         else List(VOCABULARY_PAGES) { it * (pageCount - 1) / (VOCABULARY_PAGES - 1) }.toSet()
-        val chars = HashMap<Int, Long>()
+        val sizes = BodySizeSurvey()
         val all = (pages + wordPages).distinct().sorted()
         for ((n, i) in all.withIndex()) {
             currentCoroutineContext().ensureActive()
@@ -534,16 +535,12 @@ class ConversionPipeline(
             if (i in wordPages) vocabulary.add(page.fragments)
             if (i !in pages) continue
             var pageChars = 0
-            for (f in page.fragments) {
-                if (f.isSpace) continue
-                val key = (f.fontSize * 2f).roundToInt()
-                chars[key] = (chars[key] ?: 0L) + f.text.length
-                pageChars += f.text.length
-            }
+            for (f in page.fragments) if (!f.isSpace) pageChars += f.text.length
+            sizes.add(page.fragments)
             sampled++
             if (pageChars >= 200) textPages++
         }
-        val body = chars.maxByOrNull { it.value }?.key?.let { it / 2f }
+        val body = sizes.bodySize()
         // Most pages carry real text: a born-digital book, not a scan.
         val digital = sampled >= 3 && textPages * 10 >= sampled * 7
         val learned = vocabulary.build()
@@ -617,7 +614,7 @@ class ConversionPipeline(
          * Version of the analysis/reflow. Raise it when conversion results improve, so books
          * converted by an older version are converted again automatically.
          */
-        const val LAYOUT_VERSION = 12
+        const val LAYOUT_VERSION = 13
 
         /** Pages read to learn the book's body text size before the real analysis. */
         private const val SAMPLE_PAGES = 60

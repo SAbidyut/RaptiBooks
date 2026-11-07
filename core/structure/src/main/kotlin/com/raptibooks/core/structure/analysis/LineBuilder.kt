@@ -847,8 +847,8 @@ class LineBuilder(
         /** Fonts of code and terminal output (not "Unicode": the match needs a word of its own). */
         private val MONOSPACE = Regex("mono|courier|consolas|menlo|inconsolata|typewriter|lucidaconsole|firacode|sourcecode|cousine|andale|monaco|jetbrains|sfmono|hack\\b")
 
-        private const val SUPER_FROM = "0123456789+-−=()ni"
-        private const val SUPER_TO = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ⁿⁱ"
+        private const val SUPER_FROM = "0123456789+-−=()niabcdefghjklmoprstuvwxyz"
+        private const val SUPER_TO = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ⁿⁱᵃᵇᶜᵈᵉᶠᵍʰʲᵏˡᵐᵒᵖʳˢᵗᵘᵛʷˣʸᶻ"
         private const val SUB_FROM = "0123456789+-−=()aeox"
         private const val SUB_TO = "₀₁₂₃₄₅₆₇₈₉₊₋₋₌₍₎ₐₑₒₓ"
 
@@ -856,10 +856,13 @@ class LineBuilder(
          * The line's text with superscript/subscript runs written as Unicode script characters
          * where possible (one character for one, so offsets stay valid).
          */
-        fun scriptText(line: TextLine): String {
-            if (line.styles.none { it.superscript || it.subscript }) return line.text
-            val chars = line.text.toCharArray()
-            for (s in line.styles) {
+        fun scriptText(line: TextLine): String = scriptText(line.text, line.styles)
+
+        /** [text] with its superscript/subscript runs written as Unicode script characters where possible. */
+        fun scriptText(text: String, styles: List<InlineStyle>): String {
+            if (styles.none { it.superscript || it.subscript }) return text
+            val chars = text.toCharArray()
+            for (s in styles) {
                 val sup = s.superscript
                 if (!sup && !s.subscript) continue
                 val from = if (sup) SUPER_FROM else SUB_FROM

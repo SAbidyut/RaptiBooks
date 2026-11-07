@@ -142,7 +142,7 @@ class PageStructurer(private val profile: DocumentProfile) {
         // ordinary text (a contents entry at the top of the page) belongs to that text.
         fun besideText(l: TextLine) = layout.lines.any { o ->
             o !== l && abs(o.baseline - l.baseline) <= 1.5f && abs(o.fontSize - l.fontSize) <= l.fontSize * 0.2f && !furniture(o)
-        } || runsOn(l, layout.lines)
+        } || runsOn(l, layout.lines.filter { !furniture(it) }) // (a notice of several lines runs on into itself)
         val normalized = layout.lines
             .mapNotNull { l ->
                 normalize(l, layout.fromOcr)?.takeIf {
@@ -395,7 +395,7 @@ class PageStructurer(private val profile: DocumentProfile) {
                         flush(); out += toc.copy(pageIndex = page)
                         continue
                     }
-                    val options = if (line.src.chunks.size >= 2) splitOptions(line.text) else emptyList()
+                    val options = if (line.src.chunks.size >= 2) splitOptions(LineBuilder.scriptText(line.text, line.styles)) else emptyList()
                     if (options.size >= 2) {
                         flush()
                         options.forEach { (m, t) -> out += StructuredElement.ListItem(page, m, t, emptyList(), 1) }
@@ -911,7 +911,8 @@ class PageStructurer(private val profile: DocumentProfile) {
                 }
                 if (j - i >= 2) {
                     val items = elements.subList(i, j).map { it as StructuredElement.ListItem }
-                    val text = items.joinToString("\n") { it.marker + "\t" + it.text.replace('\n', ' ') }
+                    // (an option has no styles of its own: its exponents become "10¹⁷")
+                    val text = items.joinToString("\n") { it.marker + "\t" + LineBuilder.scriptText(it.text, it.styles).replace('\n', ' ') }
                     out += StructuredElement.Paragraph(first.pageIndex, text, emptyList(), ParagraphKind.OPTIONS, false, 0f)
                     i = j
                     continue
@@ -947,6 +948,10 @@ class PageStructurer(private val profile: DocumentProfile) {
         val SECTION_TITLE = Regex("^\\s*(?:section|sections|sec\\.)\\s+[0-9]{1,2}(?:\\.[0-9]{1,2})*(?:\\s*(?:and|–|-|to)\\s*[0-9]{1,2}(?:\\.[0-9]{1,2})*)?\\s+\\p{Lu}[^.]*$", RegexOption.IGNORE_CASE)
         val INLINE_LABEL = Regex(
             "^\\s*((?:example|worked example|practice problem|exercise|উদাহরণ)\\s+[0-9০-৯]+(?:[.\\-][0-9০-৯]+)*)\\s*[:.]?\\s+",
+            RegexOption.IGNORE_CASE,
+        )
+        val CHAPTER_ITEM = Regex(
+            "(?:chapter|ch\\.)\\s*\\d+\\s*[,:–-]\\s*(problem|practice problem|solution|example|exercise|answer)\\s*\\d+(?:\\.\\d+)*\\s*[.:]?",
             RegexOption.IGNORE_CASE,
         )
         val NUMBERED_LABEL = Regex(
@@ -1061,6 +1066,10 @@ class PageStructurer(private val profile: DocumentProfile) {
             (next != null && !next.src.isBold && next.size <= line.size)
 
         if (MathText.isFormula(text)) return null
+        // "Chapter 3, Problem 12." and its "Chapter 3, Solution 12" in a solutions manual
+        CHAPTER_ITEM.matchEntire(text.trim())?.let { m ->
+            if (bold || isolated) return if (m.groupValues[1].lowercase().startsWith("solution") || m.groupValues[1].lowercase().startsWith("answer")) 4 else 3
+        }
         val chapter = Patterns.chapter.find(text)
         if (chapter != null && words <= 10 && !(Patterns.endsSentence(text) && !text.endsWith(':'))) {
             // "অধ্যায় ৩", "Chapter IV" — a bare word ("ভাগ করে…", "Part of…") needs a heading's size.

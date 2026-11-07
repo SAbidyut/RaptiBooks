@@ -153,16 +153,12 @@ fun surveyBodySize(ex: PdfExtractor): Float? {
     val pages = if (n <= 60) (0 until n).toList() else List(60) { it * (n - 1) / 59 }.distinct()
     val wordPages = if (n <= 120) (0 until n).toSet() else List(120) { it * (n - 1) / 119 }.toSet()
     for (i in wordPages) runCatching { ex.extractPage(i).page }.getOrNull()?.let { vocabulary.add(it.fragments) }
-    val chars = HashMap<Int, Long>()
+    val sizes = com.raptibooks.core.structure.analysis.BodySizeSurvey()
     for (i in pages) {
         val page = runCatching { ex.extractPage(i).page }.getOrNull() ?: continue
-        for (f in page.fragments) {
-            if (f.isSpace) continue
-            val key = Math.round(f.fontSize * 2f)
-            chars[key] = (chars[key] ?: 0L) + f.text.length
-        }
+        sizes.add(page.fragments)
     }
-    return chars.maxByOrNull { it.value }?.key?.let { it / 2f }
+    return sizes.bodySize()
 }
 
 /** Time spent in page analysis, and region renderings. */

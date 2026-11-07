@@ -92,7 +92,28 @@ object TocBuilder {
             letters >= 2 && h.title.length <= 150
         }
         out = out.filterIndexed { i, h -> i == 0 || norm(out[i - 1].title) != norm(h.title) || h.blockIndex - out[i - 1].blockIndex > 20 }
-        if (out.size > 400) out = out.filter { it.level <= 2 }
+        if (out.size > 400) {
+            val top = out.filter { it.level <= 2 }
+            // Hundreds of "Chapter 3, Problem 12" and no chapter titles (a solutions manual):
+            // the first heading of each chapter stands for the chapter.
+            val chapters = if (top.size < 3) byChapter(out) else emptyList()
+            out = if (chapters.size >= 3) chapters else top
+        }
+        return out
+    }
+
+    private val CHAPTER_PREFIX = Regex("^\\s*(chapter\\s*\\d+)\\s*[,:–-]", RegexOption.IGNORE_CASE)
+
+    private fun byChapter(headings: List<TocEntry>): List<TocEntry> {
+        val out = ArrayList<TocEntry>()
+        var last: String? = null
+        for (h in headings) {
+            val m = CHAPTER_PREFIX.find(h.title) ?: continue
+            val key = m.groupValues[1].replace(Regex("\\s+"), " ").lowercase()
+            if (key == last) continue
+            last = key
+            out += TocEntry(m.groupValues[1].replace(Regex("\\s+"), " ").replaceFirstChar { it.uppercase() }, 1, h.blockIndex, h.pageIndex)
+        }
         return out
     }
 

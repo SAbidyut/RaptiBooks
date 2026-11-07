@@ -13,6 +13,8 @@ class DocumentStats {
     private val sizeChars = HashMap<Int, Long>()
     private val sizePages = HashMap<Int, Int>()
     private val edgePages = HashMap<String, Int>()
+    /** Characters of the lines near the top and bottom, by signature and size: furniture is no body text. */
+    private val edgeChars = HashMap<String, HashMap<Int, Long>>()
     /** Pages on which an edge line starts or ends with (page index + offset), by offset. */
     private val folioOffsets = HashMap<Int, Int>()
     private var visualImpossible = 0
@@ -46,8 +48,17 @@ class DocumentStats {
                 if (l.text.length <= 150) {
                     val sig = zone + Patterns.signature(l.text)
                     if (seenEdges.add(sig)) edgePages[sig] = (edgePages[sig] ?: 0) + 1
+                    edgeChars.getOrPut(sig) { HashMap() }.merge(key, letters.toLong(), Long::plus)
                 }
                 for (n in folios(l.text)) if (seenOffsets.add(n - layout.index)) folioOffsets[n - layout.index] = (folioOffsets[n - layout.index] ?: 0) + 1
+            }
+            // (a copyright notice of several lines printed above the page foot on every page)
+            bandZone(l, layout.height)?.let { zone ->
+                if (l.text.length in BAND_LINE) {
+                    val sig = zone + Patterns.signature(l.text)
+                    if (seenEdges.add(sig)) edgePages[sig] = (edgePages[sig] ?: 0) + 1
+                    edgeChars.getOrPut(sig) { HashMap() }.merge(key, letters.toLong(), Long::plus)
+                }
             }
             if (!layout.fromOcr) {
                 val (imp, total) = BanglaText.visualOrderEvidence(l.text)
@@ -75,9 +86,20 @@ class DocumentStats {
     }
 
     fun profile(): DocumentProfile {
-        val body = sizeChars.maxByOrNull { it.value }?.key?.let { it / 2f } ?: 11f
+        val minEdgeRepeats = when {
+            pagesWithText >= 6 -> 3
+            pagesWithText >= 2 -> 2
+            else -> Int.MAX_VALUE
+        }
+        // Lines further from the edge repeat on a good share of the pages before they count.
+        val minBandRepeats = max(max(minEdgeRepeats, 4), (pagesWithText * 0.3f).toInt())
+        val repeated = edgePages.filter { (sig, n) -> n >= (if (sig[0].isLowerCase()) minBandRepeats else minEdgeRepeats) }.keys
+        // Running heads and feet are no body text, however much of it they carry.
+        val textChars = HashMap(sizeChars)
+        for (sig in repeated) edgeChars[sig]?.forEach { (k, n) -> textChars[k] = ((textChars[k] ?: 0L) - n).coerceAtLeast(0L) }
+        val body = textChars.maxByOrNull { it.value }?.key?.let { it / 2f } ?: 11f
         // Candidate heading sizes, largest first, clustered within ~6%.
-        val big = sizeChars.filter { (k, chars) -> k / 2f >= body * 1.15f && chars >= 2 }.keys.map { it / 2f }.sortedDescending()
+        val big = textChars.filter { (k, chars) -> k / 2f >= body * 1.15f && chars >= 2 }.keys.map { it / 2f }.sortedDescending()
         val clusters = mutableListOf<MutableList<Float>>()
         for (s in big) {
             val last = clusters.lastOrNull()
@@ -89,12 +111,6 @@ class DocumentStats {
             val firstPages = clusters.first().sumOf { sizePages[sizeKey(it)] ?: 0 }
             if (firstPages <= 2) reps = reps.drop(1)
         }
-        val minEdgeRepeats = when {
-            pagesWithText >= 6 -> 3
-            pagesWithText >= 2 -> 2
-            else -> Int.MAX_VALUE
-        }
-        val repeated = edgePages.filter { it.value >= minEdgeRepeats }.keys
         // Page numbers printed in the running heads ("A BRIEF HISTORY ⏐⏐⏐ 3"): a number that
         // follows the page index on many pages.
         val folio = folioOffsets.filter { it.value >= max(minEdgeRepeats, pagesWithText / 10) }.keys
@@ -120,6 +136,17 @@ class DocumentStats {
             l.bounds.top >= pageHeight * 0.9f -> "B|"
             else -> null
         }
+
+        /** "t|" or "b|" if the line sits in the fifth of the page next to the margin band. */
+        fun bandZone(l: TextLine, pageHeight: Float): String? = when {
+            l.bounds.bottom <= pageHeight * 0.1f || l.bounds.top >= pageHeight * 0.9f -> null // (the margin band itself)
+            l.bounds.bottom <= pageHeight * 0.2f -> "t|"
+            l.bounds.top >= pageHeight * 0.8f -> "b|"
+            else -> null
+        }
+
+        /** Lines of the band that may be furniture: long ones (not "Chapter 2, Problem 7."). */
+        private val BAND_LINE = 30..150
 
         private val COMPOUND = Regex("(?<![\\p{L}-])\\p{Ll}{2,}-\\p{Ll}{2,}(?![\\p{L}-])")
         private val WORD = Regex("(?<![\\p{L}-])\\p{Ll}{4,}(?![\\p{L}-])")
@@ -160,7 +187,8 @@ class DocumentProfile(
     }
 
     fun isRunningHeaderOrFooter(line: TextLine, pageHeight: Float, pageIndex: Int = -1): Boolean {
-        val zone = DocumentStats.edgeZone(line, pageHeight) ?: return false
+        val zone = DocumentStats.edgeZone(line, pageHeight)
+            ?: return DocumentStats.bandZone(line, pageHeight)?.let { (it + Patterns.signature(line.text)) in repeatedEdges } == true
         if (Patterns.pageNumber.matches(line.text.trim())) return true
         if (pageIndex >= 0 && DocumentStats.folios(line.text).any { it - pageIndex in folioOffsets }) return true
         return (zone + Patterns.signature(line.text)) in repeatedEdges
